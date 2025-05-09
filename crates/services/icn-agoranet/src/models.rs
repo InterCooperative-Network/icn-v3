@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{ToSchema, IntoParams};
+use utoipa::{IntoParams, ToSchema};
 
 // Timestamp alias for clarity
 pub type Timestamp = DateTime<Utc>;
@@ -161,4 +161,4 @@ pub struct GetProposalsQuery {
 pub struct ProposalVotesResponse {
     pub proposal_id: String,
     pub votes: Vec<Vote>,
-} 
+}

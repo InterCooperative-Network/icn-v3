@@ -1,15 +1,18 @@
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use std::net::SocketAddr;
+use std::sync::{Arc, RwLock};
 use tokio;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
-use std::sync::{Arc, RwLock};
 
 // Import models and handlers from the crate
 // use icn_agoranet::models::*; // No longer needed directly here
-use icn_agoranet::handlers::{InMemoryStore, Db};
+use icn_agoranet::handlers::{Db, InMemoryStore};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -44,7 +47,8 @@ struct ApiDoc;
 async fn main() {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "icn_agoranet=debug,tower_http=debug".into()),
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "icn_agoranet=debug,tower_http=debug".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -61,14 +65,31 @@ async fn main() {
     let app = Router::new()
         .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .route("/health", get(icn_agoranet::handlers::health_check_handler))
-        .route("/threads", get(icn_agoranet::handlers::get_threads_handler).post(icn_agoranet::handlers::create_thread_handler))
-        .route("/threads/:id", get(icn_agoranet::handlers::get_thread_detail_handler))
+        .route(
+            "/threads",
+            get(icn_agoranet::handlers::get_threads_handler)
+                .post(icn_agoranet::handlers::create_thread_handler),
+        )
+        .route(
+            "/threads/:id",
+            get(icn_agoranet::handlers::get_thread_detail_handler),
+        )
         // Proposals routes
-        .route("/proposals", get(icn_agoranet::handlers::get_proposals_handler).post(icn_agoranet::handlers::create_proposal_handler))
-        .route("/proposals/:id", get(icn_agoranet::handlers::get_proposal_detail_handler))
+        .route(
+            "/proposals",
+            get(icn_agoranet::handlers::get_proposals_handler)
+                .post(icn_agoranet::handlers::create_proposal_handler),
+        )
+        .route(
+            "/proposals/:id",
+            get(icn_agoranet::handlers::get_proposal_detail_handler),
+        )
         // Votes routes
         .route("/votes", post(icn_agoranet::handlers::cast_vote_handler))
-        .route("/proposals/:proposal_id/votes", get(icn_agoranet::handlers::get_proposal_votes_handler))
+        .route(
+            "/proposals/:proposal_id/votes",
+            get(icn_agoranet::handlers::get_proposal_votes_handler),
+        )
         .layer(cors)
         // .layer(Extension(db)); // Extension layer is not needed when using with_state
         .with_state(db); // Pass the state to the router
@@ -81,4 +102,4 @@ async fn main() {
         .unwrap();
 }
 
-// Root handler removed as it's not part of the API spec and /docs serves the UI home. 
+// Root handler removed as it's not part of the API spec and /docs serves the UI home.

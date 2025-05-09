@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics, HostContext, ResourceLimits};
-use icn_identity_core::vc::{ExecutionReceiptCredential, ExecutionMetrics as VcExecutionMetrics};
+use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -13,16 +13,16 @@ use wasmtime::{Engine, Func, Instance, Module, Store};
 pub enum RuntimeError {
     #[error("Failed to execute WASM module: {0}")]
     ExecutionError(String),
-    
+
     #[error("Failed to load WASM module: {0}")]
     LoadError(String),
-    
+
     #[error("Failed to generate execution receipt: {0}")]
     ReceiptError(String),
-    
+
     #[error("Invalid proposal state: {0}")]
     InvalidProposalState(String),
-    
+
     #[error("Resource authorization failed: {0}")]
     AuthorizationFailed(String),
 }
@@ -32,16 +32,16 @@ pub enum RuntimeError {
 pub struct VmContext {
     /// DID of the executor
     pub executor_did: String,
-    
+
     /// Scope of the execution
     pub scope: Option<String>,
-    
+
     /// Epoch of the DAG at execution time
     pub epoch: Option<String>,
-    
+
     /// CID of the code being executed
     pub code_cid: Option<String>,
-    
+
     /// Resource limits
     pub resource_limits: Option<ResourceLimits>,
 }
@@ -51,13 +51,13 @@ pub struct VmContext {
 pub struct ExecutionResult {
     /// The metrics collected during execution
     pub metrics: ExecutionMetrics,
-    
+
     /// List of CIDs anchored during execution
     pub anchored_cids: Vec<String>,
-    
+
     /// Resource usage during execution
     pub resource_usage: Vec<(String, u64)>,
-    
+
     /// Log messages produced during execution
     pub logs: Vec<String>,
 }
@@ -67,16 +67,16 @@ pub struct ExecutionResult {
 pub struct Proposal {
     /// Unique identifier for the proposal
     pub id: String,
-    
+
     /// Content ID (CID) of the compiled WASM module
     pub wasm_cid: String,
-    
+
     /// Content ID (CID) of the source CCL
     pub ccl_cid: String,
-    
+
     /// Current state of the proposal
     pub state: ProposalState,
-    
+
     /// Quorum status
     pub quorum_status: QuorumStatus,
 }
@@ -86,16 +86,16 @@ pub struct Proposal {
 pub enum ProposalState {
     /// Proposal has been created but not yet voted on
     Created,
-    
+
     /// Proposal is currently being voted on
     Voting,
-    
+
     /// Proposal has been approved and is ready for execution
     Approved,
-    
+
     /// Proposal has been rejected
     Rejected,
-    
+
     /// Proposal has been executed
     Executed,
 }
@@ -105,16 +105,16 @@ pub enum ProposalState {
 pub enum QuorumStatus {
     /// Quorum has not been reached
     Pending,
-    
+
     /// Majority quorum reached
     MajorityReached,
-    
+
     /// Threshold quorum reached
     ThresholdReached,
-    
+
     /// Weighted quorum reached
     WeightedReached,
-    
+
     /// Quorum failed to reach
     Failed,
 }
@@ -124,16 +124,16 @@ pub enum QuorumStatus {
 pub trait RuntimeStorage: Send + Sync {
     /// Load a proposal by ID
     async fn load_proposal(&self, id: &str) -> Result<Proposal>;
-    
+
     /// Update a proposal
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()>;
-    
+
     /// Load a WASM module by CID
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>>;
-    
+
     /// Store an execution receipt
     async fn store_receipt(&self, receipt: &ExecutionReceipt) -> Result<String>;
-    
+
     /// Anchor a CID to the DAG
     async fn anchor_to_dag(&self, cid: &str) -> Result<String>;
 }
@@ -143,31 +143,31 @@ pub trait RuntimeStorage: Send + Sync {
 pub struct ExecutionReceipt {
     /// Proposal ID this receipt is for
     pub proposal_id: String,
-    
+
     /// Content ID (CID) of the executed WASM module
     pub wasm_cid: String,
-    
+
     /// Content ID (CID) of the source CCL
     pub ccl_cid: String,
-    
+
     /// Execution metrics
     pub metrics: ExecutionMetrics,
-    
+
     /// Anchored CIDs during execution
     pub anchored_cids: Vec<String>,
-    
+
     /// Resource usage during execution
     pub resource_usage: Vec<(String, u64)>,
-    
+
     /// Timestamp of execution
     pub timestamp: u64,
-    
+
     /// DAG epoch of execution
     pub dag_epoch: Option<u64>,
-    
+
     /// Receipt CID (filled after anchoring)
     pub receipt_cid: Option<String>,
-    
+
     /// Signature from the executing federation
     pub federation_signature: Option<String>,
 }
@@ -176,7 +176,7 @@ pub struct ExecutionReceipt {
 pub struct Runtime {
     /// CoVM instance for executing WASM
     vm: CoVm,
-    
+
     /// Storage backend
     storage: Arc<dyn RuntimeStorage>,
 }
@@ -189,7 +189,7 @@ impl Runtime {
             storage,
         }
     }
-    
+
     /// Create a new runtime with custom resource limits
     pub fn with_limits(storage: Arc<dyn RuntimeStorage>, limits: ResourceLimits) -> Self {
         Self {
@@ -197,53 +197,61 @@ impl Runtime {
             storage,
         }
     }
-    
+
     /// Execute a proposal by ID
     pub async fn execute_proposal(&self, proposal_id: &str) -> Result<ExecutionReceipt> {
         // Load the proposal
         let mut proposal = self.storage.load_proposal(proposal_id).await?;
-        
+
         // Check if the proposal is in a state that can be executed
         if proposal.state != ProposalState::Approved {
-            return Err(RuntimeError::InvalidProposalState(
-                format!("Proposal must be in Approved state, not {:?}", proposal.state)
-            ).into());
+            return Err(RuntimeError::InvalidProposalState(format!(
+                "Proposal must be in Approved state, not {:?}",
+                proposal.state
+            ))
+            .into());
         }
-        
+
         // Check if quorum has been reached
         match proposal.quorum_status {
-            QuorumStatus::MajorityReached | 
-            QuorumStatus::ThresholdReached | 
-            QuorumStatus::WeightedReached => {
+            QuorumStatus::MajorityReached
+            | QuorumStatus::ThresholdReached
+            | QuorumStatus::WeightedReached => {
                 // Quorum has been reached, continue with execution
-            },
+            }
             _ => {
-                return Err(RuntimeError::InvalidProposalState(
-                    format!("Quorum must be reached, current status: {:?}", proposal.quorum_status)
-                ).into());
+                return Err(RuntimeError::InvalidProposalState(format!(
+                    "Quorum must be reached, current status: {:?}",
+                    proposal.quorum_status
+                ))
+                .into());
             }
         }
-        
+
         // Load the WASM module
-        let wasm_bytes = self.storage.load_wasm(&proposal.wasm_cid).await
+        let wasm_bytes = self
+            .storage
+            .load_wasm(&proposal.wasm_cid)
+            .await
             .map_err(|e| RuntimeError::LoadError(format!("Failed to load WASM module: {}", e)))?;
-        
+
         // Set up the execution context
         let mut context = HostContext::default();
-        
+
         // Execute the WASM module
-        self.vm.execute(&wasm_bytes, &mut context)
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e)))?;
-        
+        self.vm.execute(&wasm_bytes, &mut context).map_err(|e| {
+            RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
+        })?;
+
         // Extract execution metrics and results
         let metrics = context.metrics.lock().unwrap().clone();
         let anchored_cids = context.anchored_cids.lock().unwrap().clone();
         let resource_usage = context.resource_usage.lock().unwrap().clone();
-        
+
         // Update proposal state
         proposal.state = ProposalState::Executed;
         self.storage.update_proposal(&proposal).await?;
-        
+
         // Create the execution receipt
         let receipt = ExecutionReceipt {
             proposal_id: proposal_id.to_string(),
@@ -260,38 +268,45 @@ impl Runtime {
             receipt_cid: None,
             federation_signature: None,
         };
-        
+
         // Store and anchor the receipt
         let receipt_cid = self.storage.store_receipt(&receipt).await?;
-        
+
         // Anchor the receipt CID to the DAG
         let _dag_anchor = self.storage.anchor_to_dag(&receipt_cid).await?;
-        
+
         // Return the receipt
         Ok(receipt)
     }
-    
+
     /// Load and execute a WASM module from a file
     pub async fn execute_wasm_file(&self, path: &Path) -> Result<ExecutionReceipt> {
         // Read the WASM file
-        let wasm_bytes = std::fs::read(path)
-            .map_err(|e| RuntimeError::LoadError(format!("Failed to read WASM file {}: {}", path.display(), e)))?;
-        
+        let wasm_bytes = std::fs::read(path).map_err(|e| {
+            RuntimeError::LoadError(format!(
+                "Failed to read WASM file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
         // Set up the execution context
         let mut context = HostContext::default();
-        
+
         // Execute the WASM module
-        self.vm.execute(&wasm_bytes, &mut context)
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e)))?;
-        
+        self.vm.execute(&wasm_bytes, &mut context).map_err(|e| {
+            RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
+        })?;
+
         // Extract execution metrics and results
         let metrics = context.metrics.lock().unwrap().clone();
         let anchored_cids = context.anchored_cids.lock().unwrap().clone();
         let resource_usage = context.resource_usage.lock().unwrap().clone();
-        
+
         // Create the execution receipt (without storing it)
         let receipt = ExecutionReceipt {
-            proposal_id: path.file_name()
+            proposal_id: path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown")
                 .to_string(),
@@ -308,32 +323,33 @@ impl Runtime {
             receipt_cid: None,
             federation_signature: None,
         };
-        
+
         Ok(receipt)
     }
-    
+
     /// Execute a WASM binary with the given context
     pub fn execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
         // Create CoVM host context
         let mut host_context = HostContext::default();
-        
+
         // Apply resource limits if specified
         let vm = if let Some(limits) = context.resource_limits {
             CoVm::new(limits)
         } else {
             self.vm.clone()
         };
-        
+
         // Execute the WASM module
-        vm.execute(wasm_bytes, &mut host_context)
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e)))?;
-        
+        vm.execute(wasm_bytes, &mut host_context).map_err(|e| {
+            RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
+        })?;
+
         // Extract execution metrics and results
         let metrics = host_context.metrics.lock().unwrap().clone();
         let anchored_cids = host_context.anchored_cids.lock().unwrap().clone();
         let resource_usage = host_context.resource_usage.lock().unwrap().clone();
         let logs = host_context.logs.lock().unwrap().clone();
-        
+
         Ok(ExecutionResult {
             metrics,
             anchored_cids,
@@ -341,14 +357,14 @@ impl Runtime {
             logs,
         })
     }
-    
+
     /// Issue an execution receipt after successful execution
     pub fn issue_receipt(
-        &self, 
-        wasm_cid: &str, 
-        ccl_cid: &str, 
-        result: &ExecutionResult, 
-        context: &VmContext
+        &self,
+        wasm_cid: &str,
+        ccl_cid: &str,
+        result: &ExecutionResult,
+        context: &VmContext,
     ) -> Result<ExecutionReceiptCredential> {
         // Convert ExecutionMetrics to VC ExecutionMetrics
         let vc_metrics = VcExecutionMetrics {
@@ -356,15 +372,15 @@ impl Runtime {
             host_calls: result.metrics.host_calls,
             io_bytes: result.metrics.io_bytes,
         };
-        
+
         // Create a unique ID for the receipt
         let receipt_id = format!("urn:icn:receipt:{}", uuid::Uuid::new_v4());
-        
+
         // Create the execution receipt
         let receipt = ExecutionReceiptCredential::new(
             receipt_id,
-            context.executor_did.clone(),  // issuer
-            format!("proposal-{}", uuid::Uuid::new_v4()),  // placeholder proposal ID
+            context.executor_did.clone(),                 // issuer
+            format!("proposal-{}", uuid::Uuid::new_v4()), // placeholder proposal ID
             wasm_cid.to_string(),
             ccl_cid.to_string(),
             vc_metrics,
@@ -377,19 +393,20 @@ impl Runtime {
             None, // dag_epoch
             None, // receipt_cid
         );
-        
+
         Ok(receipt)
     }
-    
+
     /// Anchor a receipt to the DAG and return the CID
     pub async fn anchor_receipt(&self, receipt: &ExecutionReceiptCredential) -> Result<String> {
         // Convert to JSON
-        let receipt_json = serde_json::to_string(receipt)
-            .map_err(|e| RuntimeError::ReceiptError(format!("Failed to serialize receipt: {}", e)))?;
-        
-        // Store the receipt 
+        let receipt_json = serde_json::to_string(receipt).map_err(|e| {
+            RuntimeError::ReceiptError(format!("Failed to serialize receipt: {}", e))
+        })?;
+
+        // Store the receipt
         let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;
-        
+
         Ok(receipt_cid)
     }
 }
@@ -397,7 +414,7 @@ impl Runtime {
 /// Module providing executable trait for CCL DSL files
 pub mod dsl {
     use super::*;
-    
+
     /// Trait for CCL DSL executables
     pub trait DslExecutable {
         /// Execute the DSL with the given runtime
@@ -410,7 +427,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::Mutex;
-    
+
     // A mock storage implementation for testing
     struct MockStorage {
         proposals: Mutex<Vec<Proposal>>,
@@ -418,7 +435,7 @@ mod tests {
         receipts: Mutex<std::collections::HashMap<String, String>>,
         anchored_cids: Mutex<Vec<String>>,
     }
-    
+
     impl MockStorage {
         fn new() -> Self {
             Self {
@@ -429,7 +446,7 @@ mod tests {
             }
         }
     }
-    
+
     #[async_trait]
     impl RuntimeStorage for MockStorage {
         async fn load_proposal(&self, id: &str) -> Result<Proposal> {
@@ -440,19 +457,19 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| anyhow!("Proposal not found"))
         }
-        
+
         async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
             let mut proposals = self.proposals.lock().unwrap();
-            
+
             // Remove existing proposal with the same ID
             proposals.retain(|p| p.id != proposal.id);
-            
+
             // Add the updated proposal
             proposals.push(proposal.clone());
-            
+
             Ok(())
         }
-        
+
         async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
             let modules = self.wasm_modules.lock().unwrap();
             modules
@@ -460,44 +477,44 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| anyhow!("WASM module not found"))
         }
-        
+
         async fn store_receipt(&self, receipt: &ExecutionReceipt) -> Result<String> {
             let receipt_json = serde_json::to_string(receipt)?;
             let receipt_cid = format!("receipt-{}", uuid::Uuid::new_v4());
-            
+
             let mut receipts = self.receipts.lock().unwrap();
             receipts.insert(receipt_cid.clone(), receipt_json);
-            
+
             Ok(receipt_cid)
         }
-        
+
         async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
             let mut anchored = self.anchored_cids.lock().unwrap();
             anchored.push(cid.to_string());
-            
+
             let anchor_id = format!("anchor-{}", uuid::Uuid::new_v4());
             Ok(anchor_id)
         }
     }
-    
+
     #[tokio::test]
     async fn test_execute_wasm_file() -> Result<()> {
         // This test requires a compiled WASM file from CCL/DSL
         // For testing, we'll check if the file exists first
         let wasm_path = Path::new("../../../examples/budget.wasm");
-        
+
         if !wasm_path.exists() {
             println!("Test WASM file not found, skipping test_execute_wasm_file test");
             return Ok(());
         }
-        
+
         // Read the WASM file
         let wasm_bytes = fs::read(wasm_path)?;
-        
+
         // Create a runtime with mock storage
         let storage = Arc::new(MockStorage::new());
         let runtime = Runtime::new(storage);
-        
+
         // Create a VM context
         let context = VmContext {
             executor_did: "did:icn:test".to_string(),
@@ -506,20 +523,20 @@ mod tests {
             code_cid: Some("test-cid".to_string()),
             resource_limits: None,
         };
-        
+
         // Execute the WASM module
         let result = runtime.execute_wasm(&wasm_bytes, context.clone())?;
-        
+
         // Verify that execution succeeded and metrics were collected
         assert!(result.metrics.fuel_used > 0, "Expected fuel usage metrics");
-        
+
         // Issue a receipt
         let receipt = runtime.issue_receipt("test-wasm-cid", "test-ccl-cid", &result, &context)?;
-        
+
         // Verify that receipt was created correctly
         assert_eq!(receipt.issuer, "did:icn:test");
         assert_eq!(receipt.credential_subject.wasm_cid, "test-wasm-cid");
-        
+
         Ok(())
     }
-} 
+}

@@ -1,21 +1,21 @@
+use anyhow::Result;
 use pest::Parser;
 use pest_derive::Parser;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use anyhow::Result;
 
 /// Error types for CCL parsing
 #[derive(Error, Debug)]
 pub enum CclError {
     #[error("Failed to parse CCL: {0}")]
     ParseError(String),
-    
+
     #[error("Failed to convert CCL to DSL: {0}")]
     DslConversionError(String),
-    
+
     #[error("Invalid CCL structure: {0}")]
     InvalidStructure(String),
-    
+
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
 }
@@ -28,10 +28,10 @@ pub type Result<T> = std::result::Result<T, CclError>;
 pub enum ParserError {
     #[error("Failed to parse CCL: {0}")]
     ParseError(String),
-    
+
     #[error("Invalid syntax: {0}")]
     SyntaxError(String),
-    
+
     #[error("Missing required field: {0}")]
     MissingField(String),
 }
@@ -41,25 +41,25 @@ pub enum ParserError {
 pub struct CclDocument {
     /// Title of the document
     pub title: String,
-    
+
     /// Description of the document
     pub description: String,
-    
+
     /// Author of the document
     pub author: String,
-    
+
     /// Creation date
     pub created: String,
-    
+
     /// Version of the CCL specification
     pub version: String,
-    
+
     /// Budget allocation (if any)
     pub budget: Option<CclBudget>,
-    
+
     /// Execution instructions (if any)
     pub execution: Option<CclExecution>,
-    
+
     /// Accountability requirements (if any)
     pub accountability: Option<CclAccountability>,
 }
@@ -69,16 +69,16 @@ pub struct CclDocument {
 pub struct CclBudget {
     /// Total allocation
     pub total: u64,
-    
+
     /// Currency of the allocation
     pub currency: String,
-    
+
     /// Budget categories
     pub categories: std::collections::HashMap<String, u64>,
-    
+
     /// Disbursement schedule
     pub disbursement: CclDisbursement,
-    
+
     /// Authorization rules
     pub authorization: CclAuthorization,
 }
@@ -88,10 +88,10 @@ pub struct CclBudget {
 pub struct CclDisbursement {
     /// Schedule type
     pub schedule: String,
-    
+
     /// Start date
     pub start_date: String,
-    
+
     /// End date
     pub end_date: String,
 }
@@ -101,10 +101,10 @@ pub struct CclDisbursement {
 pub struct CclAuthorization {
     /// Threshold of approvals needed
     pub threshold: u64,
-    
+
     /// Roles that can approve
     pub roles: Vec<String>,
-    
+
     /// Whether review is required
     pub require_review: bool,
 }
@@ -121,13 +121,10 @@ pub struct CclExecution {
 pub enum CclAction {
     /// Anchor data to the DAG
     AnchorData(String),
-    
+
     /// Perform a metered action
-    PerformAction {
-        action_type: String,
-        amount: u64,
-    },
-    
+    PerformAction { action_type: String, amount: u64 },
+
     /// Mint tokens
     MintTokens {
         token_type: String,
@@ -141,7 +138,7 @@ pub enum CclAction {
 pub struct CclAccountability {
     /// Report requirements
     pub reports: CclReports,
-    
+
     /// Transparency requirements
     pub transparency: CclTransparency,
 }
@@ -151,7 +148,7 @@ pub struct CclAccountability {
 pub struct CclReports {
     /// Report frequency
     pub frequency: String,
-    
+
     /// Metrics to report
     pub metrics: Vec<String>,
 }
@@ -161,7 +158,7 @@ pub struct CclReports {
 pub struct CclTransparency {
     /// Level of disclosure
     pub disclosure_level: String,
-    
+
     /// Whether a public dashboard is required
     pub public_dashboard: bool,
 }
@@ -170,7 +167,7 @@ pub struct CclTransparency {
 pub fn parse_ccl(input: &str) -> Result<CclDocument> {
     // This is a stub implementation that returns a fixed document
     // In a real implementation, we would use nom or pest to parse the CCL
-    
+
     // For now, return a fixed document based on the example
     Ok(CclDocument {
         title: "Q3 Budget Allocation".to_string(),
@@ -304,42 +301,42 @@ impl CclDocument {
             .map_err(|e| CclError::ParseError(e.to_string()))?
             .next()
             .unwrap();
-        
+
         // Convert the parsed result to a CclDocument
         // For now, just return a placeholder
         Ok(CclDocument {
             statements: Vec::new(),
         })
     }
-    
+
     /// Convert the CCL document to a DSL representation
     pub fn to_dsl(&self) -> Result<String> {
         // Convert the document to DSL
         // For now, just return a placeholder
         Ok("// Generated DSL code\n".to_string())
     }
-    
+
     /// Verify that the CCL document is valid
     pub fn verify(&self) -> Result<()> {
         // Check for required elements
-        
+
         // Check for valid actions
         for statement in &self.statements {
             if let CclStatement::Action { actions, .. } = statement {
                 for action in actions {
                     match action {
-                        CclAction::MintTokens { .. } => {},
-                        CclAction::AnchorData { .. } => {},
-                        CclAction::PerformAction { .. } => {},
+                        CclAction::MintTokens { .. } => {}
+                        CclAction::AnchorData { .. } => {}
+                        CclAction::PerformAction { .. } => {}
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
 }
 
 // Re-export the Rule type for tests
 #[cfg(test)]
-pub use Rule; 
+pub use Rule;

@@ -1,10 +1,14 @@
 use crate::error::IdentityError;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::error::TrustError;
-use crate::trust::{QuorumConfig, QuorumProof, QuorumRule};
-use ed25519_dalek::PublicKey;
-use std::collections::{HashSet};
+use crate::error::VcError;
+use crate::trust::{QuorumConfig, QuorumRule};
+use chrono::Utc;
+use ed25519_dalek::{Keypair, PublicKey};
+use icn_crypto::jws::{sign_detached_jws, verify_detached_jws};
+use serde::{Deserialize, Serialize};
+use serde_json::{to_value, Map, Value};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// A Verifiable Credential subject containing claims
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -110,6 +114,73 @@ impl VerifiableCredential {
     /// Create a new builder for a Verifiable Credential
     pub fn builder() -> VerifiableCredentialBuilder {
         VerifiableCredentialBuilder::new()
+    }
+
+    /// Canonicalize the credential into a deterministic byte representation
+    ///
+    /// This produces a normalized JSON representation that can be used for
+    /// signing and verification across different implementations.
+    pub fn canonical_bytes(&self) -> std::result::Result<Vec<u8>, VcError> {
+        // Create a JSON representation with the proof removed
+        // This is because the proof contains the signature which shouldn't be included
+        // in what gets signed
+        let mut vc_value = to_value(self).map_err(VcError::Serialization)?;
+
+        if let Value::Object(ref mut map) = vc_value {
+            // Remove the proof field for canonicalization
+            map.remove("proof");
+
+            // Sort all fields deterministically
+            let sorted_map = sort_json_object(map);
+
+            // Serialize to a compact representation with sorted keys
+            let canonical = serde_json::to_vec(&sorted_map).map_err(VcError::Serialization)?;
+            return Ok(canonical);
+        }
+
+        Err(VcError::InvalidStructure)
+    }
+
+    /// Sign the credential with the given keypair
+    ///
+    /// Returns a detached JWS signature that can be used to verify the credential
+    pub fn sign(&self, keypair: &Keypair) -> std::result::Result<String, VcError> {
+        let canonical = self.canonical_bytes()?;
+        let jws = sign_detached_jws(&canonical, keypair).map_err(VcError::Signing)?;
+        Ok(jws)
+    }
+
+    /// Verify the credential's signature against a public key
+    pub fn verify(&self, public_key: &PublicKey) -> std::result::Result<(), VcError> {
+        let canonical = self.canonical_bytes()?;
+
+        // Extract the JWS from the proof
+        let jws = &self.proof.jws;
+
+        // Verify the signature
+        verify_detached_jws(&canonical, jws, public_key).map_err(VcError::Signing)?;
+
+        Ok(())
+    }
+
+    /// Create a signed credential from an unsigned one
+    pub fn with_signature(mut self, keypair: &Keypair, verification_method: &str) -> std::result::Result<Self, VcError> {
+        // Generate the signature
+        let jws = self.sign(keypair)?;
+
+        // Create the proof
+        let proof = CredentialProof {
+            type_: "Ed25519Signature2020".to_string(),
+            created: Utc::now().to_rfc3339(),
+            verification_method: verification_method.to_string(),
+            proof_purpose: "assertionMethod".to_string(),
+            jws,
+        };
+
+        // Add the proof to the credential
+        self.proof = proof;
+
+        Ok(self)
     }
 }
 
@@ -236,32 +307,34 @@ impl TrustBundle {
         // 1. Extract all unique issuers (signers) from the credentials
         let mut signers = Vec::new();
         let mut unique_ids = HashSet::new();
-        
+
         // 2. Verify each credential and collect signers
         for credential in &self.credentials {
             // Ensure each credential has a unique ID
             if !unique_ids.insert(&credential.id) {
-                return Err(TrustError::InvalidBundle("Duplicate credential ID".to_string()));
+                return Err(TrustError::InvalidBundle(
+                    "Duplicate credential ID".to_string(),
+                ));
             }
-            
+
             // Add the issuer to signers
             signers.push(credential.issuer.clone());
-            
+
             // Here we would verify the credential signature
             // This requires public keys for each issuer DID
             // For now, we'll just validate the bundle structure
         }
-        
+
         // 3. Check for duplicate signers
         let unique_signers: HashSet<&String> = signers.iter().collect();
         if unique_signers.len() != signers.len() {
             return Err(TrustError::DuplicateSigners);
         }
-        
+
         // 4. Validate the quorum against the config
         config.validate_quorum(&signers)
     }
-    
+
     /// Create a new TrustBundle with a quorum proof
     pub fn new_with_proof(
         id: String,
@@ -276,13 +349,13 @@ impl TrustBundle {
             expires: None,
         }
     }
-    
+
     /// Add an expiration time to the bundle
     pub fn with_expiration(mut self, expires: &str) -> Self {
         self.expires = Some(expires.to_string());
         self
     }
-    
+
     /// Extract the signers (issuers) from the bundle
     pub fn extract_signers(&self) -> Vec<String> {
         self.credentials
@@ -290,23 +363,65 @@ impl TrustBundle {
             .map(|credential| credential.issuer.clone())
             .collect()
     }
-    
+
     /// Validate the quorum rule
     pub fn validate_quorum(&self, authorized_dids: &[String]) -> Result<bool, TrustError> {
         // Parse the quorum rule from string
         let quorum_rule: QuorumRule = serde_json::from_str(&self.quorum_rule)
             .map_err(|_| TrustError::InvalidBundle("Invalid quorum rule format".to_string()))?;
-        
+
         // Create a config with the parsed rule
         let config = QuorumConfig {
             rule: quorum_rule,
             authorized_dids: authorized_dids.to_vec(),
         };
-        
+
         // Get the signers from the bundle
         let signers = self.extract_signers();
-        
+
         // Validate the quorum
         config.validate_quorum(&signers)
     }
+}
+
+// Helper functions for canonical JSON serialization
+fn sort_json_object(obj: &Map<String, Value>) -> Value {
+    // Create a new sorted map
+    let mut sorted = Map::new();
+
+    // Get sorted keys
+    let mut keys: Vec<&String> = obj.keys().collect();
+    keys.sort();
+
+    // Add each value in sorted key order
+    for key in keys {
+        let value = &obj[key];
+
+        // Recursively sort any nested objects
+        let sorted_value = match value {
+            Value::Object(ref map) => sort_json_object(map),
+            Value::Array(ref arr) => sort_json_array(arr),
+            _ => value.clone(),
+        };
+
+        sorted.insert(key.clone(), sorted_value);
+    }
+
+    Value::Object(sorted)
+}
+
+fn sort_json_array(arr: &[Value]) -> Value {
+    let mut result = Vec::with_capacity(arr.len());
+
+    for value in arr {
+        let sorted_value = match value {
+            Value::Object(ref map) => sort_json_object(map),
+            Value::Array(ref nested_arr) => sort_json_array(nested_arr),
+            _ => value.clone(),
+        };
+
+        result.push(sorted_value);
+    }
+
+    Value::Array(result)
 }

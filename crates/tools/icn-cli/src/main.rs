@@ -7,8 +7,8 @@ use icn_runtime::{Proposal, ProposalState, QuorumStatus};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use uuid::Uuid;
 use tempfile;
+use uuid::Uuid;
 
 /// Command-line interface for ICN governance
 #[derive(Parser)]
@@ -26,11 +26,11 @@ enum Commands {
     /// Proposal management commands
     #[clap(subcommand)]
     Proposal(ProposalCommands),
-    
+
     /// CCL compilation commands
     #[clap(subcommand)]
     Ccl(CclCommands),
-    
+
     /// Runtime execution commands
     #[clap(subcommand)]
     Runtime(RuntimeCommands),
@@ -44,31 +44,31 @@ enum ProposalCommands {
         /// Path to the CCL file
         #[clap(long, short)]
         ccl_file: PathBuf,
-        
+
         /// Title of the proposal
         #[clap(long, short)]
         title: String,
-        
+
         /// Output file for the created proposal
         #[clap(long, short)]
         output: Option<PathBuf>,
     },
-    
+
     /// Vote on a proposal
     Vote {
         /// Path to the proposal file
         #[clap(long, short)]
         proposal: PathBuf,
-        
+
         /// Vote direction (yes/no)
         #[clap(long, short)]
         direction: String,
-        
+
         /// Weight of the vote (default: 1)
         #[clap(long, short, default_value = "1")]
         weight: u64,
     },
-    
+
     /// Check the status of a proposal
     Status {
         /// Path to the proposal file
@@ -85,18 +85,18 @@ enum CclCommands {
         /// Path to the CCL file
         #[clap(long, short)]
         input: PathBuf,
-        
+
         /// Output file for the DSL
         #[clap(long, short)]
         output: PathBuf,
     },
-    
+
     /// Compile a CCL file to WASM
     CompileToWasm {
         /// Path to the CCL file
         #[clap(long, short)]
         input: PathBuf,
-        
+
         /// Output file for the WASM
         #[clap(long, short)]
         output: PathBuf,
@@ -111,29 +111,29 @@ enum RuntimeCommands {
         /// Path to the WASM file
         #[clap(long, short)]
         wasm: PathBuf,
-        
+
         /// Path to the proposal file (optional)
         #[clap(long, short)]
         proposal: Option<PathBuf>,
-        
+
         /// Output file for the execution receipt
         #[clap(long, short)]
         receipt: Option<PathBuf>,
     },
-    
+
     /// Verify an execution receipt
     Verify {
         /// Path to the execution receipt
         #[clap(long, short)]
         receipt: PathBuf,
     },
-    
+
     /// Execute a CCL file directly
     ExecuteCcl {
         /// Path to the CCL file to execute
         #[clap(long, short)]
         input: PathBuf,
-        
+
         /// Output file for the execution receipt
         #[clap(long, short)]
         output: Option<PathBuf>,
@@ -144,10 +144,10 @@ enum RuntimeCommands {
 struct CliRuntimeStorage {
     /// Proposals stored in memory
     proposals: Vec<Proposal>,
-    
+
     /// WASM modules stored in memory (CID -> bytes)
     wasm_modules: std::collections::HashMap<String, Vec<u8>>,
-    
+
     /// Execution receipts stored in memory (CID -> receipt)
     receipts: std::collections::HashMap<String, String>,
 }
@@ -171,34 +171,34 @@ impl icn_runtime::RuntimeStorage for CliRuntimeStorage {
             .cloned()
             .ok_or_else(|| anyhow!("Proposal not found: {}", id))
     }
-    
+
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
         // In a real implementation, we would update the proposal in a database
         println!("Updated proposal: {}", proposal.id);
         Ok(())
     }
-    
+
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
         self.wasm_modules
             .get(cid)
             .cloned()
             .ok_or_else(|| anyhow!("WASM module not found: {}", cid))
     }
-    
+
     async fn store_receipt(&self, receipt: &icn_runtime::ExecutionReceipt) -> Result<String> {
         // Generate a CID for the receipt (just a UUID for simplicity)
         let cid = format!("receipt-{}", Uuid::new_v4());
-        
+
         // In a real implementation, we would store the receipt in IPFS/Filecoin
         println!("Stored receipt with CID: {}", cid);
-        
+
         Ok(cid)
     }
-    
+
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
         // In a real implementation, we would anchor the CID to a DAG
         println!("Anchored CID to DAG: {}", cid);
-        
+
         // Return a mocked DAG anchor ID
         Ok(format!("dag-anchor-{}", Uuid::new_v4()))
     }
@@ -207,15 +207,15 @@ impl icn_runtime::RuntimeStorage for CliRuntimeStorage {
 /// Create a new proposal from a CCL file
 async fn create_proposal(ccl_file: &Path, title: &str, output: Option<&Path>) -> Result<()> {
     println!("Creating proposal from CCL file: {}", ccl_file.display());
-    
+
     // Compile the CCL file to WASM
     let compiler = CclCompiler::new()?;
     let wasm_bytes = compiler.compile_file(ccl_file)?;
-    
+
     // Generate CIDs for the CCL and WASM (just UUIDs for simplicity)
     let ccl_cid = format!("ccl-{}", Uuid::new_v4());
     let wasm_cid = format!("wasm-{}", Uuid::new_v4());
-    
+
     // Create the proposal
     let proposal = Proposal {
         id: format!("proposal-{}", Uuid::new_v4()),
@@ -224,10 +224,10 @@ async fn create_proposal(ccl_file: &Path, title: &str, output: Option<&Path>) ->
         state: ProposalState::Created,
         quorum_status: QuorumStatus::Pending,
     };
-    
+
     // Output the proposal
     let proposal_json = serde_json::to_string_pretty(&proposal)?;
-    
+
     if let Some(output_path) = output {
         std::fs::write(output_path, &proposal_json)?;
         println!("Proposal saved to: {}", output_path.display());
@@ -235,7 +235,7 @@ async fn create_proposal(ccl_file: &Path, title: &str, output: Option<&Path>) ->
         println!("Proposal created:");
         println!("{}", proposal_json);
     }
-    
+
     Ok(())
 }
 
@@ -244,10 +244,10 @@ async fn vote_on_proposal(proposal_path: &Path, direction: &str, weight: u64) ->
     // Load the proposal
     let proposal_json = std::fs::read_to_string(proposal_path)?;
     let mut proposal: Proposal = serde_json::from_str(&proposal_json)?;
-    
+
     // Update proposal state
     proposal.state = ProposalState::Voting;
-    
+
     // Simulate voting
     let vote_str = match direction.to_lowercase().as_str() {
         "yes" => {
@@ -261,9 +261,12 @@ async fn vote_on_proposal(proposal_path: &Path, direction: &str, weight: u64) ->
         }
         _ => return Err(anyhow!("Invalid vote direction. Use 'yes' or 'no'")),
     };
-    
-    println!("Voted {} on proposal {} with weight {}", vote_str, proposal.id, weight);
-    
+
+    println!(
+        "Voted {} on proposal {} with weight {}",
+        vote_str, proposal.id, weight
+    );
+
     // If voting is complete, update state
     if proposal.quorum_status == QuorumStatus::MajorityReached {
         proposal.state = ProposalState::Approved;
@@ -272,11 +275,11 @@ async fn vote_on_proposal(proposal_path: &Path, direction: &str, weight: u64) ->
         proposal.state = ProposalState::Rejected;
         println!("Proposal has been {}", "REJECTED".red());
     }
-    
+
     // Save the updated proposal
     let proposal_json = serde_json::to_string_pretty(&proposal)?;
     std::fs::write(proposal_path, proposal_json)?;
-    
+
     Ok(())
 }
 
@@ -285,10 +288,10 @@ async fn check_proposal_status(proposal_path: &Path) -> Result<()> {
     // Load the proposal
     let proposal_json = std::fs::read_to_string(proposal_path)?;
     let proposal: Proposal = serde_json::from_str(&proposal_json)?;
-    
+
     // Display the status
     println!("Proposal: {}", proposal.id);
-    
+
     let state_str = match proposal.state {
         ProposalState::Created => "Created".blue(),
         ProposalState::Voting => "Voting".yellow(),
@@ -296,7 +299,7 @@ async fn check_proposal_status(proposal_path: &Path) -> Result<()> {
         ProposalState::Rejected => "Rejected".red(),
         ProposalState::Executed => "Executed".green(),
     };
-    
+
     let quorum_str = match proposal.quorum_status {
         QuorumStatus::Pending => "Pending".yellow(),
         QuorumStatus::MajorityReached => "Majority".green(),
@@ -304,53 +307,65 @@ async fn check_proposal_status(proposal_path: &Path) -> Result<()> {
         QuorumStatus::WeightedReached => "Weighted".green(),
         QuorumStatus::Failed => "Failed".red(),
     };
-    
+
     println!("State: {}", state_str);
     println!("Quorum: {}", quorum_str);
     println!("WASM CID: {}", proposal.wasm_cid);
     println!("CCL CID: {}", proposal.ccl_cid);
-    
+
     Ok(())
 }
 
 /// Compile a CCL file to DSL
 async fn compile_to_dsl(input: &Path, output: &Path) -> Result<()> {
-    println!("Compiling CCL to DSL: {} -> {}", input.display(), output.display());
-    
+    println!(
+        "Compiling CCL to DSL: {} -> {}",
+        input.display(),
+        output.display()
+    );
+
     let compiler = CclCompiler::new()?;
     compiler.compile_file_to_dsl(input, output)?;
-    
+
     println!("DSL compilation successful!");
-    
+
     Ok(())
 }
 
 /// Compile a CCL file to WASM
 async fn compile_to_wasm(input: &Path, output: &Path) -> Result<()> {
-    println!("Compiling CCL to WASM: {} -> {}", input.display(), output.display());
-    
+    println!(
+        "Compiling CCL to WASM: {} -> {}",
+        input.display(),
+        output.display()
+    );
+
     let compiler = CclCompiler::new()?;
     compiler.compile_file_to_wasm(input, output)?;
-    
+
     println!("WASM compilation successful!");
-    
+
     Ok(())
 }
 
 /// Execute a WASM file directly
-async fn execute_wasm(wasm_path: &Path, proposal_path: Option<&Path>, receipt_path: Option<&Path>) -> Result<String> {
+async fn execute_wasm(
+    wasm_path: &Path,
+    proposal_path: Option<&Path>,
+    receipt_path: Option<&Path>,
+) -> Result<String> {
     println!("Executing WASM file: {}", wasm_path.display());
-    
+
     // Read the WASM file
-    let wasm_bytes = std::fs::read(wasm_path)
-        .map_err(|e| anyhow!("Failed to read WASM file: {}", e))?;
-    
+    let wasm_bytes =
+        std::fs::read(wasm_path).map_err(|e| anyhow!("Failed to read WASM file: {}", e))?;
+
     // Set up storage
     let storage = Arc::new(CliRuntimeStorage::new());
-    
+
     // Create a runtime instance
     let runtime = icn_runtime::Runtime::new(storage);
-    
+
     // Create a default context
     let context = icn_runtime::VmContext {
         executor_did: "did:icn:executor".to_string(),
@@ -359,50 +374,51 @@ async fn execute_wasm(wasm_path: &Path, proposal_path: Option<&Path>, receipt_pa
         code_cid: Some(format!("file://{}", wasm_path.display())),
         resource_limits: None,
     };
-    
+
     // Execute the WASM module
     println!("Executing WASM in CoVM...");
-    let result = runtime.execute_wasm(&wasm_bytes, context.clone())
+    let result = runtime
+        .execute_wasm(&wasm_bytes, context.clone())
         .map_err(|e| anyhow!("Execution failed: {}", e))?;
-    
+
     // Generate a mock CID for the CCL
     let ccl_cid = format!("ccl-{}", uuid::Uuid::new_v4());
-    
+
     // Create the execution receipt
     println!("Generating execution receipt...");
     let receipt = runtime.issue_receipt(
         &format!("wasm-{}", uuid::Uuid::new_v4()),
         &ccl_cid,
         &result,
-        &context
+        &context,
     )?;
-    
+
     // Convert to JSON for saving
     let receipt_json = serde_json::to_string_pretty(&receipt)?;
-    
+
     // Save to file if requested
     if let Some(path) = receipt_path {
         std::fs::write(path, &receipt_json)
             .map_err(|e| anyhow!("Failed to write receipt to file: {}", e))?;
         println!("Receipt saved to {}", path.display());
     }
-    
+
     // Print a summary of the execution
     println!("\n{}", "Execution Summary".green().bold());
     println!("Fuel used: {}", result.metrics.fuel_used);
     println!("Host calls: {}", result.metrics.host_calls);
-    
+
     if !result.logs.is_empty() {
         println!("\n{}", "Execution Logs".yellow().bold());
         for log in &result.logs {
             println!("  {}", log);
         }
     }
-    
+
     // Create a mock receipt CID
     let receipt_cid = format!("receipt-{}", uuid::Uuid::new_v4());
     println!("\nReceipt CID: {}", receipt_cid.cyan());
-    
+
     // Return the receipt CID
     Ok(receipt_cid)
 }
@@ -410,11 +426,11 @@ async fn execute_wasm(wasm_path: &Path, proposal_path: Option<&Path>, receipt_pa
 /// Verify an execution receipt
 async fn verify_receipt(receipt_path: &Path) -> Result<()> {
     println!("Verifying execution receipt: {}", receipt_path.display());
-    
+
     // Load the receipt
     let receipt_json = std::fs::read_to_string(receipt_path)?;
     let receipt: ExecutionReceiptCredential = serde_json::from_str(&receipt_json)?;
-    
+
     // In a real implementation, we would verify the signature
     // For now, just display the receipt information
     println!("Receipt ID: {}", receipt.id);
@@ -423,14 +439,23 @@ async fn verify_receipt(receipt_path: &Path) -> Result<()> {
     println!("WASM CID: {}", receipt.credential_subject.wasm_cid);
     println!("CCL CID: {}", receipt.credential_subject.ccl_cid);
     println!("Timestamp: {}", receipt.credential_subject.timestamp);
-    
+
     println!("Metrics:");
-    println!("  Fuel used: {}", receipt.credential_subject.metrics.fuel_used);
-    println!("  Host calls: {}", receipt.credential_subject.metrics.host_calls);
-    println!("  IO bytes: {}", receipt.credential_subject.metrics.io_bytes);
-    
+    println!(
+        "  Fuel used: {}",
+        receipt.credential_subject.metrics.fuel_used
+    );
+    println!(
+        "  Host calls: {}",
+        receipt.credential_subject.metrics.host_calls
+    );
+    println!(
+        "  IO bytes: {}",
+        receipt.credential_subject.metrics.io_bytes
+    );
+
     println!("Receipt verification successful!");
-    
+
     Ok(())
 }
 
@@ -438,41 +463,49 @@ async fn verify_receipt(receipt_path: &Path) -> Result<()> {
 async fn execute_ccl(ccl_path: &Path, receipt_path: Option<&Path>) -> Result<String> {
     println!("{}", "Executing CCL file".blue().bold());
     println!("Source: {}", ccl_path.display());
-    
+
     // Temporary files for the compilation pipeline
     let temp_dir = tempfile::tempdir()?;
     let dsl_path = temp_dir.path().join("output.dsl");
     let wasm_path = temp_dir.path().join("output.wasm");
-    
+
     // Step 1: Compile CCL to DSL
     println!("\n{}", "Step 1: Compiling CCL to DSL".yellow());
     compile_to_dsl(ccl_path, &dsl_path).await?;
-    
+
     // Step 2: Compile DSL to WASM
     println!("\n{}", "Step 2: Compiling DSL to WASM".yellow());
     compile_to_wasm(&dsl_path, &wasm_path).await?;
-    
+
     // Step 3: Execute the WASM
     println!("\n{}", "Step 3: Executing WASM".yellow());
     let receipt_cid = execute_wasm(&wasm_path, None, receipt_path).await?;
-    
+
     // Print final result
     println!("\n{}", "CCL Execution Pipeline Complete".green().bold());
     println!("Receipt CID: {}", receipt_cid.cyan());
-    
+
     Ok(receipt_cid)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Proposal(cmd) => match cmd {
-            ProposalCommands::Create { ccl_file, title, output } => {
+            ProposalCommands::Create {
+                ccl_file,
+                title,
+                output,
+            } => {
                 create_proposal(&ccl_file, &title, output.as_deref()).await?;
             }
-            ProposalCommands::Vote { proposal, direction, weight } => {
+            ProposalCommands::Vote {
+                proposal,
+                direction,
+                weight,
+            } => {
                 vote_on_proposal(&proposal, &direction, weight).await?;
             }
             ProposalCommands::Status { proposal } => {
@@ -488,7 +521,11 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Runtime(cmd) => match cmd {
-            RuntimeCommands::Execute { wasm, proposal, receipt } => {
+            RuntimeCommands::Execute {
+                wasm,
+                proposal,
+                receipt,
+            } => {
                 execute_wasm(wasm, proposal.as_deref(), receipt.as_deref()).await?;
             }
             RuntimeCommands::Verify { receipt } => {
@@ -499,6 +536,6 @@ async fn main() -> Result<()> {
             }
         },
     }
-    
+
     Ok(())
-} 
+}

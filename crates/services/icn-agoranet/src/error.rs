@@ -1,6 +1,6 @@
 use axum::{
-    response::{IntoResponse, Response},
     http::StatusCode,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde_json::json;
@@ -33,4 +33,4 @@ impl<E: std::error::Error> From<E> for ApiError {
     fn from(err: E) -> Self {
         ApiError::InternalServerError(err.to_string())
     }
-} 
+}

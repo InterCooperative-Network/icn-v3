@@ -1,11 +1,15 @@
-use axum::{extract::{Path as AxumPath, Query, State}, http::StatusCode, Json};
+use axum::{
+    extract::{Path as AxumPath, Query, State},
+    http::StatusCode,
+    Json,
+};
 use chrono::Utc;
 use std::sync::{Arc, RwLock}; // For in-memory storage
-// use serde_json::json; // Removed unused import
+                              // use serde_json::json; // Removed unused import
 use uuid::Uuid;
 
-use crate::models::*;
-use crate::error::ApiError; // Added ApiError import
+use crate::error::ApiError;
+use crate::models::*; // Added ApiError import
 
 // For now, we'll use in-memory storage.
 // In a real application, this would be a database connection pool.
@@ -26,47 +30,49 @@ impl InMemoryStore {
         let now = Utc::now();
 
         Self {
-            threads: vec![
-                ThreadDetail {
-                    summary: ThreadSummary {
-                        id: example_thread_id.clone(),
-                        title: "Example Thread 1: Discussing the Future".to_string(),
-                        created_at: now,
+            threads: vec![ThreadDetail {
+                summary: ThreadSummary {
+                    id: example_thread_id.clone(),
+                    title: "Example Thread 1: Discussing the Future".to_string(),
+                    created_at: now,
+                    author_did: "did:example:author1".to_string(),
+                    scope: "coop.nw".to_string(),
+                },
+                messages: vec![
+                    Message {
+                        id: format!("msg_{}", Uuid::new_v4()),
                         author_did: "did:example:author1".to_string(),
-                        scope: "coop.nw".to_string(),
+                        timestamp: now,
+                        content: "Initial message in thread 1.".to_string(),
                     },
-                    messages: vec![
-                        Message {
-                            id: format!("msg_{}", Uuid::new_v4()),
-                            author_did: "did:example:author1".to_string(),
-                            timestamp: now,
-                            content: "Initial message in thread 1.".to_string(),
-                        },
-                        Message {
-                            id: format!("msg_{}", Uuid::new_v4()),
-                            author_did: "did:example:author2".to_string(),
-                            timestamp: now,
-                            content: "Replying to thread 1.".to_string(),
-                        },
-                    ],
-                }
-            ],
-            proposals: vec![
-                ProposalDetail {
-                    summary: ProposalSummary {
-                        id: example_proposal_id.clone(),
-                        title: "Example Proposal: New Tokenomics".to_string(),
-                        status: ProposalStatus::Open,
-                        vote_counts: VoteCounts { approve: 5, reject: 1, abstain: 0 },
-                        voting_deadline: now + chrono::Duration::days(7),
-                        scope: "coop.nw.governance".to_string(),
+                    Message {
+                        id: format!("msg_{}", Uuid::new_v4()),
+                        author_did: "did:example:author2".to_string(),
+                        timestamp: now,
+                        content: "Replying to thread 1.".to_string(),
                     },
-                    full_text: "This is the full text of the example proposal regarding new tokenomics...".to_string(),
-                    linked_thread_id: Some(example_thread_id.clone()),
-                }
-            ],
+                ],
+            }],
+            proposals: vec![ProposalDetail {
+                summary: ProposalSummary {
+                    id: example_proposal_id.clone(),
+                    title: "Example Proposal: New Tokenomics".to_string(),
+                    status: ProposalStatus::Open,
+                    vote_counts: VoteCounts {
+                        approve: 5,
+                        reject: 1,
+                        abstain: 0,
+                    },
+                    voting_deadline: now + chrono::Duration::days(7),
+                    scope: "coop.nw.governance".to_string(),
+                },
+                full_text:
+                    "This is the full text of the example proposal regarding new tokenomics..."
+                        .to_string(),
+                linked_thread_id: Some(example_thread_id.clone()),
+            }],
             votes: vec![
-                 Vote {
+                Vote {
                     proposal_id: example_proposal_id.clone(),
                     voter_did: "did:example:voter1".to_string(),
                     vote_type: VoteType::Approve,
@@ -115,8 +121,12 @@ pub async fn get_threads_handler(
     Query(params): Query<GetThreadsQuery>,
     State(db): State<Db>,
 ) -> Result<Json<Vec<ThreadSummary>>, ApiError> {
-    let store = db.read().map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
-    let threads = store.threads.iter()
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    let threads = store
+        .threads
+        .iter()
         .filter(|td| params.scope.as_ref().is_none_or(|s| td.summary.scope == *s)) // clippy: unnecessary_map_or
         .map(|td| td.summary.clone())
         .take(params.limit.unwrap_or(u32::MAX) as usize) // clippy: legacy_numeric_constants
@@ -140,8 +150,12 @@ pub async fn get_thread_detail_handler(
     AxumPath(id): AxumPath<String>,
     State(db): State<Db>,
 ) -> Result<Json<ThreadDetail>, ApiError> {
-    let store = db.read().map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
-    store.threads.iter()
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    store
+        .threads
+        .iter()
         .find(|td| td.summary.id == id)
         .map(|td| Json(td.clone()))
         .ok_or_else(|| ApiError::NotFound(format!("Thread with id {} not found", id)))
@@ -160,7 +174,9 @@ pub async fn create_thread_handler(
     State(db): State<Db>,
     Json(payload): Json<NewThreadRequest>,
 ) -> Result<(StatusCode, Json<ThreadSummary>), ApiError> {
-    let mut store = db.write().map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
+    let mut store = db
+        .write()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
     let new_id = format!("thread_{}", Uuid::new_v4());
     let thread_summary = ThreadSummary {
         id: new_id.clone(),
@@ -192,16 +208,24 @@ pub async fn get_proposals_handler(
     Query(params): Query<GetProposalsQuery>,
     State(db): State<Db>,
 ) -> Result<Json<Vec<ProposalSummary>>, ApiError> {
-    let store = db.read().map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
-    let proposals: Vec<ProposalSummary> = store.proposals.iter()
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    let proposals: Vec<ProposalSummary> = store
+        .proposals
+        .iter()
         .filter(|pd| params.scope.as_ref().is_none_or(|s| pd.summary.scope == *s)) // clippy: unnecessary_map_or
-        .filter(|pd| params.status.as_ref().is_none_or(|s| pd.summary.status == *s)) // clippy: unnecessary_map_or
+        .filter(|pd| {
+            params
+                .status
+                .as_ref()
+                .is_none_or(|s| pd.summary.status == *s)
+        }) // clippy: unnecessary_map_or
         .filter(|_pd| params.proposal_type.as_ref().is_none_or(|_| true)) // clippy: unnecessary_map_or
         .map(|pd| pd.summary.clone())
         .collect();
     Ok(Json(proposals))
 }
-
 
 // GET /proposals/:id
 #[utoipa::path(
@@ -228,8 +252,12 @@ pub async fn get_proposal_detail_handler(
     AxumPath(id): AxumPath<String>,
     State(db): State<Db>,
 ) -> Result<Json<ProposalDetail>, ApiError> {
-    let store = db.read().map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
-    store.proposals.iter()
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    store
+        .proposals
+        .iter()
         .find(|pd| pd.summary.id == id)
         .map(|pd| Json(pd.clone()))
         .ok_or_else(|| ApiError::NotFound(format!("Proposal with id {} not found", id)))
@@ -248,15 +276,23 @@ pub async fn create_proposal_handler(
     State(db): State<Db>,
     Json(payload): Json<NewProposalRequest>,
 ) -> Result<(StatusCode, Json<ProposalSummary>), ApiError> {
-    let mut store = db.write().map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
+    let mut store = db
+        .write()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
     let new_id = format!("proposal_{}", Uuid::new_v4());
     let proposal_summary = ProposalSummary {
         id: new_id.clone(),
         title: payload.title,
         scope: payload.scope,
         status: ProposalStatus::Open, // Default to Open
-        vote_counts: VoteCounts { approve: 0, reject: 0, abstain: 0 },
-        voting_deadline: payload.voting_deadline.unwrap_or_else(|| Utc::now() + chrono::Duration::days(7)), // Default voting period
+        vote_counts: VoteCounts {
+            approve: 0,
+            reject: 0,
+            abstain: 0,
+        },
+        voting_deadline: payload
+            .voting_deadline
+            .unwrap_or_else(|| Utc::now() + chrono::Duration::days(7)), // Default voting period
     };
     let proposal_detail = ProposalDetail {
         summary: proposal_summary.clone(),
@@ -282,25 +318,45 @@ pub async fn cast_vote_handler(
     State(db): State<Db>,
     Json(payload): Json<NewVoteRequest>,
 ) -> Result<(StatusCode, Json<Vote>), ApiError> {
-    let mut store = db.write().map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
+    let mut store = db
+        .write()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
 
     // Find the proposal mutably
-    let proposal_detail = store.proposals.iter_mut()
+    let proposal_detail = store
+        .proposals
+        .iter_mut()
         .find(|p| p.summary.id == payload.proposal_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Proposal with id {} not found", payload.proposal_id)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Proposal with id {} not found",
+                payload.proposal_id
+            ))
+        })?;
 
     // Check if proposal is open for voting
     if proposal_detail.summary.status != ProposalStatus::Open {
-        return Err(ApiError::BadRequest("Proposal is not open for voting".to_string()));
+        return Err(ApiError::BadRequest(
+            "Proposal is not open for voting".to_string(),
+        ));
     }
     if Utc::now() > proposal_detail.summary.voting_deadline {
-         proposal_detail.summary.status = ProposalStatus::Closed; // Auto-close if deadline passed
-        return Err(ApiError::BadRequest("Voting deadline has passed for this proposal".to_string()));
+        proposal_detail.summary.status = ProposalStatus::Closed; // Auto-close if deadline passed
+        return Err(ApiError::BadRequest(
+            "Voting deadline has passed for this proposal".to_string(),
+        ));
     }
 
     // Check if voter has already voted (simple check, could be more robust)
-    if store.votes.iter().any(|v| v.proposal_id == payload.proposal_id && v.voter_did == payload.voter_did) {
-        return Err(ApiError::BadRequest(format!("Voter {} has already voted on proposal {}", payload.voter_did, payload.proposal_id)));
+    if store
+        .votes
+        .iter()
+        .any(|v| v.proposal_id == payload.proposal_id && v.voter_did == payload.voter_did)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "Voter {} has already voted on proposal {}",
+            payload.voter_did, payload.proposal_id
+        )));
     }
 
     // Update vote counts
@@ -324,7 +380,6 @@ pub async fn cast_vote_handler(
     Ok((StatusCode::CREATED, Json(vote)))
 }
 
-
 // GET /proposals/{proposal_id}/votes
 #[utoipa::path(
     get,
@@ -341,14 +396,21 @@ pub async fn get_proposal_votes_handler(
     AxumPath(proposal_id): AxumPath<String>,
     State(db): State<Db>,
 ) -> Result<Json<ProposalVotesResponse>, ApiError> {
-    let store = db.read().map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
 
     // First, check if the proposal exists
     if !store.proposals.iter().any(|p| p.summary.id == proposal_id) {
-        return Err(ApiError::NotFound(format!("Proposal with id {} not found", proposal_id)));
+        return Err(ApiError::NotFound(format!(
+            "Proposal with id {} not found",
+            proposal_id
+        )));
     }
 
-    let votes_for_proposal: Vec<Vote> = store.votes.iter()
+    let votes_for_proposal: Vec<Vote> = store
+        .votes
+        .iter()
         .filter(|v| v.proposal_id == proposal_id)
         .cloned()
         .collect();
@@ -369,4 +431,4 @@ pub async fn get_proposal_votes_handler(
 )]
 pub async fn health_check_handler() -> StatusCode {
     StatusCode::OK
-} 
+}
