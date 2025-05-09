@@ -3,7 +3,8 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use icn_economics::ScopedResourceToken;
-use icn_identity_core::did::Did;
+// use icn_identity_core::did::Did;
+type Did = String; // DIDs are strings
 use planetary_mesh::{
     Bid, ComputeRequirements, JobManifest, JobPriority, JobStatus, MeshNode, NodeCapability,
     PlanetaryMeshNode,
@@ -13,6 +14,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
+use icn_core_vm::ExecutionMetrics;
+use tokio;
 
 /// Command-line interface for ICN Planetary Mesh
 #[derive(Parser)]
@@ -134,12 +137,12 @@ async fn create_node(name: &str, memory: u32, cpu: u32, location: &str) -> Resul
     println!("Location: {}", location);
 
     // Create a test DID for the node
-    let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let did_str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
 
     // Create node capabilities
     let capabilities = NodeCapability {
         node_id: name.to_string(),
-        node_did: did.to_string(),
+        node_did: did_str.clone(),
         available_memory_mb: memory,
         available_cpu_cores: cpu,
         available_storage_mb: memory * 10, // 10x memory as storage
@@ -152,12 +155,12 @@ async fn create_node(name: &str, memory: u32, cpu: u32, location: &str) -> Resul
     };
 
     // Create the node
-    let _node = PlanetaryMeshNode::new(did, capabilities.clone())?;
+    let _node = PlanetaryMeshNode::new(did_str.clone(), capabilities.clone())?;
 
     // Save node info to a file
     let node_info = json!({
         "node_id": name,
-        "did": did.to_string(),
+        "did": did_str,
         "capabilities": capabilities,
     });
 
@@ -194,19 +197,25 @@ async fn submit_job(args: &Commands) -> Result<()> {
         println!("Description: {}", description);
 
         // Create a test DID for the submitter
-        let submitter_did =
-            Did::parse("did:key:z6MkuBsxRsRu3PU1VzZ5xnqNtXWRwLtrGdxdMeMFuxP5xyVp").unwrap();
+        let submitter_did_str =
+            "did:key:z6MktyAYM2rE5N2h9kYgqSMv9uCWeP9j9JapH5xJd9XwM7oP".to_string();
 
-        // Create a resource token
+        let requirements = ComputeRequirements {
+            min_memory_mb: *min_memory,
+            min_cpu_cores: *min_cpu,
+            min_storage_mb: *min_memory * 2, // Example: 2x memory as storage
+            max_execution_time_secs: 3600,   // 1 hour
+            required_features: vec![],
+        };
+
         let token = ScopedResourceToken {
             resource_type: resource_type.clone(),
             amount: *resource_amount,
             scope: scope.clone(),
             expires_at: None,
-            issuer: None,
+            issuer: Some(submitter_did_str.clone()),
         };
 
-        // Parse job priority
         let job_priority = match priority.to_lowercase().as_str() {
             "low" => JobPriority::Low,
             "medium" => JobPriority::Medium,
@@ -215,60 +224,49 @@ async fn submit_job(args: &Commands) -> Result<()> {
             _ => JobPriority::Medium,
         };
 
-        // Generate a job ID
         let job_id = Uuid::new_v4().to_string();
-
-        // Create a job manifest
         let manifest = JobManifest {
             id: job_id.clone(),
-            submitter_did: submitter_did.to_string(),
+            submitter_did: submitter_did_str,
             description: description.clone(),
             created_at: Utc::now(),
             expires_at: None,
-            wasm_cid: format!("wasm:{}", job_id), // In a real implementation, this would be a DAG CID
+            wasm_cid: wasm.to_string_lossy().into_owned(),
             ccl_cid: None,
             input_data_cid: None,
             output_location: None,
-            requirements: ComputeRequirements {
-                min_memory_mb: *min_memory,
-                min_cpu_cores: *min_cpu,
-                min_storage_mb: 1024,
-                max_execution_time_secs: 600,
-                required_features: vec![],
-            },
+            requirements,
             priority: job_priority,
             resource_token: token,
             trust_requirements: vec![],
             status: JobStatus::Created,
         };
 
-        // Create a test node
-        let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
-        let capabilities = NodeCapability {
-            node_id: "mesh-node-1".to_string(),
-            node_did: did.to_string(),
-            available_memory_mb: 4096,
-            available_cpu_cores: 4,
-            available_storage_mb: 40960,
+        // Create a test node to submit the job (replace with actual node interaction)
+        let node_did_str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
+        let node_capabilities = NodeCapability {
+            node_id: "mesh-node-cli".to_string(),
+            node_did: node_did_str.clone(),
+            available_memory_mb: 1024,
+            available_cpu_cores: 2,
+            available_storage_mb: 10240,
             cpu_architecture: "x86_64".to_string(),
-            features: vec!["avx".to_string(), "sse4".to_string()],
-            location: Some("us-west".to_string()),
-            bandwidth_mbps: 1000,
-            supported_job_types: vec!["compute".to_string(), "storage".to_string()],
+            features: vec![],
+            location: Some("local-cli".to_string()),
+            bandwidth_mbps: 100,
+            supported_job_types: vec!["compute".to_string()],
             updated_at: Utc::now(),
         };
+        let node = PlanetaryMeshNode::new(node_did_str, node_capabilities)?;
 
-        let node = PlanetaryMeshNode::new(did, capabilities)?;
-
-        // Submit the job
-        let job_id = node.submit_job(manifest).await?;
+        let submitted_job_id = node.submit_job(manifest).await?;
 
         println!("\n{}", "Job submitted successfully".green().bold());
-        println!("Job ID: {}", job_id);
+        println!("Job ID: {}", submitted_job_id);
 
         // Save job ID to file if requested
         if let Some(output_path) = output {
-            fs::write(output_path, &job_id)?;
+            fs::write(output_path, &submitted_job_id)?;
             println!("Job ID saved to: {}", output_path.display());
         }
 
@@ -281,7 +279,7 @@ async fn submit_job(args: &Commands) -> Result<()> {
 
         // Create some simulated bids
         let bid1 = Bid {
-            job_id: job_id.clone(),
+            job_id: submitted_job_id.clone(),
             node_id: "mesh-node-2".to_string(),
             node_did: "did:key:z6MkrJVkbkCVL6hZUGEU7eh8arLqsX5o6Hep9ZUzVULCsHKp".to_string(),
             bid_amount: 80,
@@ -306,7 +304,7 @@ async fn submit_job(args: &Commands) -> Result<()> {
         };
 
         let bid2 = Bid {
-            job_id: job_id.clone(),
+            job_id: submitted_job_id.clone(),
             node_id: "mesh-node-3".to_string(),
             node_did: "did:key:z6MkuBsxRsRu3PU1VzZ5xnqNtXWRwLtrGdxdMeMFuxP5xyVp".to_string(),
             bid_amount: 90,
@@ -335,8 +333,8 @@ async fn submit_job(args: &Commands) -> Result<()> {
         };
 
         // Submit the bids
-        node.submit_bid(&job_id, bid1).await?;
-        node.submit_bid(&job_id, bid2).await?;
+        node.submit_bid(&submitted_job_id, bid1).await?;
+        node.submit_bid(&submitted_job_id, bid2).await?;
 
         println!("\n{}", "Received 2 bids:".yellow());
         println!(
@@ -355,12 +353,12 @@ async fn submit_job(args: &Commands) -> Result<()> {
         );
 
         println!("\n{}", "Use the following command to check status:".blue());
-        println!("meshctl job-status --job-id {}", job_id);
+        println!("meshctl job-status --job-id {}", submitted_job_id);
 
         println!("\n{}", "Use the following command to accept a bid:".blue());
         println!(
             "meshctl accept-bid --job-id {} --node-id mesh-node-2",
-            job_id
+            submitted_job_id
         );
     }
 
@@ -467,10 +465,10 @@ async fn get_bids(job_id: &str) -> Result<()> {
     println!("{}", format!("Bids for job {}", job_id).blue().bold());
 
     // Create a test node
-    let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let node_did_str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
     let capabilities = NodeCapability {
         node_id: "mesh-node-1".to_string(),
-        node_did: did.to_string(),
+        node_did: node_did_str.clone(),
         available_memory_mb: 4096,
         available_cpu_cores: 4,
         available_storage_mb: 40960,
@@ -482,7 +480,7 @@ async fn get_bids(job_id: &str) -> Result<()> {
         updated_at: Utc::now(),
     };
 
-    let node = PlanetaryMeshNode::new(did, capabilities)?;
+    let node = PlanetaryMeshNode::new(node_did_str, capabilities)?;
 
     // Check if we have bids for this job
     let bids = node.get_bids(job_id).await?;
@@ -522,10 +520,10 @@ async fn get_job_status(job_id: &str) -> Result<()> {
     println!("{}", format!("Status for job {}", job_id).blue().bold());
 
     // Create a test node
-    let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let node_did_str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
     let capabilities = NodeCapability {
         node_id: "mesh-node-1".to_string(),
-        node_did: did.to_string(),
+        node_did: node_did_str.clone(),
         available_memory_mb: 4096,
         available_cpu_cores: 4,
         available_storage_mb: 40960,
@@ -537,7 +535,7 @@ async fn get_job_status(job_id: &str) -> Result<()> {
         updated_at: Utc::now(),
     };
 
-    let node = PlanetaryMeshNode::new(did, capabilities)?;
+    let node = PlanetaryMeshNode::new(node_did_str, capabilities)?;
 
     // Get the job status
     let status = match node.get_job_status(job_id).await {
@@ -621,10 +619,10 @@ async fn accept_bid(job_id: &str, node_id: &str) -> Result<()> {
     println!("Node ID: {}", node_id);
 
     // Create a test node
-    let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let node_did_str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
     let capabilities = NodeCapability {
         node_id: "mesh-node-1".to_string(),
-        node_did: did.to_string(),
+        node_did: node_did_str.clone(),
         available_memory_mb: 4096,
         available_cpu_cores: 4,
         available_storage_mb: 40960,
@@ -636,7 +634,7 @@ async fn accept_bid(job_id: &str, node_id: &str) -> Result<()> {
         updated_at: Utc::now(),
     };
 
-    let node = PlanetaryMeshNode::new(did, capabilities)?;
+    let node = PlanetaryMeshNode::new(node_did_str, capabilities)?;
 
     // Accept the bid
     node.accept_bid(job_id, node_id).await?;
@@ -675,10 +673,10 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
     println!("WASM: {}", wasm_path.display());
 
     // Create a test node
-    let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let did_str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
     let capabilities = NodeCapability {
         node_id: "local-node".to_string(),
-        node_did: did.to_string(),
+        node_did: did_str.clone(),
         available_memory_mb: 4096,
         available_cpu_cores: 4,
         available_storage_mb: 40960,
@@ -690,11 +688,11 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
         updated_at: Utc::now(),
     };
 
-    let node = PlanetaryMeshNode::new(did, capabilities)?;
+    let node = PlanetaryMeshNode::new(did_str, capabilities)?;
 
     // Execute the WASM file
     println!("\n{}", "Executing WASM module...".yellow());
-    let (metrics, logs) = node.execute_wasm_file(wasm_path).await?;
+    let metrics = node.execute_wasm_file(wasm_path).await?; // Changed from (metrics, logs)
 
     println!("\n{}", "Execution completed successfully".green().bold());
     println!("Metrics:");
@@ -702,10 +700,10 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
     println!("  Host calls: {}", metrics.host_calls);
     println!("  I/O bytes: {}", metrics.io_bytes);
 
-    println!("\nLogs:");
-    for log in logs {
-        println!("  {}", log);
-    }
+    println!("\nLogs: (Logs are no longer directly returned by execute_wasm_file)");
+    // for log in logs { // logs variable removed
+    //     println!("  {}", log);
+    // }
 
     // Create a job ID and receipt
     let job_id = Uuid::new_v4().to_string();
@@ -735,6 +733,40 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
         fs::write(output_file, &receipt_json)?;
         println!("\nReceipt saved to: {}", output_file.display());
     }
+
+    Ok(())
+}
+
+async fn handle_execute_wasm(node_id: String, wasm_path: PathBuf) -> Result<()> {
+    println!(
+        "Executing WASM module '{}' on node '{}'...",
+        wasm_path.display(),
+        node_id
+    );
+
+    let did_str = format!("did:key:z{}", node_id); 
+    let capabilities = NodeCapability { 
+        node_id: node_id.clone(),
+        node_did: did_str.clone(),
+        available_memory_mb: 1024,
+        available_cpu_cores: 4,
+        available_storage_mb: 10240,
+        cpu_architecture: "wasm32".to_string(),
+        features: vec![],
+        location: None,
+        bandwidth_mbps: 100,
+        supported_job_types: vec!["wasm_execution".to_string()],
+        updated_at: chrono::Utc::now(), // Assuming chrono is available here or this part is okay
+    };
+    let node = PlanetaryMeshNode::new(did_str, capabilities)?;
+
+    let metrics: ExecutionMetrics = node.execute_wasm_file(&wasm_path).await?;
+
+    println!("Execution completed.");
+    println!("  Fuel Used: {}", metrics.fuel_used);
+    println!("  Host Calls: {}", metrics.host_calls);
+    println!("  I/O Bytes: {}", metrics.io_bytes);
+    // Logs removed
 
     Ok(())
 }

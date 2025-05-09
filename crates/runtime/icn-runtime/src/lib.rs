@@ -1,12 +1,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
-use wasmtime::{Engine, Func, Instance, Module, Store};
 use uuid::Uuid;
 
 /// Error types specific to the runtime
@@ -237,7 +237,7 @@ impl Runtime {
             .map_err(|e| RuntimeError::LoadError(format!("Failed to load WASM module: {}", e)))?;
 
         // Set up the execution context
-        let mut context = HostContext::default();
+        let context = HostContext::default();
 
         // Execute the WASM module
         let updated_context = self.vm.execute(&wasm_bytes, context).map_err(|e| {
@@ -258,7 +258,7 @@ impl Runtime {
         drop(resource_usage_guard);
 
         let logs_guard = updated_context.logs.lock().unwrap();
-        let final_logs = logs_guard.clone();
+        let _final_logs = logs_guard.clone();
         drop(logs_guard);
 
         // Update proposal state
@@ -301,7 +301,7 @@ impl Runtime {
         })?;
 
         // Set up the execution context
-        let mut context = HostContext::default();
+        let context = HostContext::default();
 
         // Execute the WASM module
         let updated_context = self.vm.execute(&wasm_bytes, context).map_err(|e| {
@@ -322,7 +322,7 @@ impl Runtime {
         drop(resource_usage_guard);
 
         let logs_guard = updated_context.logs.lock().unwrap();
-        let final_logs = logs_guard.clone();
+        let _final_logs = logs_guard.clone();
         drop(logs_guard);
 
         // Create the execution receipt (without storing it)
@@ -428,7 +428,7 @@ impl Runtime {
     }
 
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
-    fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
+    fn vm_context_to_host_context(&self, _vm_context: VmContext) -> HostContext {
         HostContext::default()
     }
 }

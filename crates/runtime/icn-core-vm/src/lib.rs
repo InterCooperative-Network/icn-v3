@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
 use wasmtime::{
-    Caller, Config, Engine, Extern, Func, FuncType, Instance, Module, OptLevel, Store, Val, ValType,
+    AsContextMut, Caller, Config, Engine, Extern, Func, FuncType, Instance, Module, OptLevel, Store, Val, ValType,
 };
 
 /// Error types specific to the Cooperative VM
@@ -76,7 +76,7 @@ impl Default for ResourceLimits {
 }
 
 /// Host context for WASM execution
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct HostContext {
     /// Metrics collected during execution
     pub metrics: Arc<Mutex<ExecutionMetrics>>,
@@ -185,9 +185,13 @@ impl CoVm {
 
         let fuel_remaining = store.get_fuel().unwrap_or(0);
         let fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
+
+        let anchored_cids_len = store.data().anchored_cids.lock().unwrap().len();
+        let job_submissions_len = store.data().job_submissions.lock().unwrap().len();
+
         store.data_mut().metrics.lock().unwrap().fuel_used = fuel_consumed;
-        store.data_mut().metrics.lock().unwrap().anchored_cids_count = store.data().anchored_cids.lock().unwrap().len();
-        store.data_mut().metrics.lock().unwrap().job_submissions_count = store.data().job_submissions.lock().unwrap().len();
+        store.data_mut().metrics.lock().unwrap().anchored_cids_count = anchored_cids_len;
+        store.data_mut().metrics.lock().unwrap().job_submissions_count = job_submissions_len;
 
         let final_host_context = store.into_data();
         
@@ -197,7 +201,7 @@ impl CoVm {
     /// Try different entrypoints to call the WASM module
     fn call_entrypoint(&self, store: &mut Store<HostContext>, instance: &Instance) -> Result<()> {
         let entrypoint = instance
-            .get_typed_func::<(), ()>(store, "_start")
+            .get_typed_func::<(), ()>(&mut *store, "_start")
             .map_err(|e| anyhow!("Failed to get _start function: {}", e))?;
         entrypoint.call(store.as_context_mut(), ())
             .map_err(|e| {

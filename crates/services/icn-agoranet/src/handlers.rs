@@ -322,6 +322,18 @@ pub async fn cast_vote_handler(
         .write()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
 
+    // Check if voter has already voted *before* getting a mutable borrow on proposal_detail
+    if store
+        .votes
+        .iter()
+        .any(|v| v.proposal_id == payload.proposal_id && v.voter_did == payload.voter_did)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "Voter {} has already voted on proposal {}",
+            payload.voter_did, payload.proposal_id
+        )));
+    }
+
     // Find the proposal mutably
     let proposal_detail = store
         .proposals
@@ -345,18 +357,6 @@ pub async fn cast_vote_handler(
         return Err(ApiError::BadRequest(
             "Voting deadline has passed for this proposal".to_string(),
         ));
-    }
-
-    // Check if voter has already voted (simple check, could be more robust)
-    if store
-        .votes
-        .iter()
-        .any(|v| v.proposal_id == payload.proposal_id && v.voter_did == payload.voter_did)
-    {
-        return Err(ApiError::BadRequest(format!(
-            "Voter {} has already voted on proposal {}",
-            payload.voter_did, payload.proposal_id
-        )));
     }
 
     // Update vote counts

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use icn_identity_core::did::Did;
+// use icn_identity_core::did::Did;
+type Did = String; // DIDs are strings in the format did:key:...
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;

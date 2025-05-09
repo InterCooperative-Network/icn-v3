@@ -1,10 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use icn_core_vm::{CoVm, ExecutionMetrics, HostContext};
+use icn_core_vm::{CoVm, ExecutionMetrics, HostContext, ResourceLimits};
 use icn_economics::ScopedResourceToken;
-use icn_identity_core::did::Did;
-use icn_identity_core::vc::ExecutionReceiptCredential;
+// use icn_identity_core::did::Did;
+type Did = String; // DIDs are strings in the format did:key:...
+// use icn_identity_core::vc::ExecutionReceiptCredential;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -12,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::Uuid;
-use wasmtime::Engine;
 
 /// Error types specific to the planetary mesh
 #[derive(Error, Debug)]
@@ -352,8 +352,7 @@ impl PlanetaryMeshNode {
         let node_id = node_did.to_string().replace("did:key:", "node:");
 
         // Create a VM for WASM execution
-        let engine = Engine::default();
-        let vm = CoVm::new(engine);
+        let vm = CoVm::new(ResourceLimits::default());
 
         Ok(Self {
             node_did,
@@ -370,38 +369,29 @@ impl PlanetaryMeshNode {
     /// Execute a WASM module locally
     pub async fn execute_wasm(&self, wasm_bytes: &[u8]) -> Result<ExecutionMetrics> {
         // Set up a host context for execution
-        let mut host_context = HostContext::default();
+        let host_context = HostContext::default();
 
         // Execute the WASM module
-        self.vm
-            .execute(wasm_bytes, &mut host_context)
+        let updated_host_context = self.vm
+            .execute(wasm_bytes, host_context)
             .map_err(|e| MeshError::ExecutionFailed(e.to_string()))?;
 
         // Extract metrics
-        let metrics = host_context.metrics.lock().unwrap().clone();
+        let metrics = updated_host_context.metrics.lock().unwrap().clone();
 
         Ok(metrics)
     }
 
     /// Load and execute a WASM module from a file
-    pub async fn execute_wasm_file(&self, path: &Path) -> Result<(ExecutionMetrics, Vec<String>)> {
-        // Read the WASM file
+    pub async fn execute_wasm_file(&self, path: &Path) -> Result<ExecutionMetrics> {
         let wasm_bytes = std::fs::read(path)
-            .map_err(|e| MeshError::ExecutionFailed(format!("Failed to read WASM file: {}", e)))?;
-
-        // Set up a host context for execution
-        let mut host_context = HostContext::default();
-
-        // Execute the WASM module
-        self.vm
-            .execute(&wasm_bytes, &mut host_context)
+            .map_err(|e| MeshError::ExecutionFailed(format!("Failed to read WASM: {}", e)))?;
+        let host_context = HostContext::default();
+        let updated_host_context = self.vm
+            .execute(&wasm_bytes, host_context)
             .map_err(|e| MeshError::ExecutionFailed(e.to_string()))?;
-
-        // Extract metrics and logs
-        let metrics = host_context.metrics.lock().unwrap().clone();
-        let logs = host_context.logs.lock().unwrap().clone();
-
-        Ok((metrics, logs))
+        let metrics = updated_host_context.metrics.lock().unwrap().clone();
+        Ok(metrics)
     }
 
     /// Create a job execution receipt
@@ -414,10 +404,9 @@ impl PlanetaryMeshNode {
     ) -> Result<JobExecutionReceipt> {
         // Get the job
         let jobs = self.jobs.lock().unwrap();
-        let job = jobs
-            .get(job_id)
-            .ok_or_else(|| MeshError::JobNotFound(job_id.to_string()))?
-            .clone();
+        if !jobs.contains_key(job_id) {
+            return Err(MeshError::JobNotFound(job_id.to_string()).into());
+        }
 
         // Create a receipt
         let receipt = JobExecutionReceipt {
@@ -440,6 +429,30 @@ impl PlanetaryMeshNode {
         receipts.insert(job_id.to_string(), receipt.clone());
 
         Ok(receipt)
+    }
+
+    /// Handle an incoming job execution request (simulated for now)
+    async fn handle_job_execution(&self, job_id: &str) -> Result<JobExecutionReceipt> {
+        let jobs = self.jobs.lock().unwrap();
+        let _job = jobs
+            .get(job_id)
+            .ok_or_else(|| MeshError::JobNotFound(job_id.to_string()))?;
+        // TODO: Actual execution logic using job.manifest.wasm_cid, etc.
+        // For now, return a dummy receipt
+        Ok(JobExecutionReceipt {
+            job_id: job_id.to_string(),
+            executor_node_id: self.node_id.clone(),
+            executor_node_did: self.node_did.to_string(),
+            metrics: ExecutionMetrics::default(),
+            output_data_cid: None,
+            start_time: Utc::now(),
+            end_time: Utc::now(),
+            resource_usage: Vec::new(),
+            receipt_cid: "dummy-receipt-cid".to_string(),
+            verified_by_federation: false,
+            verifier_did: None,
+            verified_at: None,
+        })
     }
 }
 

@@ -1,15 +1,15 @@
-use anyhow::{anyhow, Result};
-use handlebars::Handlebars;
+use anyhow::{Result};
+use handlebars::{Context, Handlebars, Helper as HbHelper, HelperResult, Output, RenderContext, RenderError};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 use thiserror::Error;
 use wasm_encoder::{
-    CodeSection, ExportSection, Function, FunctionSection, ImportSection, Module, TypeSection,
-    ValType,
+    CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
+    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType, EntityType,
 };
 
 /// Error types specific to the CCL compiler
@@ -261,16 +261,23 @@ impl CclCompiler {
         // Register handlebars helpers
         handlebars.register_helper(
             "eq",
-            Box::new(|params| {
-                if params.len() != 2 {
-                    return Ok(false.into());
+            Box::new(
+                |h: &HbHelper,
+                 _r: &Handlebars,
+                 _ctx: &Context,
+                 _rc: &mut RenderContext,
+                 out: &mut dyn Output|
+                 -> HelperResult {
+                    let param1 = h.param(0).ok_or_else(|| RenderError::new("Param 0 is missing for eq helper"))?;
+                    let param2 = h.param(1).ok_or_else(|| RenderError::new("Param 1 is missing for eq helper"))?;
+                    if param1.value() == param2.value() {
+                        out.write("true")?;
+                    } else {
+                        out.write("false")?;
+                    }
+                    Ok(())
                 }
-
-                let left = params[0].value();
-                let right = params[1].value();
-
-                Ok((left == right).into())
-            }),
+            )
         );
 
         let temp_dir = TempDir::new()?;
@@ -281,50 +288,10 @@ impl CclCompiler {
         })
     }
 
-    /// Compile CCL source to DSL
-    pub fn compile_to_dsl(&self, ccl_source: &str) -> Result<String> {
-        // This is a stub for now, in a real implementation we would:
-        // 1. Parse the CCL using icn-ccl-parser
-        // 2. Extract governance rules and actions
-        // 3. Map them to DSL opcodes
-
-        // For this prototype, we'll create a simple example DSL program
-        let program = DslProgram {
-            name: "Example Governance".to_string(),
-            description: "Example governance program from CCL".to_string(),
-            version: "0.1.0".to_string(),
-            opcodes: vec![
-                DslOpcode::AnchorData {
-                    cid: "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
-                },
-                DslOpcode::PerformMeteredAction {
-                    action_type: "budget_allocation".to_string(),
-                    amount: 1000,
-                },
-                DslOpcode::MintToken {
-                    token_type: "governance_token".to_string(),
-                    amount: 100,
-                    recipient: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
-                        .to_string(),
-                },
-                DslOpcode::SubmitJob {
-                    wasm_cid: "bafybeih7q27itb576mtmy5yzggkfzqnfj5dis4h2og6epvyvjyvcedwmze"
-                        .to_string(),
-                    description: "Data processing task".to_string(),
-                    resource_type: "compute".to_string(),
-                    resource_amount: 500,
-                    priority: "medium".to_string(),
-                },
-            ],
-        };
-
-        // Render the DSL using Handlebars
-        let dsl_code = self
-            .handlebars
-            .render("main", &program)
-            .map_err(|e| CompilerError::DslGenerationError(e.to_string()))?;
-
-        Ok(dsl_code)
+    /// Compile CCL source to an intermediate DSL representation (stub)
+    pub fn compile_to_dsl(&self, _ccl_source: &str) -> Result<String> {
+        // TODO: Implement actual DSL compilation from CCL document
+        Ok("DSL representation (stub)".to_string())
     }
 
     /// Compile CCL source to DSL and then to WASM
@@ -421,46 +388,81 @@ lto = true
         std::fs::write(wasm_path, wasm_bytes)?;
         Ok(())
     }
-}
 
-// Direct WASM generation without Rust compilation (simpler alternative)
-pub fn generate_simple_wasm() -> Result<Vec<u8>> {
-    let mut module = Module::new();
+    /// This function generates a WASM module from DSL opcodes.
+    pub fn generate_wasm_from_dsl_opcodes(opcodes: &[DslOpcode]) -> Result<Vec<u8>, CompilerError> {
+        let mut module = Module::new();
 
-    // Add types
-    let mut types = TypeSection::new();
-    // void -> void for the 'run' function
-    types.function(Vec::new(), Vec::new());
-    // (i32, i32) -> void for host_log_message
-    types.function(vec![ValType::I32, ValType::I32], Vec::new());
-    // (i32, i32) -> i32 for host_anchor_to_dag
-    types.function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
-    module.section(&types);
+        // Type section: Define function signatures
+        let mut types = TypeSection::new();
+        // Type 0: (ptr, len) -> () for host_log_message and host_anchor_to_dag
+        let host_fn_type_idx = Self::define_string_param_host_function_type_static(&mut types);
+        // Type 1: () -> () for the main exported 'run' function
+        types.function(vec![], vec![]);
+        let run_fn_type_idx = types.len() - 1;
+        module.section(&types);
 
-    // Add imports
-    let mut imports = ImportSection::new();
-    imports.import("host", "host_log_message", Function { ty: 1 });
-    imports.import("host", "host_anchor_to_dag", Function { ty: 2 });
-    module.section(&imports);
+        // Imports section for host functions
+        let mut imports = ImportSection::new();
+        // Imported functions get their own function indices starting from 0.
+        // host_log_message will be func idx 0
+        imports.import("host", "host_log_message", EntityType::Function(host_fn_type_idx));
+        // host_anchor_to_dag will be func idx 1
+        imports.import("host", "host_anchor_to_dag", EntityType::Function(host_fn_type_idx));
+        module.section(&imports);
 
-    // Add functions
-    let mut functions = FunctionSection::new();
-    // The 'run' function has type 0 (void -> void)
-    functions.function(0);
-    module.section(&functions);
+        // Function section: Declare 'run' function (locally defined)
+        // This associates a function index in this module with a previously defined type index.
+        let mut funcs = FunctionSection::new();
+        funcs.function(run_fn_type_idx); // run_fn_type_idx is the *type index* for run()
+        module.section(&funcs);
 
-    // Add exports
-    let mut exports = ExportSection::new();
-    exports.export("run", wasm_encoder::ExportKind::Func, 0);
-    module.section(&exports);
+        // Memory section (minimum 1 page)
+        let mut memory_section = MemorySection::new();
+        memory_section.memory(MemoryType { minimum: 1, maximum: None, memory64: false, shared: false });
+        module.section(&memory_section);
 
-    // Add code
-    let mut code = CodeSection::new();
-    // Empty function body for 'run'
-    code.function(wasm_encoder::Function::new(Vec::new()));
-    module.section(&code);
+        // Code section: Define the body of the 'run' function
+        let mut code = CodeSection::new();
+        let locals = vec![]; 
+        let mut f = Function::new(locals);
 
-    Ok(module.finish())
+        for opcode in opcodes {
+            match opcode {
+                DslOpcode::AnchorData { cid: _ } => {
+                    f.instruction(&Instruction::Call(1)); // Call host_anchor_to_dag (import func idx 1)
+                }
+                DslOpcode::PerformMeteredAction { action_type: _, amount: _ } => {
+                    f.instruction(&Instruction::Call(0)); // Call host_log_message (import func idx 0)
+                }
+                DslOpcode::MintToken { token_type: _, amount: _, recipient: _ } => {
+                    f.instruction(&Instruction::Call(0)); 
+                }
+                DslOpcode::SubmitJob { .. } => {
+                    f.instruction(&Instruction::Call(0)); 
+                }
+            }
+        }
+        f.instruction(&Instruction::End);
+        code.function(&f); 
+        module.section(&code);
+
+        // Exports section: Export 'run' function
+        // The 'run' function is the first (and only) locally defined function.
+        // Its index is the number of imported functions (currently 2).
+        let mut exports = ExportSection::new();
+        exports.export("run", ExportKind::Func, 2); // Export function at index 2 (0 & 1 are imports)
+        module.section(&exports);
+
+        Ok(module.finish())
+    }
+
+    fn define_string_param_host_function_type_static(types: &mut TypeSection) -> u32 {
+        let param_types = vec![ValType::I32, ValType::I32];
+        let result_types = vec![];
+        types.function(param_types, result_types);
+        types.len() - 1 
+    }
 }
 
 #[cfg(test)]

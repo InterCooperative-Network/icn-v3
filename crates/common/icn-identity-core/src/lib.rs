@@ -1,4 +1,4 @@
-mod did;
+pub mod did;
 pub mod vc;
 
 pub use did::Error as DidError;

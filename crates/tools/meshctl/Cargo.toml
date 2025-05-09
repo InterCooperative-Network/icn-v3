@@ -20,4 +20,5 @@ planetary-mesh = { path = "../../p2p/planetary-mesh" }
 uuid = { version = "1.5.0", features = ["v4"] }
 tempfile = "3.8.1"
 chrono = { version = "0.4.31", features = ["serde"] }
-colored = "2.0.4" 
+colored = "2.0.4"
+icn-core-vm = { path = "../../crates/runtime/icn-core-vm" } 
