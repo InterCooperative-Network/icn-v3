@@ -16,4 +16,5 @@ icn-crypto = { path = "../icn-crypto" }
 
 [dev-dependencies]
 assert_matches = "1.5"
-rand = "0.7" 
+rand = "0.7"
+anyhow = "1.0.75" 

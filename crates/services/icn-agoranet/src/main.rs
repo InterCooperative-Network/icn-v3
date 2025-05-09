@@ -2,12 +2,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use icn_agoranet::app::create_app;
+// use icn_agoranet::app::create_app; // Removed unused import
 use icn_agoranet::handlers::Db;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
+// use tower_http::trace::TraceLayer; // Removed unused import
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;

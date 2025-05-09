@@ -492,7 +492,8 @@ impl CoVm {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use crate::job_utils::create_test_job; // To be removed
+    // use crate::{CoVm, ExecutionMetrics, HostContext, ResourceLimits}; // To be removed
 
     // Test will be added once we have test WASM modules
 }

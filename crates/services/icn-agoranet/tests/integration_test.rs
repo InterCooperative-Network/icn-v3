@@ -21,41 +21,46 @@ async fn dummy_test() {
 // or use a library like `axum-test-helper` or `hyper` directly to make requests
 // without running a full server.
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-    Router,
-};
+// use axum::{ // Commened out entire block
+//     // body::Body, 
+//     // http::{Request, StatusCode}, 
+//     // Router, 
+// };
 use chrono::{Duration, Utc};
 use icn_agoranet::{
     handlers::{
-        cast_vote_handler, create_proposal_handler, create_thread_handler,
-        get_proposal_detail_handler, get_proposal_votes_handler, get_threads_handler,
-        health_check_handler, Db, InMemoryStore,
+        // cast_vote_handler, create_proposal_handler, create_thread_handler,
+        // get_proposal_detail_handler, get_proposal_votes_handler, get_threads_handler,
+        // health_check_handler, 
+        Db,
+        // InMemoryStore,
     },
     models::{
-        GetProposalsQuery, GetThreadsQuery, Message, NewProposalRequest, NewThreadRequest,
-        NewVoteRequest, ProposalDetail, ProposalStatus, ProposalSummary,
-        ProposalVotesResponse, ThreadDetail, ThreadSummary, Timestamp, Vote, VoteCounts,
-        VoteType,
+        // GetProposalsQuery, GetThreadsQuery, Message,
+        NewProposalRequest, NewThreadRequest, NewVoteRequest,
+        ProposalDetail, ProposalStatus, ProposalSummary,
+        ProposalVotesResponse, ThreadDetail, ThreadSummary,
+        // Timestamp,
+        Vote, VoteCounts, VoteType,
     },
 };
 use reqwest::Client;
 use serde_json::json; // For ad-hoc json creation in tests
-use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+// use std::net::SocketAddr;
+// use std::sync::{Arc, RwLock};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use tokio::net::TcpListener;
-use tower::ServiceExt; // for `oneshot`
+// use tower::ServiceExt;
 
 use icn_agoranet::app::create_app;
 
-const BASE_URL: &str = "http://127.0.0.1:8787";
+// const BASE_URL: &str = "http://127.0.0.1:8787"; // This line will be removed
 
 // Helper to create a new thread
 async fn create_thread(
     client: &Client,
+    base_url_for_test: &str,
     title: &str,
     author_did: &str,
     scope: &str,
@@ -67,7 +72,7 @@ async fn create_thread(
         metadata: Some(json!({"test_metadata": "some_value"})),
     };
     client
-        .post(format!("{}/threads", BASE_URL))
+        .post(format!("{}/threads", base_url_for_test))
         .json(&req)
         .send()
         .await
@@ -80,6 +85,7 @@ async fn create_thread(
 // Helper to create a new proposal
 async fn create_proposal(
     client: &Client,
+    base_url_for_test: &str,
     title: &str,
     full_text: &str,
     scope: &str,
@@ -95,7 +101,7 @@ async fn create_proposal(
     };
     // The API actually returns ProposalSummary, but we fetch ProposalDetail immediately
     let summary = client
-        .post(format!("{}/proposals", BASE_URL))
+        .post(format!("{}/proposals", base_url_for_test))
         .json(&req)
         .send()
         .await
@@ -105,13 +111,13 @@ async fn create_proposal(
         .expect("Failed to parse create proposal response");
 
     // Fetch the ProposalDetail to get all fields, including the ID.
-    get_proposal_detail(client, &summary.id).await
+    get_proposal_detail(client, base_url_for_test, &summary.id).await
 }
 
 // Helper to get proposal detail
-async fn get_proposal_detail(client: &Client, proposal_id: &str) -> ProposalDetail {
+async fn get_proposal_detail(client: &Client, base_url_for_test: &str, proposal_id: &str) -> ProposalDetail {
     client
-        .get(format!("{}/proposals/{}", BASE_URL, proposal_id))
+        .get(format!("{}/proposals/{}", base_url_for_test, proposal_id))
         .send()
         .await
         .expect("Failed to send get proposal detail request")
@@ -123,6 +129,7 @@ async fn get_proposal_detail(client: &Client, proposal_id: &str) -> ProposalDeta
 // Helper to cast a vote
 async fn cast_vote(
     client: &Client,
+    base_url_for_test: &str,
     proposal_id: &str,
     voter_did: &str,
     vote_type: VoteType,
@@ -135,7 +142,7 @@ async fn cast_vote(
         justification,
     };
     client
-        .post(format!("{}/votes", BASE_URL))
+        .post(format!("{}/votes", base_url_for_test))
         .json(&req)
         .send()
         .await
@@ -146,9 +153,9 @@ async fn cast_vote(
 }
 
 // Helper to get proposal votes
-async fn get_proposal_votes(client: &Client, proposal_id: &str) -> ProposalVotesResponse {
+async fn get_proposal_votes(client: &Client, base_url_for_test: &str, proposal_id: &str) -> ProposalVotesResponse {
     client
-        .get(format!("{}/votes/{}", BASE_URL, proposal_id))
+        .get(format!("{}/votes/{}", base_url_for_test, proposal_id))
         .send()
         .await
         .expect("Failed to send get proposal votes request")
@@ -158,9 +165,9 @@ async fn get_proposal_votes(client: &Client, proposal_id: &str) -> ProposalVotes
 }
 
 // Helper to get thread detail
-async fn get_thread_detail(client: &Client, thread_id: &str) -> ThreadDetail {
+async fn get_thread_detail(client: &Client, base_url_for_test: &str, thread_id: &str) -> ThreadDetail {
     client
-        .get(format!("{}/threads/{}", BASE_URL, thread_id))
+        .get(format!("{}/threads/{}", base_url_for_test, thread_id))
         .send()
         .await
         .expect("Failed to send get thread detail request")
@@ -208,6 +215,7 @@ async fn test_create_proposal_handler() {
 
 #[tokio::test]
 async fn test_full_lifecycle() {
+    let (server_url, _handle, _db) = spawn_app().await;
     let client = Client::new();
 
     // 1. Create a new thread
@@ -215,7 +223,7 @@ async fn test_full_lifecycle() {
     let thread_author = "did:test:thread_author";
     let thread_scope = "test.scope.thread";
     let created_thread_summary =
-        create_thread(&client, thread_title, thread_author, thread_scope).await;
+        create_thread(&client, &server_url, thread_title, thread_author, thread_scope).await;
 
     assert_eq!(created_thread_summary.title, thread_title);
     assert_eq!(created_thread_summary.author_did, thread_author);
@@ -223,7 +231,7 @@ async fn test_full_lifecycle() {
     println!("Created thread: {}", created_thread_summary.id);
 
     // Fetch thread detail to verify
-    let thread_detail = get_thread_detail(&client, &created_thread_summary.id).await;
+    let thread_detail = get_thread_detail(&client, &server_url, &created_thread_summary.id).await;
     assert_eq!(thread_detail.summary.id, created_thread_summary.id);
     assert_eq!(thread_detail.messages.len(), 0); // New threads have no messages initially (as per current model)
 
@@ -233,6 +241,7 @@ async fn test_full_lifecycle() {
     let proposal_scope = "test.scope.proposal";
     let created_proposal_detail = create_proposal(
         &client,
+        &server_url,
         proposal_title,
         proposal_text,
         proposal_scope,
@@ -258,6 +267,7 @@ async fn test_full_lifecycle() {
 
     let vote1 = cast_vote(
         &client,
+        &server_url,
         &created_proposal_detail.summary.id,
         voter1,
         VoteType::Approve,
@@ -270,6 +280,7 @@ async fn test_full_lifecycle() {
 
     let vote2 = cast_vote(
         &client,
+        &server_url,
         &created_proposal_detail.summary.id,
         voter2,
         VoteType::Reject,
@@ -282,6 +293,7 @@ async fn test_full_lifecycle() {
 
     let vote3 = cast_vote(
         &client,
+        &server_url,
         &created_proposal_detail.summary.id,
         voter3,
         VoteType::Abstain,
@@ -294,7 +306,7 @@ async fn test_full_lifecycle() {
 
     // 4. Get the proposal detail to see updated vote counts
     let updated_proposal_detail =
-        get_proposal_detail(&client, &created_proposal_detail.summary.id).await;
+        get_proposal_detail(&client, &server_url, &created_proposal_detail.summary.id).await;
     assert_eq!(updated_proposal_detail.summary.vote_counts.approve, 1);
     assert_eq!(updated_proposal_detail.summary.vote_counts.reject, 1);
     assert_eq!(updated_proposal_detail.summary.vote_counts.abstain, 1);
@@ -422,9 +434,8 @@ async fn test_get_proposals_with_query_params() {
         .expect("Failed parse");
 
     assert!(
-        proposals_gov_alpha.len() >= 1,
-        "Expected at least 1 proposal with scope gov.alpha, found {}",
-        proposals_gov_alpha.len()
+        !proposals_gov_alpha.is_empty(),
+        "Expected at least one proposal with scope gov.alpha"
     );
     for proposal in &proposals_gov_alpha {
         assert_eq!(proposal.scope, "gov.alpha");

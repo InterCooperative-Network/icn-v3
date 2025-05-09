@@ -319,7 +319,7 @@ mod tests {
         enforcer.set_policy("compute", "test-scope", ResourceAuthorization::Quota(100));
 
         // Create a test DID
-        let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+        let did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
 
         // Create a token
         let token = ScopedResourceToken {
@@ -360,8 +360,8 @@ mod tests {
         let mut enforcer = ResourcePolicyEnforcer::new(repository);
 
         // Create test DIDs
-        let did1 = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
-        let did2 = Did::parse("did:key:z6MkuBsxRsRu3PU1VzZ5xnqNtXWRwLtrGdxdMeMFuxP5xyVp").unwrap();
+        let did1 = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
+        let did2 = "did:key:z6MkuBsxRsRu3PU1VzZ5xnqNtXWRwLtrGdxdMeMFuxP5xyVp".to_string();
 
         // Set a permit list policy that includes did1 but not did2
         enforcer.set_policy(

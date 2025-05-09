@@ -164,7 +164,6 @@ impl ExecutionReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::did::pk_from_did_key;
     use ed25519_dalek::Keypair;
     use rand::rngs::OsRng;
 

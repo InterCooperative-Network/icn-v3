@@ -1,8 +1,8 @@
 use ed25519_dalek::Keypair;
-use icn_identity_core::vc::VcError;
 use icn_types::identity::{CredentialProof, CredentialSubject, VerifiableCredential};
 use rand::rngs::OsRng;
 use std::collections::HashMap;
+use base64::Engine;
 
 #[test]
 fn test_credential_canonical_serialization() {
@@ -11,7 +11,7 @@ fn test_credential_canonical_serialization() {
     let keypair = Keypair::generate(&mut csprng);
     let verification_method = format!(
         "did:key:test#{}",
-        base64::encode(&keypair.public.to_bytes()[..8])
+        base64::engine::general_purpose::STANDARD.encode(&keypair.public.to_bytes()[..8])
     );
 
     // Create a sample credential
@@ -79,7 +79,7 @@ fn test_credential_signing_and_verification() {
     let keypair = Keypair::generate(&mut csprng);
     let verification_method = format!(
         "did:key:test#{}",
-        base64::encode(&keypair.public.to_bytes()[..8])
+        base64::engine::general_purpose::STANDARD.encode(&keypair.public.to_bytes()[..8])
     );
 
     // Create a sample credential

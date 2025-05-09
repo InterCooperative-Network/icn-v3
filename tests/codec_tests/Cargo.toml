@@ -8,7 +8,7 @@ icn-types = { path = "../../crates/common/icn-types" }
 cid = { version = "0.10", features = ["serde"] }
 anyhow = "1.0.75"
 serde = { version = "1.0.190", features = ["derive"] }
-ipld-core = { version = "0.4.2", features = ["serde", "codec"] }
+ipld-core = { version = "0.4.2", features = ["serde", "codec", "std"] }
 multihash = "0.18.1"
 multibase = "0.9.1"
 

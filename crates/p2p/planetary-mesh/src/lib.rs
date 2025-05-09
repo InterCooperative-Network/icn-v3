@@ -536,10 +536,10 @@ mod tests {
     #[tokio::test]
     async fn test_job_submission_and_status() {
         // Create a test node
-        let did = Did::parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+        let did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string();
         let capabilities = NodeCapability {
-            node_id: "test-node".to_string(),
-            node_did: did.to_string(),
+            node_id: "test-node-1".to_string(),
+            node_did: did.clone(),
             available_memory_mb: 1024,
             available_cpu_cores: 4,
             available_storage_mb: 10240,
