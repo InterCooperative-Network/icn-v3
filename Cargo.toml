@@ -1,11 +1,5 @@
 [workspace]
 members = [
-    "crates/common/*",
-    "crates/runtime/*",
-    "crates/p2p/*",
-    "crates/wallet/*",
-    "crates/tools/*",
-    "crates/ccl/*",
-    "crates/services/*",
+    "crates/common/icn-types"
 ]
 resolver = "2"
