@@ -1,0 +1,84 @@
+// Contract Chain Language (CCL) grammar
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!("\n") ~ ANY)* }
+
+// Basic building blocks
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+string_literal = ${ "\"" ~ inner_string ~ "\"" }
+inner_string = @{ (!("\"" | "\\") ~ ANY)* ~ (("\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")) ~ (!("\"" | "\\") ~ ANY)*)* }
+number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+boolean = { "true" | "false" }
+duration = @{ ASCII_DIGIT+ ~ ("d" | "h" | "m" | "s") }
+
+// Value types
+value = { string_literal | number | boolean | duration | array | object }
+array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
+object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
+object_pair = { (string_literal | identifier) ~ ":" ~ value }
+
+// Common structures
+block = { "{" ~ statement* ~ "}" }
+statement = { 
+    organization_def |
+    roles_def |
+    governance_def |
+    membership_def |
+    actions_def |
+    budget_def |
+    allocations_def |
+    spending_rules_def |
+    reporting_def |
+    election_def |
+    process_def |
+    vacancies_def |
+    any_statement
+}
+
+any_statement = { identifier ~ (value | block | identifier)? ~ (";" | block)? }
+
+// Organization definition
+organization_def = { "organization" ~ string_literal ~ block }
+
+// Roles definition
+roles_def = { "roles" ~ block }
+role_def = { "role" ~ string_literal ~ block }
+
+// Governance definition
+governance_def = { "governance" ~ block }
+proposal_def = { "proposal" ~ string_literal ~ block }
+
+// Membership definition
+membership_def = { "membership" ~ block }
+
+// Actions definition
+actions_def = { "actions" ~ block }
+action_def = { "on" ~ string_literal ~ block }
+mint_token = { "mint_token" ~ block }
+anchor_data = { "anchor_data" ~ block }
+perform_metered_action = { "perform_metered_action" ~ block }
+
+// Budget definition
+budget_def = { "budget" ~ string_literal ~ block }
+
+// Allocations definition
+allocations_def = { "allocations" ~ block }
+category_def = { "category" ~ string_literal ~ block }
+
+// Spending rules definition
+spending_rules_def = { "spending_rules" ~ block }
+
+// Reporting definition
+reporting_def = { "reporting" ~ block }
+
+// Election definition
+election_def = { "election" ~ string_literal ~ block }
+
+// Process definition
+process_def = { "process" ~ block }
+
+// Vacancies definition
+vacancies_def = { "vacancies" ~ block }
+
+// Main rule
+ccl = { SOI ~ statement* ~ EOI } 

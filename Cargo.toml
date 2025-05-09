@@ -3,6 +3,7 @@ members = [
     "crates/common/icn-types",
     "crates/common/icn-crypto",
     "crates/common/icn-identity-core",
+    "crates/ccl/icn-ccl-parser",
     "tests/codec_tests"
 ]
 resolver = "2"

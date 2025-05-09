@@ -1,0 +1,178 @@
+// ICN Contract Chain Language - Election Template
+// This template defines rules for cooperative role elections
+
+// Define the election scope
+election "role_election" {
+  description "Rules for electing members to organizational roles"
+  version "1.0.0"
+}
+
+// Define eligible roles for election
+roles {
+  role "steward" {
+    description "Governance steward with administrative capabilities"
+    term_length 365d // 1 year term
+    term_limit 2 // Maximum consecutive terms
+    seats 7 // Number of stewards
+    requirements {
+      membership_duration 180d // Must be a member for 6 months
+      standing "good" // Must be in good standing
+    }
+  }
+  
+  role "finance_committee" {
+    description "Committee overseeing financial decisions"
+    term_length 365d
+    term_limit 2
+    seats 5
+    requirements {
+      membership_duration 365d // Must be a member for 1 year
+      standing "good"
+      skills ["finance", "accounting"]
+    }
+  }
+  
+  role "community_coordinator" {
+    description "Facilitates community engagement and outreach"
+    term_length 180d // 6 month term
+    term_limit 4 // Can serve up to 2 years consecutively
+    seats 3
+    requirements {
+      membership_duration 90d // Must be a member for 3 months
+      standing "good"
+    }
+  }
+}
+
+// Define the election process
+process {
+  // Nomination phase
+  nomination {
+    duration 14d
+    self_nomination allowed
+    peer_nomination {
+      allowed true
+      seconds_required 2 // Requires two other members to second
+    }
+    confirmation_required true
+  }
+  
+  // Campaign phase
+  campaign {
+    duration 14d
+    statement_allowed true
+    max_statement_length 2000 // characters
+    q_and_a_session required
+  }
+  
+  // Voting phase
+  voting {
+    duration 7d
+    method "single_transferable_vote"
+    eligibility {
+      membership_duration 30d // Must be a member for at least 30 days to vote
+      standing "good"
+    }
+    quorum 0.4 // 40% participation required
+  }
+  
+  // Results and transition
+  results {
+    publication_delay 1d // Results published 1 day after voting closes
+    transition_period 14d // Two weeks for handover
+  }
+}
+
+// Define how to handle vacancies
+vacancies {
+  scenario "resignation" {
+    process "runner_up"
+    term "remainder" // Serve remainder of original term
+  }
+  
+  scenario "removal" {
+    process "special_election"
+    term "remainder"
+  }
+  
+  scenario "insufficient_candidates" {
+    process "appointment"
+    term "interim" { // Temporary term until next regular election
+      max_duration 180d
+    }
+  }
+}
+
+// Actions that trigger state changes
+actions {
+  on "nomination.confirmed" {
+    mint_token {
+      type "nomination_receipt"
+      recipient ctx.nominee_id
+      data {
+        role: ctx.role,
+        nominated_at: timestamp(),
+        election_id: ctx.election_id
+      }
+    }
+    
+    anchor_data {
+      path "governance/elections/nominations"
+      data {
+        nominee: ctx.nominee_id,
+        role: ctx.role,
+        nominators: ctx.nominators,
+        confirmed: true,
+        timestamp: timestamp()
+      }
+    }
+  }
+  
+  on "vote.cast" {
+    mint_token {
+      type "vote_receipt"
+      recipient ctx.voter_id
+      data {
+        election_id: ctx.election_id,
+        voted_at: timestamp(),
+        // Note: actual vote choices not recorded in receipt for privacy
+        vote_hash: ctx.vote_hash
+      }
+    }
+    
+    perform_metered_action {
+      action "record_vote"
+      args {
+        election_id: ctx.election_id,
+        voter_id: ctx.voter_id,
+        vote_data: ctx.encrypted_vote,
+        timestamp: timestamp()
+      }
+    }
+  }
+  
+  on "election.completed" {
+    mint_token {
+      type "role_credential"
+      recipients ctx.elected_members
+      data {
+        role: ctx.role,
+        term_start: ctx.term_start,
+        term_end: ctx.term_end,
+        election_id: ctx.election_id
+      }
+    }
+    
+    anchor_data {
+      path "governance/elections/results"
+      data {
+        election_id: ctx.election_id,
+        role: ctx.role,
+        elected_members: ctx.elected_members,
+        vote_count: ctx.vote_count,
+        quorum_reached: ctx.quorum_reached,
+        timestamp: timestamp()
+      }
+    }
+  }
+} 

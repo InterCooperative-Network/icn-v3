@@ -1,0 +1,126 @@
+// ICN Contract Chain Language - Bylaws Template
+// This template provides a governance structure for ICN cooperatives
+
+// Define the organization
+organization "name" {
+  description "Cooperative organization governance bylaws"
+  version "1.0.0"
+}
+
+// Define roles and permissions
+roles {
+  role "member" {
+    description "Regular member with voting rights"
+    permissions [
+      "vote.cast",
+      "proposal.create",
+      "proposal.comment"
+    ]
+  }
+  
+  role "steward" {
+    description "Governance steward with administrative capabilities"
+    permissions [
+      "vote.cast",
+      "proposal.create",
+      "proposal.comment",
+      "proposal.modify",
+      "config.update",
+      "member.invite"
+    ]
+  }
+}
+
+// Define governance parameters
+governance {
+  quorum 0.6 // 60% participation required
+  
+  // Proposal types and thresholds
+  proposal "general" {
+    description "General governance proposal"
+    approval_threshold 0.5 // Simple majority
+    voting_period 7d
+  }
+  
+  proposal "bylaw_change" {
+    description "Changes to organization bylaws"
+    approval_threshold 0.75 // Supermajority
+    voting_period 14d
+  }
+  
+  proposal "budget" {
+    description "Budget allocation proposal"
+    approval_threshold 0.6 // 60% approval
+    voting_period 7d
+    requires_role "steward"
+  }
+}
+
+// Define membership rules
+membership {
+  onboarding {
+    requires [
+      "consent.signed",
+      "identity.verified"
+    ]
+    approval member_vote {
+      threshold 0.5
+      quorum 0.3
+    }
+  }
+  
+  offboarding {
+    voluntary {
+      notice_period 30d
+    }
+    removal {
+      threshold 0.75
+      quorum 0.7
+      grounds [
+        "bylaw_violation",
+        "inactivity",
+        "ethics_breach"
+      ]
+    }
+  }
+}
+
+// Actions that trigger state changes
+actions {
+  on "proposal.approved" {
+    if proposal.type == "bylaw_change" {
+      mint_token {
+        type "governance_receipt"
+        recipients proposal.voters
+        data {
+          proposal_id: proposal.id,
+          approved_at: timestamp()
+        }
+      }
+      
+      anchor_data {
+        path "governance/bylaws"
+        data proposal.content
+      }
+    }
+  }
+  
+  on "member.added" {
+    mint_token {
+      type "membership"
+      recipient ctx.member_id
+      data {
+        joined_at: timestamp(),
+        initial_role: "member"
+      }
+    }
+    
+    perform_metered_action {
+      action "welcome"
+      args {
+        member_id: ctx.member_id,
+        welcome_message: "Welcome to the cooperative!"
+      }
+    }
+  }
+} 
