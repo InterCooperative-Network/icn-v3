@@ -1,8 +1,7 @@
 use anyhow::{Result};
-use handlebars::{Context, Handlebars, Helper as HbHelper, HelperResult, Output, RenderContext, RenderError};
-use once_cell::sync::Lazy;
+// use once_cell::sync::Lazy; // Removed
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+// use std::collections::HashMap; // Removed
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
@@ -78,212 +77,16 @@ pub struct DslProgram {
 
 /// The CCL compiler for transforming CCL to DSL to WASM
 pub struct CclCompiler {
-    /// Handlebars instance for template rendering
-    handlebars: Handlebars<'static>,
-
     /// Storage for temporary files
     temp_dir: TempDir,
 }
 
-/// Handlebars templates for DSL generation
-static DSL_TEMPLATES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
-    let mut templates = HashMap::new();
-
-    // Main program template
-    templates.insert("main", r#"
-// Generated DSL program from CCL
-// Name: {{name}}
-// Description: {{description}}
-// Version: {{version}}
-
-// Host imports
-extern "C" {
-    // Log a message to the host
-    fn host_log_message(ptr: *const u8, len: usize);
-    
-    // Anchor a CID to the DAG
-    fn host_anchor_to_dag(ptr: *const u8, len: usize) -> i32;
-    
-    // Check resource authorization
-    fn host_check_resource_authorization(type_ptr: *const u8, type_len: usize, amount: i64) -> i32;
-    
-    // Record resource usage
-    fn host_record_resource_usage(type_ptr: *const u8, type_len: usize, amount: i64);
-    
-    // Submit a job to the mesh network
-    fn host_submit_job(
-        wasm_cid_ptr: *const u8, 
-        wasm_cid_len: usize,
-        description_ptr: *const u8,
-        description_len: usize,
-        resource_type_ptr: *const u8,
-        resource_type_len: usize,
-        resource_amount: u64,
-        priority_ptr: *const u8,
-        priority_len: usize
-    ) -> i32;
-}
-
-// Helper function to log a message
-fn log(message: &str) {
-    unsafe {
-        host_log_message(message.as_ptr(), message.len());
-    }
-}
-
-// Helper function to anchor a CID
-fn anchor_data(cid: &str) -> bool {
-    let result = unsafe {
-        host_anchor_to_dag(cid.as_ptr(), cid.len())
-    };
-    result != 0
-}
-
-// Helper function to check authorization
-fn check_authorization(resource_type: &str, amount: u64) -> bool {
-    let result = unsafe {
-        host_check_resource_authorization(
-            resource_type.as_ptr(),
-            resource_type.len(),
-            amount as i64
-        )
-    };
-    result != 0
-}
-
-// Helper function to record resource usage
-fn record_usage(resource_type: &str, amount: u64) {
-    unsafe {
-        host_record_resource_usage(
-            resource_type.as_ptr(),
-            resource_type.len(),
-            amount as i64
-        );
-    }
-}
-
-// Helper function to submit a job to the mesh network
-fn submit_job(wasm_cid: &str, description: &str, resource_type: &str, amount: u64, priority: &str) -> bool {
-    let result = unsafe {
-        host_submit_job(
-            wasm_cid.as_ptr(),
-            wasm_cid.len(),
-            description.as_ptr(),
-            description.len(),
-            resource_type.as_ptr(),
-            resource_type.len(),
-            amount,
-            priority.as_ptr(),
-            priority.len()
-        )
-    };
-    result != 0
-}
-
-// Program entrypoint
-#[no_mangle]
-pub extern "C" fn run() {
-    log("Starting execution of {{name}}");
-    
-    {{#each opcodes}}
-    {{#if (eq this.type "AnchorData")}}
-    // Anchor data to DAG
-    log("Anchoring data: {{this.cid}}");
-    let anchored = anchor_data("{{this.cid}}");
-    if !anchored {
-        log("Failed to anchor data");
-    }
-    {{/if}}
-    
-    {{#if (eq this.type "PerformMeteredAction")}}
-    // Perform a metered action
-    log("Performing action: {{this.action_type}} with amount {{this.amount}}");
-    if check_authorization("{{this.action_type}}", {{this.amount}}) {
-        record_usage("{{this.action_type}}", {{this.amount}});
-        log("Action authorized and recorded");
-    } else {
-        log("Action not authorized");
-    }
-    {{/if}}
-    
-    {{#if (eq this.type "MintToken")}}
-    // Mint tokens
-    log("Minting {{this.amount}} of {{this.token_type}} to {{this.recipient}}");
-    if check_authorization("token_mint", {{this.amount}}) {
-        record_usage("token_mint", {{this.amount}});
-        log("Token minting authorized and recorded");
-    } else {
-        log("Token minting not authorized");
-    }
-    {{/if}}
-    
-    {{#if (eq this.type "SubmitJob")}}
-    // Submit job to mesh network
-    log("Submitting job: {{this.description}} (WASM: {{this.wasm_cid}})");
-    if check_authorization("{{this.resource_type}}", {{this.resource_amount}}) {
-        let job_submitted = submit_job(
-            "{{this.wasm_cid}}",
-            "{{this.description}}",
-            "{{this.resource_type}}",
-            {{this.resource_amount}},
-            "{{this.priority}}"
-        );
-        
-        if job_submitted {
-            record_usage("{{this.resource_type}}", {{this.resource_amount}});
-            log("Job submitted successfully");
-        } else {
-            log("Failed to submit job");
-        }
-    } else {
-        log("Job submission not authorized - insufficient resource quota");
-    }
-    {{/if}}
-    {{/each}}
-    
-    log("Execution completed successfully");
-}
-"#);
-
-    templates
-});
-
 impl CclCompiler {
     /// Create a new CCL compiler
     pub fn new() -> Result<Self> {
-        let mut handlebars = Handlebars::new();
-
-        // Register handlebars templates
-        for (name, template) in DSL_TEMPLATES.iter() {
-            handlebars.register_template_string(name, template)?;
-        }
-
-        // Register handlebars helpers
-        handlebars.register_helper(
-            "eq",
-            Box::new(
-                |h: &HbHelper,
-                 _r: &Handlebars,
-                 _ctx: &Context,
-                 _rc: &mut RenderContext,
-                 out: &mut dyn Output|
-                 -> HelperResult {
-                    let param1 = h.param(0).ok_or_else(|| RenderError::new("Param 0 is missing for eq helper"))?;
-                    let param2 = h.param(1).ok_or_else(|| RenderError::new("Param 1 is missing for eq helper"))?;
-                    if param1.value() == param2.value() {
-                        out.write("true")?;
-                    } else {
-                        out.write("false")?;
-                    }
-                    Ok(())
-                }
-            )
-        );
-
         let temp_dir = TempDir::new()?;
 
         Ok(Self {
-            handlebars,
             temp_dir,
         })
     }
@@ -357,7 +160,7 @@ lto = true
         // Run cargo build to compile to WebAssembly
         let output = Command::new("cargo")
             .current_dir(project_dir)
-            .args(&["build", "--release", "--target=wasm32-unknown-unknown"])
+            .args(["build", "--release", "--target=wasm32-unknown-unknown"])
             .output()?;
 
         if !output.status.success() {

@@ -2,17 +2,19 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use icn_agoranet::app::create_app;
+use icn_agoranet::handlers::Db;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
-use tokio;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 // Import models and handlers from the crate
 // use icn_agoranet::models::*; // No longer needed directly here
-use icn_agoranet::handlers::{Db, InMemoryStore};
+use icn_agoranet::handlers::{InMemoryStore};
 
 #[derive(OpenApi)]
 #[openapi(

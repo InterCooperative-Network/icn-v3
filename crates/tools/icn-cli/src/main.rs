@@ -526,13 +526,13 @@ async fn main() -> Result<()> {
                 proposal,
                 receipt,
             } => {
-                execute_wasm(wasm, proposal.as_deref(), receipt.as_deref()).await?;
+                execute_wasm(&wasm, proposal.as_deref(), receipt.as_deref()).await?;
             }
             RuntimeCommands::Verify { receipt } => {
                 verify_receipt(&receipt).await?;
             }
             RuntimeCommands::ExecuteCcl { input, output } => {
-                execute_ccl(input, output.as_deref()).await?;
+                execute_ccl(&input, output.as_deref()).await?;
             }
         },
     }

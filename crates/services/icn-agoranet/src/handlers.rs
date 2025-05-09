@@ -89,6 +89,24 @@ impl InMemoryStore {
             ],
         }
     }
+
+    #[cfg(test)] // Only compile this for tests
+    pub fn add_proposal_for_test(&mut self, proposal: ProposalDetail) {
+        self.proposals.push(proposal);
+    }
+
+    #[cfg(test)] // Only compile this for tests
+    pub fn add_vote_for_test(&mut self, vote: Vote) {
+        self.votes.push(vote);
+        // Optionally, update proposal vote counts if needed for the test context
+        if let Some(proposal_detail) = self.proposals.iter_mut().find(|p| p.summary.id == vote.proposal_id) {
+            match vote.vote_type {
+                VoteType::Approve => proposal_detail.summary.vote_counts.approve += 1,
+                VoteType::Reject => proposal_detail.summary.vote_counts.reject += 1,
+                VoteType::Abstain => proposal_detail.summary.vote_counts.abstain += 1,
+            }
+        }
+    }
 }
 
 // GET /threads

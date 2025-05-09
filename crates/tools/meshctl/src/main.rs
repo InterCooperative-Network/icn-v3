@@ -1,10 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use icn_economics::ScopedResourceToken;
 // use icn_identity_core::did::Did;
-type Did = String; // DIDs are strings
 use planetary_mesh::{
     Bid, ComputeRequirements, JobManifest, JobPriority, JobStatus, MeshNode, NodeCapability,
     PlanetaryMeshNode,
@@ -15,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 use icn_core_vm::ExecutionMetrics;
-use tokio;
 
 /// Command-line interface for ICN Planetary Mesh
 #[derive(Parser)]
@@ -496,7 +494,7 @@ async fn get_bids(job_id: &str) -> Result<()> {
     );
     println!("{}", "-".repeat(70));
 
-    for (i, bid) in bids.iter().enumerate() {
+    for (_i, bid) in bids.iter().enumerate() {
         let location = bid.node_capacity.location.as_deref().unwrap_or("unknown");
 
         println!(
@@ -733,40 +731,6 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
         fs::write(output_file, &receipt_json)?;
         println!("\nReceipt saved to: {}", output_file.display());
     }
-
-    Ok(())
-}
-
-async fn handle_execute_wasm(node_id: String, wasm_path: PathBuf) -> Result<()> {
-    println!(
-        "Executing WASM module '{}' on node '{}'...",
-        wasm_path.display(),
-        node_id
-    );
-
-    let did_str = format!("did:key:z{}", node_id); 
-    let capabilities = NodeCapability { 
-        node_id: node_id.clone(),
-        node_did: did_str.clone(),
-        available_memory_mb: 1024,
-        available_cpu_cores: 4,
-        available_storage_mb: 10240,
-        cpu_architecture: "wasm32".to_string(),
-        features: vec![],
-        location: None,
-        bandwidth_mbps: 100,
-        supported_job_types: vec!["wasm_execution".to_string()],
-        updated_at: chrono::Utc::now(), // Assuming chrono is available here or this part is okay
-    };
-    let node = PlanetaryMeshNode::new(did_str, capabilities)?;
-
-    let metrics: ExecutionMetrics = node.execute_wasm_file(&wasm_path).await?;
-
-    println!("Execution completed.");
-    println!("  Fuel Used: {}", metrics.fuel_used);
-    println!("  Host Calls: {}", metrics.host_calls);
-    println!("  I/O Bytes: {}", metrics.io_bytes);
-    // Logs removed
 
     Ok(())
 }

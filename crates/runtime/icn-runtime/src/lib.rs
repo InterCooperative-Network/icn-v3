@@ -1,6 +1,5 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use serde::{Deserialize, Serialize};
@@ -245,21 +244,22 @@ impl Runtime {
         })?;
 
         // Extract execution metrics and results
-        let metrics_guard = updated_context.metrics.lock().unwrap();
-        let final_metrics = metrics_guard.clone();
-        drop(metrics_guard);
-
-        let anchored_cids_guard = updated_context.anchored_cids.lock().unwrap();
-        let final_anchored_cids = anchored_cids_guard.clone();
-        drop(anchored_cids_guard);
-
-        let resource_usage_guard = updated_context.resource_usage.lock().unwrap();
-        let final_resource_usage = resource_usage_guard.clone();
-        drop(resource_usage_guard);
-
-        let logs_guard = updated_context.logs.lock().unwrap();
-        let _final_logs = logs_guard.clone();
-        drop(logs_guard);
+        let final_metrics = {
+            let guard = updated_context.metrics.lock().unwrap();
+            guard.clone()
+        };
+        let final_anchored_cids = {
+            let guard = updated_context.anchored_cids.lock().unwrap();
+            guard.clone()
+        };
+        let final_resource_usage = {
+            let guard = updated_context.resource_usage.lock().unwrap();
+            guard.clone()
+        };
+        let _final_logs = {
+            let guard = updated_context.logs.lock().unwrap();
+            guard.clone()
+        };
 
         // Update proposal state
         proposal.state = ProposalState::Executed;
@@ -309,21 +309,22 @@ impl Runtime {
         })?;
 
         // Extract execution metrics and results
-        let metrics_guard = updated_context.metrics.lock().unwrap();
-        let final_metrics = metrics_guard.clone();
-        drop(metrics_guard);
-
-        let anchored_cids_guard = updated_context.anchored_cids.lock().unwrap();
-        let final_anchored_cids = anchored_cids_guard.clone();
-        drop(anchored_cids_guard);
-
-        let resource_usage_guard = updated_context.resource_usage.lock().unwrap();
-        let final_resource_usage = resource_usage_guard.clone();
-        drop(resource_usage_guard);
-
-        let logs_guard = updated_context.logs.lock().unwrap();
-        let _final_logs = logs_guard.clone();
-        drop(logs_guard);
+        let final_metrics = {
+            let guard = updated_context.metrics.lock().unwrap();
+            guard.clone()
+        };
+        let final_anchored_cids = {
+            let guard = updated_context.anchored_cids.lock().unwrap();
+            guard.clone()
+        };
+        let final_resource_usage = {
+            let guard = updated_context.resource_usage.lock().unwrap();
+            guard.clone()
+        };
+        let _final_logs = {
+            let guard = updated_context.logs.lock().unwrap();
+            guard.clone()
+        };
 
         // Create the execution receipt (without storing it)
         let receipt = ExecutionReceipt {
@@ -449,6 +450,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::Mutex;
+    use anyhow::anyhow;
 
     // A mock storage implementation for testing
     struct MockStorage {

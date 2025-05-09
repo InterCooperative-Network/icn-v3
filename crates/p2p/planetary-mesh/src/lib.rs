@@ -430,30 +430,6 @@ impl PlanetaryMeshNode {
 
         Ok(receipt)
     }
-
-    /// Handle an incoming job execution request (simulated for now)
-    async fn handle_job_execution(&self, job_id: &str) -> Result<JobExecutionReceipt> {
-        let jobs = self.jobs.lock().unwrap();
-        let _job = jobs
-            .get(job_id)
-            .ok_or_else(|| MeshError::JobNotFound(job_id.to_string()))?;
-        // TODO: Actual execution logic using job.manifest.wasm_cid, etc.
-        // For now, return a dummy receipt
-        Ok(JobExecutionReceipt {
-            job_id: job_id.to_string(),
-            executor_node_id: self.node_id.clone(),
-            executor_node_did: self.node_did.to_string(),
-            metrics: ExecutionMetrics::default(),
-            output_data_cid: None,
-            start_time: Utc::now(),
-            end_time: Utc::now(),
-            resource_usage: Vec::new(),
-            receipt_cid: "dummy-receipt-cid".to_string(),
-            verified_by_federation: false,
-            verifier_did: None,
-            verified_at: None,
-        })
-    }
 }
 
 #[async_trait]
@@ -523,7 +499,7 @@ impl MeshNode for PlanetaryMeshNode {
     async fn submit_bid(&self, job_id: &str, bid: Bid) -> Result<()> {
         // Store the bid
         let mut bids = self.bids.lock().unwrap();
-        let job_bids = bids.entry(job_id.to_string()).or_insert_with(Vec::new);
+        let job_bids = bids.entry(job_id.to_string()).or_default();
         job_bids.push(bid);
 
         // In a real implementation, we would publish the bid to the network
