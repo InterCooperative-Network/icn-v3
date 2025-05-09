@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use icn_ccl_parser::{CclDocument, CclParser, Rule};
+    use icn_ccl_parser::{CclParser, Rule};
     use pest::Parser;
     use std::fs;
     use std::path::Path;

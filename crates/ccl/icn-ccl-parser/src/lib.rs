@@ -328,6 +328,7 @@ impl CclDocument {
     }
 }
 
-// Re-export the Rule type for tests
 #[cfg(test)]
-pub use Rule;
+mod tests {
+    // ... existing code ...
+}

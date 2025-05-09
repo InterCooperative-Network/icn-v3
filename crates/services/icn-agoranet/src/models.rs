@@ -78,7 +78,7 @@ pub struct ProposalDetail {
     pub linked_thread_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub enum VoteType {
     Approve,
     Reject,

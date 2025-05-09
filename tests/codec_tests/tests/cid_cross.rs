@@ -1,13 +1,13 @@
-use anyhow::Result;
+// use anyhow::Result; // Removed unused import
 use cid::{Cid, Version};
 use icn_types::dag::DagEventType;
 use icn_types::dag::DagNodeBuilder;
-use libipld::DefaultParams;
-use libipld_core::codec::Codec;
-use libipld_core::ipld::IpldCodec;
+// use libipld::DefaultParams; // Commented out - was from libipld, now using ipld-core
+// use ipld_core::codec::Codec; // Removed, try resolving IpldCodec directly
+use ipld_core::codec::IpldCodec; // Trying qualified path again
 use multihash::{Code, MultihashDigest};
-use serde::{Deserialize, Serialize};
-use multibase;
+// use serde::{Deserialize, Serialize}; // Removed unused import
+// use multibase; // Removed redundant import (clippy::single_component_path_imports)
 
 /// Test that our CID generation matches the expected value from a Go implementation
 #[test]

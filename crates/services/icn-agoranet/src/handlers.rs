@@ -90,17 +90,18 @@ impl InMemoryStore {
         }
     }
 
-    #[cfg(test)] // Only compile this for tests
     pub fn add_proposal_for_test(&mut self, proposal: ProposalDetail) {
         self.proposals.push(proposal);
     }
 
-    #[cfg(test)] // Only compile this for tests
     pub fn add_vote_for_test(&mut self, vote: Vote) {
+        let proposal_id_clone = vote.proposal_id.clone();
+        let vote_type_clone = vote.vote_type;
+
         self.votes.push(vote);
-        // Optionally, update proposal vote counts if needed for the test context
-        if let Some(proposal_detail) = self.proposals.iter_mut().find(|p| p.summary.id == vote.proposal_id) {
-            match vote.vote_type {
+
+        if let Some(proposal_detail) = self.proposals.iter_mut().find(|p| p.summary.id == proposal_id_clone) {
+            match vote_type_clone {
                 VoteType::Approve => proposal_detail.summary.vote_counts.approve += 1,
                 VoteType::Reject => proposal_detail.summary.vote_counts.reject += 1,
                 VoteType::Abstain => proposal_detail.summary.vote_counts.abstain += 1,
@@ -340,7 +341,6 @@ pub async fn cast_vote_handler(
         .write()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
 
-    // Check if voter has already voted *before* getting a mutable borrow on proposal_detail
     if store
         .votes
         .iter()
@@ -352,7 +352,6 @@ pub async fn cast_vote_handler(
         )));
     }
 
-    // Find the proposal mutably
     let proposal_detail = store
         .proposals
         .iter_mut()
@@ -364,20 +363,18 @@ pub async fn cast_vote_handler(
             ))
         })?;
 
-    // Check if proposal is open for voting
     if proposal_detail.summary.status != ProposalStatus::Open {
         return Err(ApiError::BadRequest(
             "Proposal is not open for voting".to_string(),
         ));
     }
     if Utc::now() > proposal_detail.summary.voting_deadline {
-        proposal_detail.summary.status = ProposalStatus::Closed; // Auto-close if deadline passed
+        proposal_detail.summary.status = ProposalStatus::Closed;
         return Err(ApiError::BadRequest(
             "Voting deadline has passed for this proposal".to_string(),
         ));
     }
 
-    // Update vote counts
     match payload.vote_type {
         VoteType::Approve => proposal_detail.summary.vote_counts.approve += 1,
         VoteType::Reject => proposal_detail.summary.vote_counts.reject += 1,
@@ -394,7 +391,6 @@ pub async fn cast_vote_handler(
 
     store.votes.push(vote.clone());
 
-    // The lock on `store` is automatically dropped here when `store` goes out of scope.
     Ok((StatusCode::CREATED, Json(vote)))
 }
 
@@ -418,7 +414,6 @@ pub async fn get_proposal_votes_handler(
         .read()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
 
-    // First, check if the proposal exists
     if !store.proposals.iter().any(|p| p.summary.id == proposal_id) {
         return Err(ApiError::NotFound(format!(
             "Proposal with id {} not found",

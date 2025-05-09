@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
-use icn_core_vm::ExecutionMetrics;
+// use icn_core_vm::ExecutionMetrics;
 
 /// Command-line interface for ICN Planetary Mesh
 #[derive(Parser)]
@@ -494,7 +494,7 @@ async fn get_bids(job_id: &str) -> Result<()> {
     );
     println!("{}", "-".repeat(70));
 
-    for (_i, bid) in bids.iter().enumerate() {
+    for bid in bids.iter() {
         let location = bid.node_capacity.location.as_deref().unwrap_or("unknown");
 
         println!(

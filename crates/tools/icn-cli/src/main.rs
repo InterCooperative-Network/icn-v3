@@ -4,10 +4,8 @@ use colored::Colorize;
 use icn_ccl_compiler::CclCompiler;
 use icn_identity_core::vc::ExecutionReceiptCredential;
 use icn_runtime::{Proposal, ProposalState, QuorumStatus};
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tempfile;
 use uuid::Uuid;
 
 /// Command-line interface for ICN governance
@@ -149,6 +147,7 @@ struct CliRuntimeStorage {
     wasm_modules: std::collections::HashMap<String, Vec<u8>>,
 
     /// Execution receipts stored in memory (CID -> receipt)
+    #[allow(dead_code)] // This is a mock and receipts aren't read in current CLI impl
     receipts: std::collections::HashMap<String, String>,
 }
 
@@ -185,7 +184,7 @@ impl icn_runtime::RuntimeStorage for CliRuntimeStorage {
             .ok_or_else(|| anyhow!("WASM module not found: {}", cid))
     }
 
-    async fn store_receipt(&self, receipt: &icn_runtime::ExecutionReceipt) -> Result<String> {
+    async fn store_receipt(&self, _receipt: &icn_runtime::ExecutionReceipt) -> Result<String> {
         // Generate a CID for the receipt (just a UUID for simplicity)
         let cid = format!("receipt-{}", Uuid::new_v4());
 
@@ -205,12 +204,12 @@ impl icn_runtime::RuntimeStorage for CliRuntimeStorage {
 }
 
 /// Create a new proposal from a CCL file
-async fn create_proposal(ccl_file: &Path, title: &str, output: Option<&Path>) -> Result<()> {
+async fn create_proposal(ccl_file: &Path, _title: &str, output: Option<&Path>) -> Result<()> {
     println!("Creating proposal from CCL file: {}", ccl_file.display());
 
     // Compile the CCL file to WASM
     let compiler = CclCompiler::new()?;
-    let wasm_bytes = compiler.compile_file(ccl_file)?;
+    let _wasm_bytes = compiler.compile_file(ccl_file)?;
 
     // Generate CIDs for the CCL and WASM (just UUIDs for simplicity)
     let ccl_cid = format!("ccl-{}", Uuid::new_v4());
@@ -351,7 +350,7 @@ async fn compile_to_wasm(input: &Path, output: &Path) -> Result<()> {
 /// Execute a WASM file directly
 async fn execute_wasm(
     wasm_path: &Path,
-    proposal_path: Option<&Path>,
+    _proposal_path: Option<&Path>,
     receipt_path: Option<&Path>,
 ) -> Result<String> {
     println!("Executing WASM file: {}", wasm_path.display());

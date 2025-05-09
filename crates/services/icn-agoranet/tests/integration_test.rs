@@ -50,25 +50,6 @@ use tokio::net::TcpListener;
 use tower::ServiceExt; // for `oneshot`
 
 use icn_agoranet::app::create_app;
-use icn_agoranet::handlers::Db;
-use icn_agoranet::models::{
-    GetProposalsQuery,
-    GetThreadsQuery,
-    Message,
-    NewProposalRequest,
-    NewThreadRequest,
-    NewVoteRequest,
-    ProposalDetail,
-    ProposalStatus,
-    ProposalSummary,
-    ProposalVotesResponse,
-    ThreadDetail,
-    ThreadSummary,
-    Timestamp,
-    Vote,
-    VoteCounts,
-    VoteType,
-};
 
 const BASE_URL: &str = "http://127.0.0.1:8787";
 
@@ -110,6 +91,7 @@ async fn create_proposal(
         full_text: full_text.to_string(),
         scope: scope.to_string(),
         linked_thread_id: thread_id,
+        voting_deadline: Some(Utc::now() + Duration::days(7)),
     };
     // The API actually returns ProposalSummary, but we fetch ProposalDetail immediately
     let summary = client
@@ -215,7 +197,7 @@ async fn test_create_proposal_handler() {
             title: "Test Proposal from Integration Test".to_string(),
             full_text: "This is a test proposal.".to_string(),
             scope: "test.scope".to_string(),
-            linked_thread_id: Some(thread_id.clone()), // Corrected field name
+            linked_thread_id: Some(thread_id.clone()),
             voting_deadline: Some(Utc::now() + Duration::days(7)),
         })
         .send()

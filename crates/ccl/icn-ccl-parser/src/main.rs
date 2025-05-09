@@ -1,7 +1,5 @@
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use icn_ccl_parser::{CclDocument, CclError, CclParserResult, Rule};
-use std::fs;
-use std::path::PathBuf;
+use icn_ccl_parser::{CclDocument, CclError, CclParserResult};
 
 fn main() -> CclParserResult<()> {
     let matches = Command::new("ccl-parser")
@@ -35,17 +33,21 @@ fn main() -> CclParserResult<()> {
         .get_matches();
 
     match matches.subcommand() {
-        Some(("parse", sub_matches)) => parse_ccl(sub_matches)?,
-        Some(("validate", sub_matches)) => validate_ccl(sub_matches)?,
-        Some(("compile", sub_matches)) => compile_ccl_to_wasm(sub_matches)?,
+        Some(("parse", sub_matches)) => parse_ccl_command(sub_matches)?,
+        Some(("validate", sub_matches)) => validate_ccl_command(sub_matches)?,
+        Some(("compile", sub_matches)) => compile_ccl_to_wasm_command(sub_matches)?,
         _ => unreachable!("Exhausted list of subcommands and subcommand_required prevents `None`"),
     }
     Ok(())
 }
 
-fn parse_ccl(matches: &ArgMatches) -> CclParserResult<()> {
-    let input_path = matches.get_one::<String>("input").ok_or_else(|| CclError::Other("Missing input file path".to_string()))?;
-    let document = CclDocument::from_file(input_path).map_err(|e| CclError::Other(format!("Failed to parse CCL: {}", e)))?;
+fn parse_ccl_command(matches: &ArgMatches) -> CclParserResult<()> {
+    let input_path_str = matches.get_one::<String>("input")
+        .ok_or_else(|| CclError::InvalidInput("Missing input file path".to_string()))?;
+    let file_content = std::fs::read_to_string(input_path_str)
+        .map_err(CclError::IoError)?;
+    let document = CclDocument::parse(&file_content)
+        .map_err(|e| CclError::ParseError(format!("Failed to parse CCL: {}", e)))?;
 
     println!("Successfully parsed CCL document:");
     println!("Title: {}", document.title);
@@ -64,14 +66,18 @@ fn parse_ccl(matches: &ArgMatches) -> CclParserResult<()> {
     Ok(())
 }
 
-fn validate_ccl(matches: &ArgMatches) -> CclParserResult<()> {
-    let input_path = matches.get_one::<String>("input").ok_or_else(|| CclError::Other("Missing input file path".to_string()))?;
-    CclDocument::from_file(input_path).map_err(|e| CclError::Other(format!("CCL validation failed: {}", e)))?;
+fn validate_ccl_command(matches: &ArgMatches) -> CclParserResult<()> {
+    let input_path_str = matches.get_one::<String>("input")
+        .ok_or_else(|| CclError::InvalidInput("Missing input file path".to_string()))?;
+    let file_content = std::fs::read_to_string(input_path_str)
+        .map_err(CclError::IoError)?;
+    CclDocument::parse(&file_content)
+        .map_err(|e| CclError::ValidationError(format!("CCL validation failed: {}", e)))?;
     println!("CCL file is valid (basic check).");
     Ok(())
 }
 
-fn compile_ccl_to_wasm(_matches: &ArgMatches) -> CclParserResult<()> {
+fn compile_ccl_to_wasm_command(_matches: &ArgMatches) -> CclParserResult<()> {
     println!("Compilation to WASM is handled by icn-ccl-compiler. This utility (ccl-parser) might be deprecated or used for parsing checks only.");
     Ok(())
 }
