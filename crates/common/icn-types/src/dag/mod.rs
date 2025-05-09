@@ -1,14 +1,17 @@
-use serde::{Serialize, Deserialize};
+use crate::error::DagError;
 use cid::multihash::{Code, MultihashDigest};
 use cid::Cid;
-use crate::error::DagError;
+use serde::{Deserialize, Serialize};
 
 // Using a string representation of Cid for serialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(crate = "serde")]
 pub struct DagNode {
     pub content: String,
-    #[serde(serialize_with = "serialize_cid_option", deserialize_with = "deserialize_cid_option")]
+    #[serde(
+        serialize_with = "serialize_cid_option",
+        deserialize_with = "deserialize_cid_option"
+    )]
     pub parent: Option<Cid>,
 }
 
@@ -41,9 +44,18 @@ where
 
 impl DagNode {
     pub fn cid(&self) -> Result<Cid, DagError> {
-        let encoded = serde_cbor::to_vec(&self).map_err(|e| DagError::Serialization(e.to_string()))?;
+        let encoded =
+            serde_cbor::to_vec(&self).map_err(|e| DagError::Serialization(e.to_string()))?;
         let hash = Code::Sha2_256.digest(&encoded);
         Ok(Cid::new_v1(0x71, hash))
+    }
+
+    /// Creates a builder initialized with values from this DagNode
+    pub fn builder(&self) -> DagNodeBuilder {
+        DagNodeBuilder {
+            content: Some(self.content.clone()),
+            parent: self.parent.clone(),
+        }
     }
 }
 
@@ -81,7 +93,9 @@ impl DagNodeBuilder {
                 content,
                 parent: self.parent,
             }),
-            None => Err(DagError::InvalidStructure("Content is required".to_string())),
+            None => Err(DagError::InvalidStructure(
+                "Content is required".to_string(),
+            )),
         }
     }
 }
