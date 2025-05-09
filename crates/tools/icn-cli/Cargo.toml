@@ -1,0 +1,23 @@
+[package]
+name = "icn-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command line tool for ICN governance"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.75"
+thiserror = "1.0.50"
+serde = { version = "1.0.190", features = ["derive"] }
+serde_json = "1.0.108"
+log = "0.4.20"
+clap = { version = "4.4.7", features = ["derive"] }
+tokio = { version = "1.33.0", features = ["full"] }
+icn-types = { path = "../../common/icn-types" }
+icn-identity-core = { path = "../../common/icn-identity-core" }
+icn-ccl-compiler = { path = "../../ccl/icn-ccl-compiler" }
+icn-runtime = { path = "../../runtime/icn-runtime" }
+chrono = "0.4.31"
+colored = "2.0.4"
+uuid = { version = "1.5.0", features = ["v4"] }
+tempfile = "3.8.1" 

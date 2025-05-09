@@ -1,0 +1,16 @@
+[package]
+name = "icn-core-vm"
+version = "0.1.0"
+edition = "2021"
+description = "Cooperative VM (CoVM) for executing WASM governance code"
+license = "Apache-2.0"
+
+[dependencies]
+wasmtime = "12.0.2"
+anyhow = "1.0.75"
+thiserror = "1.0.50"
+serde = { version = "1.0.190", features = ["derive"] }
+serde_json = "1.0.108"
+log = "0.4.20"
+icn-types = { path = "../../common/icn-types" }
+icn-identity-core = { path = "../../common/icn-identity-core" } 

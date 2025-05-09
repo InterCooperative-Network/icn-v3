@@ -1,0 +1,18 @@
+[package]
+name = "icn-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime execution engine for ICN governance"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.75"
+thiserror = "1.0.50"
+serde = { version = "1.0.190", features = ["derive"] }
+serde_json = "1.0.108"
+log = "0.4.20"
+icn-types = { path = "../../common/icn-types" }
+icn-identity-core = { path = "../../common/icn-identity-core" }
+icn-core-vm = { path = "../icn-core-vm" }
+tokio = { version = "1.33.0", features = ["full"] }
+async-trait = "0.1.74" 
