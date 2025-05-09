@@ -1,5 +1,10 @@
 [workspace]
 members = [
-    "crates/common/icn-types"
+    "crates/common/icn-types",
+    "crates/common/icn-crypto",
+    "crates/common/icn-identity-core"
 ]
 resolver = "2"
+
+[workspace.metadata.dev-dependencies]
+cargo-deny = { version = "^0.14", default-features = false }

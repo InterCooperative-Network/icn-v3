@@ -8,6 +8,14 @@ This directory contains the formal RFC documents that govern the InterCooperativ
 |--------|-------|--------|------|
 | [RFC-0001](0001-project-structure.md) | Project Structure | Accepted | 2025-05-09 |
 
+## Related ADRs
+
+Architecture Decision Records provide more detailed technical decisions:
+
+| Number | Title | Status | Date |
+|--------|-------|--------|------|
+| [ADR-0002](../docs/architecture/adr/ADR-0002-dag-codec.md) | DAG Codec & CID Verification Strategy | Accepted | 2025-05-10 |
+
 ## RFC Process
 
 1. **Draft** - Create a new RFC document using the template and submit it as a pull request.

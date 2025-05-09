@@ -1,0 +1,85 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use ed25519_dalek::{Keypair, PublicKey, Signature, Signer, Verifier};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Error types for JWS operations
+#[derive(Error, Debug)]
+pub enum JwsError {
+    #[error("Failed to serialize header or payload: {0}")]
+    Serialization(#[from] serde_json::Error),
+    
+    #[error("Base64 encoding error: {0}")]
+    Base64(#[from] base64::DecodeError),
+    
+    #[error("Invalid JWS format")]
+    InvalidFormat,
+    
+    #[error("Invalid signature")]
+    InvalidSignature,
+}
+
+/// Result type for JWS operations
+pub type Result<T> = std::result::Result<T, JwsError>;
+
+/// JWS Header structure
+#[derive(Serialize, Deserialize)]
+struct JwsHeader {
+    alg: String,
+    typ: String,
+}
+
+/// Sign data with a keypair and return a detached JWS
+///
+/// Returns a string in the format: `<base64url(header)>..<base64url(signature)>`
+/// The payload is not included in the detached JWS.
+pub fn sign_detached_jws(payload: &[u8], keypair: &Keypair) -> Result<String> {
+    // Create JWS header
+    let header = JwsHeader {
+        alg: "EdDSA".to_string(),
+        typ: "JWT".to_string(),
+    };
+    
+    // Serialize and encode header
+    let header_json = serde_json::to_vec(&header)?;
+    let header_b64 = URL_SAFE_NO_PAD.encode(header_json);
+    
+    // Create signing input (header + "." + payload)
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
+    let signing_input = format!("{}.{}", header_b64, payload_b64);
+    
+    // Sign
+    let signature = keypair.sign(signing_input.as_bytes());
+    let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    
+    // Construct detached JWS (header..signature)
+    Ok(format!("{}..{}", header_b64, signature_b64))
+}
+
+/// Verify a detached JWS against the original payload
+///
+/// Takes a detached JWS in the format: `<base64url(header)>..<base64url(signature)>`
+/// and the original payload to verify.
+pub fn verify_detached_jws(payload: &[u8], detached_jws: &str, public_key: &PublicKey) -> Result<()> {
+    // Split detached JWS into components
+    let parts: Vec<&str> = detached_jws.split('.').collect();
+    if parts.len() != 3 || !parts[1].is_empty() {
+        return Err(JwsError::InvalidFormat);
+    }
+    
+    let header_b64 = parts[0];
+    let signature_b64 = parts[2];
+    
+    // Base64 decode the signature
+    let signature_bytes = URL_SAFE_NO_PAD.decode(signature_b64)?;
+    let signature = Signature::from_bytes(&signature_bytes)
+        .map_err(|_| JwsError::InvalidSignature)?;
+    
+    // Reconstitute the signing input
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
+    let signing_input = format!("{}.{}", header_b64, payload_b64);
+    
+    // Verify the signature
+    public_key.verify(signing_input.as_bytes(), &signature)
+        .map_err(|_| JwsError::InvalidSignature)
+} 
