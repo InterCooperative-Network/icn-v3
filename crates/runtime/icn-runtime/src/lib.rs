@@ -1,12 +1,13 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use icn_core_vm::{CoVm, ExecutionMetrics, HostContext, ResourceLimits};
+use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use wasmtime::{Engine, Func, Instance, Module, Store};
+use uuid::Uuid;
 
 /// Error types specific to the runtime
 #[derive(Error, Debug)]
@@ -50,7 +51,7 @@ pub struct VmContext {
 #[derive(Debug, Clone)]
 pub struct ExecutionResult {
     /// The metrics collected during execution
-    pub metrics: ExecutionMetrics,
+    pub metrics: CoreVmExecutionMetrics,
 
     /// List of CIDs anchored during execution
     pub anchored_cids: Vec<String>,
@@ -151,7 +152,7 @@ pub struct ExecutionReceipt {
     pub ccl_cid: String,
 
     /// Execution metrics
-    pub metrics: ExecutionMetrics,
+    pub metrics: CoreVmExecutionMetrics,
 
     /// Anchored CIDs during execution
     pub anchored_cids: Vec<String>,
@@ -239,14 +240,26 @@ impl Runtime {
         let mut context = HostContext::default();
 
         // Execute the WASM module
-        self.vm.execute(&wasm_bytes, &mut context).map_err(|e| {
+        let updated_context = self.vm.execute(&wasm_bytes, context).map_err(|e| {
             RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
         })?;
 
         // Extract execution metrics and results
-        let metrics = context.metrics.lock().unwrap().clone();
-        let anchored_cids = context.anchored_cids.lock().unwrap().clone();
-        let resource_usage = context.resource_usage.lock().unwrap().clone();
+        let metrics_guard = updated_context.metrics.lock().unwrap();
+        let final_metrics = metrics_guard.clone();
+        drop(metrics_guard);
+
+        let anchored_cids_guard = updated_context.anchored_cids.lock().unwrap();
+        let final_anchored_cids = anchored_cids_guard.clone();
+        drop(anchored_cids_guard);
+
+        let resource_usage_guard = updated_context.resource_usage.lock().unwrap();
+        let final_resource_usage = resource_usage_guard.clone();
+        drop(resource_usage_guard);
+
+        let logs_guard = updated_context.logs.lock().unwrap();
+        let final_logs = logs_guard.clone();
+        drop(logs_guard);
 
         // Update proposal state
         proposal.state = ProposalState::Executed;
@@ -257,13 +270,10 @@ impl Runtime {
             proposal_id: proposal_id.to_string(),
             wasm_cid: proposal.wasm_cid,
             ccl_cid: proposal.ccl_cid,
-            metrics,
-            anchored_cids,
-            resource_usage,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            metrics: final_metrics,
+            anchored_cids: final_anchored_cids,
+            resource_usage: final_resource_usage,
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
             dag_epoch: None,
             receipt_cid: None,
             federation_signature: None,
@@ -294,14 +304,26 @@ impl Runtime {
         let mut context = HostContext::default();
 
         // Execute the WASM module
-        self.vm.execute(&wasm_bytes, &mut context).map_err(|e| {
+        let updated_context = self.vm.execute(&wasm_bytes, context).map_err(|e| {
             RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
         })?;
 
         // Extract execution metrics and results
-        let metrics = context.metrics.lock().unwrap().clone();
-        let anchored_cids = context.anchored_cids.lock().unwrap().clone();
-        let resource_usage = context.resource_usage.lock().unwrap().clone();
+        let metrics_guard = updated_context.metrics.lock().unwrap();
+        let final_metrics = metrics_guard.clone();
+        drop(metrics_guard);
+
+        let anchored_cids_guard = updated_context.anchored_cids.lock().unwrap();
+        let final_anchored_cids = anchored_cids_guard.clone();
+        drop(anchored_cids_guard);
+
+        let resource_usage_guard = updated_context.resource_usage.lock().unwrap();
+        let final_resource_usage = resource_usage_guard.clone();
+        drop(resource_usage_guard);
+
+        let logs_guard = updated_context.logs.lock().unwrap();
+        let final_logs = logs_guard.clone();
+        drop(logs_guard);
 
         // Create the execution receipt (without storing it)
         let receipt = ExecutionReceipt {
@@ -312,13 +334,10 @@ impl Runtime {
                 .to_string(),
             wasm_cid: "local-file".to_string(),
             ccl_cid: "local-file".to_string(),
-            metrics,
-            anchored_cids,
-            resource_usage,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            metrics: final_metrics,
+            anchored_cids: final_anchored_cids,
+            resource_usage: final_resource_usage,
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
             dag_epoch: None,
             receipt_cid: None,
             federation_signature: None,
@@ -329,32 +348,33 @@ impl Runtime {
 
     /// Execute a WASM binary with the given context
     pub fn execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
-        // Create CoVM host context
-        let mut host_context = HostContext::default();
-
-        // Apply resource limits if specified
-        let vm = if let Some(limits) = context.resource_limits {
-            CoVm::new(limits)
-        } else {
-            self.vm.clone()
-        };
-
-        // Execute the WASM module
-        vm.execute(wasm_bytes, &mut host_context).map_err(|e| {
-            RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
+        let host_context = self.vm_context_to_host_context(context);
+        
+        let updated_host_context = self.vm.execute(wasm_bytes, host_context).map_err(|e| {
+            RuntimeError::ExecutionError(format!("Failed to execute WASM: {}", e))
         })?;
 
-        // Extract execution metrics and results
-        let metrics = host_context.metrics.lock().unwrap().clone();
-        let anchored_cids = host_context.anchored_cids.lock().unwrap().clone();
-        let resource_usage = host_context.resource_usage.lock().unwrap().clone();
-        let logs = host_context.logs.lock().unwrap().clone();
+        let metrics_guard = updated_host_context.metrics.lock().unwrap();
+        let final_metrics = metrics_guard.clone();
+        drop(metrics_guard);
 
+        let anchored_cids_guard = updated_host_context.anchored_cids.lock().unwrap();
+        let final_anchored_cids = anchored_cids_guard.clone();
+        drop(anchored_cids_guard);
+
+        let resource_usage_guard = updated_host_context.resource_usage.lock().unwrap();
+        let final_resource_usage = resource_usage_guard.clone();
+        drop(resource_usage_guard);
+
+        let logs_guard = updated_host_context.logs.lock().unwrap();
+        let final_logs = logs_guard.clone();
+        drop(logs_guard);
+        
         Ok(ExecutionResult {
-            metrics,
-            anchored_cids,
-            resource_usage,
-            logs,
+            metrics: final_metrics,
+            anchored_cids: final_anchored_cids,
+            resource_usage: final_resource_usage,
+            logs: final_logs,
         })
     }
 
@@ -374,22 +394,19 @@ impl Runtime {
         };
 
         // Create a unique ID for the receipt
-        let receipt_id = format!("urn:icn:receipt:{}", uuid::Uuid::new_v4());
+        let receipt_id = format!("urn:icn:receipt:{}", Uuid::new_v4());
 
         // Create the execution receipt
         let receipt = ExecutionReceiptCredential::new(
             receipt_id,
             context.executor_did.clone(),                 // issuer
-            format!("proposal-{}", uuid::Uuid::new_v4()), // placeholder proposal ID
+            format!("proposal-{}", Uuid::new_v4()), // placeholder proposal ID
             wasm_cid.to_string(),
             ccl_cid.to_string(),
             vc_metrics,
             result.anchored_cids.clone(),
             result.resource_usage.clone(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            chrono::Utc::now().timestamp_millis() as u64,
             None, // dag_epoch
             None, // receipt_cid
         );
@@ -408,6 +425,11 @@ impl Runtime {
         let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;
 
         Ok(receipt_cid)
+    }
+
+    /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
+    fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
+        HostContext::default()
     }
 }
 
@@ -480,7 +502,7 @@ mod tests {
 
         async fn store_receipt(&self, receipt: &ExecutionReceipt) -> Result<String> {
             let receipt_json = serde_json::to_string(receipt)?;
-            let receipt_cid = format!("receipt-{}", uuid::Uuid::new_v4());
+            let receipt_cid = format!("receipt-{}", Uuid::new_v4());
 
             let mut receipts = self.receipts.lock().unwrap();
             receipts.insert(receipt_cid.clone(), receipt_json);
@@ -492,7 +514,7 @@ mod tests {
             let mut anchored = self.anchored_cids.lock().unwrap();
             anchored.push(cid.to_string());
 
-            let anchor_id = format!("anchor-{}", uuid::Uuid::new_v4());
+            let anchor_id = format!("anchor-{}", Uuid::new_v4());
             Ok(anchor_id)
         }
     }

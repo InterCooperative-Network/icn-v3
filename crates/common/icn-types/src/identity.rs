@@ -164,7 +164,11 @@ impl VerifiableCredential {
     }
 
     /// Create a signed credential from an unsigned one
-    pub fn with_signature(mut self, keypair: &Keypair, verification_method: &str) -> std::result::Result<Self, VcError> {
+    pub fn with_signature(
+        mut self,
+        keypair: &Keypair,
+        verification_method: &str,
+    ) -> std::result::Result<Self, VcError> {
         // Generate the signature
         let jws = self.sign(keypair)?;
 

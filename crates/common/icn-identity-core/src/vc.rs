@@ -1,7 +1,7 @@
 use ed25519_dalek::{Keypair, PublicKey};
 // Removed: use icn_crypto::{sign_detached_jws, verify_detached_jws};
-use icn_types::identity::{CredentialProof, VerifiableCredential};
 use icn_types::error::VcError as IcnVcError; // Import and alias VcError from icn-types
+use icn_types::identity::{CredentialProof, VerifiableCredential};
 use serde::{Deserialize, Serialize};
 // use serde_json::to_value; // Removed Value
 // use thiserror::Error; // Keep this commented/removed for now
@@ -96,8 +96,11 @@ pub struct ResourceUsage {
     pub amount: u64,
 }
 
+#[allow(dead_code)] // Added to suppress warnings for now
 impl ExecutionReceiptCredential {
     /// Create a new ExecutionReceipt credential
+    #[allow(clippy::too_many_arguments)] // Added to suppress warning for now
+    #[allow(dead_code)] // Added for the 'new' method itself, though impl is also allowed.
     pub fn new(
         id: String,
         issuer: String,

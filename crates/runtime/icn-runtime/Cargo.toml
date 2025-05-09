@@ -15,4 +15,6 @@ icn-types = { path = "../../common/icn-types" }
 icn-identity-core = { path = "../../common/icn-identity-core" }
 icn-core-vm = { path = "../icn-core-vm" }
 tokio = { version = "1.33.0", features = ["full"] }
-async-trait = "0.1.74" 
+async-trait = "0.1.74"
+wasmtime = "18.0.0"
+uuid = { version = "1.0", features = ["v4", "serde"] } 

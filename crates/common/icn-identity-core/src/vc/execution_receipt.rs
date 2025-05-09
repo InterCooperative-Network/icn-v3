@@ -1,9 +1,9 @@
 // Removed: use crate::did::Did;
-use crate::DidError;
 use crate::vc::Result;
-use icn_types::error::VcError as IcnVcError;
+use crate::DidError;
 use ed25519_dalek::{Keypair, PublicKey};
 use icn_crypto::{sign_detached_jws, verify_detached_jws};
+use icn_types::error::VcError as IcnVcError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -11,6 +11,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum ExecutionReceiptError {
     #[error("Verification failed: {0}")]
+    #[allow(dead_code)]
     VerificationFailed(String),
 
     #[error("Invalid scope: {0}")]
@@ -97,6 +98,7 @@ pub struct ExecutionReceipt {
     pub signature: String,
 }
 
+#[allow(dead_code)]
 impl ExecutionReceipt {
     /// Create a new unsigned ExecutionReceipt
     pub fn new(
@@ -129,7 +131,7 @@ impl ExecutionReceipt {
         };
 
         // Serialize to JSON in a canonical form
-        let json = serde_json::to_vec(&unsigned).map_err(|e| IcnVcError::Serialization(e))?;
+        let json = serde_json::to_vec(&unsigned).map_err(IcnVcError::Serialization)?;
 
         Ok(json)
     }
@@ -153,7 +155,7 @@ impl ExecutionReceipt {
 
         // Verify the signature
         verify_detached_jws(&canonical, &self.signature, public_key)
-            .map_err(|e| IcnVcError::Signing(e))?;
+            .map_err(IcnVcError::Signing)?;
 
         Ok(())
     }

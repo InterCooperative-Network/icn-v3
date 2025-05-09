@@ -1,27 +1,24 @@
-use anyhow::Result;
+// use anyhow::Result; // Remove unused import
 use pest::Parser;
 use pest_derive::Parser;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Error types for CCL parsing
+/// Custom error types for CCL parsing.
 #[derive(Error, Debug)]
 pub enum CclError {
-    #[error("Failed to parse CCL: {0}")]
+    #[error("Parsing error: {0}")]
     ParseError(String),
-
-    #[error("Failed to convert CCL to DSL: {0}")]
-    DslConversionError(String),
-
-    #[error("Invalid CCL structure: {0}")]
-    InvalidStructure(String),
-
-    #[error("I/O error: {0}")]
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+    #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
-/// Result type for CCL operations
-pub type Result<T> = std::result::Result<T, CclError>;
+// Aliased to avoid conflict with anyhow::Result if that were to be used elsewhere.
+pub type CclParserResult<T> = std::result::Result<T, CclError>;
 
 /// Error types specific to the CCL parser
 #[derive(Error, Debug)]
@@ -164,7 +161,7 @@ pub struct CclTransparency {
 }
 
 /// Parse a CCL document
-pub fn parse_ccl(input: &str) -> Result<CclDocument> {
+pub fn parse_ccl(_input: &str) -> CclParserResult<CclDocument> {
     // This is a stub implementation that returns a fixed document
     // In a real implementation, we would use nom or pest to parse the CCL
 
@@ -295,44 +292,38 @@ pub struct CclElectionRole {
 
 impl CclDocument {
     /// Parse a CCL string into a document
-    pub fn parse(input: &str) -> Result<Self> {
-        // Parse using Pest
-        let parsed = CclParser::parse(Rule::ccl, input)
-            .map_err(|e| CclError::ParseError(e.to_string()))?
-            .next()
-            .unwrap();
+    pub fn parse(input: &str) -> CclParserResult<Self> {
+        let _parsed = CclParser::parse(Rule::ccl, input)
+            .map_err(|e| CclError::ParseError(e.to_string()))?;
 
-        // Convert the parsed result to a CclDocument
-        // For now, just return a placeholder
+        // TODO: Actual parsing logic to populate CclDocument fields from `_parsed` (pest Pairs)
+        // For now, return a minimal CclDocument to satisfy compilation
         Ok(CclDocument {
-            statements: Vec::new(),
+            title: "Parsed CCL Document (Stub)".to_string(), 
+            description: "Description (Stub)".to_string(),
+            author: "Author (Stub)".to_string(),
+            created: "Created (Stub)".to_string(),
+            version: "Version (Stub)".to_string(),
+            budget: None,
+            execution: None,
+            accountability: None,
         })
     }
 
     /// Convert the CCL document to a DSL representation
-    pub fn to_dsl(&self) -> Result<String> {
-        // Convert the document to DSL
-        // For now, just return a placeholder
-        Ok("// Generated DSL code\n".to_string())
+    pub fn to_dsl(&self) -> CclParserResult<String> {
+        // TODO: Implement actual DSL conversion based on CclDocument fields
+        // For now, return a placeholder
+        Ok("DSL representation (Stub)".to_string())
     }
 
     /// Verify that the CCL document is valid
-    pub fn verify(&self) -> Result<()> {
+    pub fn verify(&self) -> CclParserResult<()> {
         // Check for required elements
-
-        // Check for valid actions
-        for statement in &self.statements {
-            if let CclStatement::Action { actions, .. } = statement {
-                for action in actions {
-                    match action {
-                        CclAction::MintTokens { .. } => {}
-                        CclAction::AnchorData { .. } => {}
-                        CclAction::PerformAction { .. } => {}
-                    }
-                }
-            }
+        if self.title.is_empty() {
+            return Err(CclError::ValidationError("Missing title".to_string()));
         }
-
+        // TODO: Add more verification rules
         Ok(())
     }
 }
