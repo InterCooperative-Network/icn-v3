@@ -5,6 +5,10 @@ use serde_json::{json, to_value, Value};
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
 
+// Include the execution receipt module
+pub mod execution_receipt;
+pub use execution_receipt::{ExecutionReceipt, Scope, ExecutionReceiptError};
+
 /// Error types for Verifiable Credential operations
 #[derive(Error, Debug)]
 pub enum VcError {

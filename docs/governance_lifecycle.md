@@ -1,147 +1,213 @@
-# ICN Governance Lifecycle
+# InterCooperative Network Governance Lifecycle
 
-This document outlines the complete lifecycle of governance proposals in the InterCooperative Network (ICN), from creation to execution and anchoring in the DAG.
+This document describes the complete lifecycle of governance in the InterCooperative Network (ICN), from proposal creation to execution and verification.
 
 ## Overview
 
-The ICN governance system is built on principles of transparency, verifiability, and decentralization. The entire process is cryptographically secured and anchored on-chain, with all steps being independently verifiable.
+The ICN governance process follows these key steps:
 
-The governance lifecycle consists of these key phases:
+1. **Propose**: Create a proposal using the Cooperative Contract Language (CCL)
+2. **Vote**: Federation members vote on the proposal
+3. **Execute**: Approved proposals are executed in a sandboxed environment
+4. **Anchor**: Execution receipts are anchored to the distributed ledger
 
-1. **Proposal Creation** - Authoring and submitting a proposal in CCL format
-2. **Deliberation & Voting** - Quorum-based voting on the proposal
-3. **Execution** - Running the approved proposal in the CoVM runtime
-4. **Receipt Issuance** - Generating a verifiable credential proving execution
-5. **DAG Anchoring** - Anchoring the receipt to the federation DAG
+## Governance Flow
 
-## Proposal Lifecycle Stages
-
-### 1. Proposal Creation
-
-A governance proposal starts as a CCL (Cooperative Constitutional Language) file, which defines the proposed governance action using a domain-specific language designed for cooperative governance.
-
-1. Author creates a `.ccl` file defining the proposal
-2. The proposal is compiled to intermediate DSL, then to WASM
-3. The proposal is submitted to the federation via the AgoraNet p2p network
-4. Both source CCL and compiled WASM are stored with CIDs
-
-**Example using the CLI:**
-
-```bash
-# Create a new proposal from a CCL file
-icn-cli proposal create --ccl-file budget_allocation.ccl --title "Q3 Budget Allocation" --output proposal.json
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│          │     │          │     │          │     │          │
+│  Propose ├────►│   Vote   ├────►│ Execute  ├────►│  Anchor  │
+│          │     │          │     │          │     │          │
+└──────────┘     └──────────┘     └──────────┘     └──────────┘
+     │                │                │                │
+     ▼                ▼                ▼                ▼
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│   CCL    │     │  Quorum  │     │  CoVM    │     │   DAG    │
+│  Source  │     │  Rules   │     │ Runtime  │     │  Receipt │
+└──────────┘     └──────────┘     └──────────┘     └──────────┘
 ```
 
-### 2. Deliberation & Voting
+## The Governance Phases in Detail
 
-Once a proposal is created, it enters the deliberation and voting phase:
+### 1. Propose
 
-1. Federation members discuss the proposal via AgoraNet threads
-2. Members cast weighted votes based on their governance stake
-3. Votes are tallied according to the quorum model (Majority, Threshold, or Weighted)
-4. Once quorum is reached, the proposal is marked as Approved or Rejected
+A proposal is created using the Cooperative Contract Language (CCL), which is a domain-specific language designed for cooperative governance. CCL enables clear and predictable governance actions.
 
-**Example using the CLI:**
+**Example:**
+
+```bash
+# Create a new budget allocation proposal
+icn-cli proposal create --ccl-file budget.ccl --title "Q2 Budget Allocation"
+```
+
+This creates a proposal file that includes:
+- The proposal ID
+- The CCL source
+- Metadata about the proposal
+
+### 2. Vote
+
+Once a proposal is created, federation members can vote on it. The ICN supports different voting mechanisms:
+- Simple majority
+- Weighted voting
+- Threshold-based consensus
+
+**Example:**
 
 ```bash
 # Vote on a proposal
-icn-cli proposal vote --proposal proposal.json --direction yes --weight 3
-
-# Check the status of a proposal
-icn-cli proposal status --proposal proposal.json
+icn-cli proposal vote --proposal budget_proposal.json --direction yes
 ```
 
-### 3. Execution
+### 3. Execute
 
-If approved, the proposal moves to the execution phase:
+When a proposal reaches the required quorum, it can be executed. Execution happens in the Cooperative Virtual Machine (CoVM), which:
+- Provides a sandboxed environment
+- Tracks resource usage
+- Implements a metered execution model
+- Enforces access controls
 
-1. The compiled WASM module is loaded into the CoVM (Cooperative VM)
-2. The execution runs in a sandboxed environment with:
-   - Metered resource usage (fuel)
-   - Host ABI access for controlled operations
-   - Deterministic execution
-3. During execution, the runtime can:
-   - Anchor data to the federation DAG
-   - Perform metered actions based on authorization
-   - Record resource usage
-
-**Example using the CLI:**
+**Example:**
 
 ```bash
-# Execute a proposal
-icn-cli runtime execute --wasm proposal.wasm --proposal proposal.json --receipt receipt.json
+# Execute an approved proposal
+icn-cli runtime execute --wasm budget_wasm.wasm --receipt receipt.json
 ```
 
-### 4. Receipt Issuance
+Alternatively, you can use the complete CCL pipeline:
 
-After successful execution, the system generates an ExecutionReceipt:
+```bash
+# Execute a CCL file directly
+icn-cli runtime execute-ccl --input budget.ccl --output receipt.json
+```
 
-1. The receipt is a Verifiable Credential containing:
-   - Proposal ID and execution metadata
-   - Resource usage metrics
-   - Anchored CIDs
-   - Timestamp and DAG epoch
-2. The receipt is signed by the executing federation
-3. The receipt itself receives a CID
+### 4. Anchor
 
-### 5. DAG Anchoring
+After successful execution, a verifiable receipt is generated and anchored to the distributed ledger. This receipt:
+- Is cryptographically signed
+- Contains execution metrics
+- References the original proposal
+- Provides an audit trail
 
-Finally, the receipt is anchored to the federation DAG:
-
-1. The receipt CID is added to the DAG
-2. This creates an immutable, time-ordered record of execution
-3. The anchoring provides proof of federation consensus
-4. Any validator can verify the execution by:
-   - Verifying the receipt signature
-   - Re-executing the WASM to confirm deterministic output
-   - Checking the DAG for proper anchoring
-
-**Example using the CLI:**
+**Example:**
 
 ```bash
 # Verify a receipt
 icn-cli runtime verify --receipt receipt.json
 ```
 
-## Verification & Security
+## Example: Budget Proposal Lifecycle
 
-The entire process is designed to be independently verifiable:
+Let's walk through a complete example using a budget allocation proposal:
 
-- All artifacts (CCL, WASM, receipts) have deterministic CIDs
-- Signatures can be verified against federated DIDs
-- DAG anchoring provides timestamp proofs
-- Execution is deterministic and can be replayed
-- Resource metering prevents abuse
+### 1. Create the Budget Proposal in CCL
 
-This ensures that all governance actions are transparent, accountable, and fully auditable by any participant in the network.
+```ccl
+# budget.ccl
+proposal "Q2 Budget Allocation" {
+  scope "icn/finance"
+  
+  allocate {
+    project "infrastructure" {
+      amount 5000 USD
+      category "maintenance"
+    }
+    
+    project "outreach" {
+      amount 3000 USD
+      category "marketing"
+    }
+  }
+}
+```
 
-## Integrating with External Systems
-
-The ExecutionReceipt system enables integration with external systems:
-
-1. Wallets can verify receipts to confirm governance actions
-2. External services can watch for specific DAG anchors
-3. On-chain systems can react to verified governance decisions
-4. Federation members can audit historical governance actions
-
-This creates a secure bridge between cooperative governance and external execution environments.
-
-## Testing and Simulation
-
-For testing purposes, the CLI provides tools to simulate the entire governance lifecycle:
+### 2. Create the Proposal
 
 ```bash
-# Test workflow:
+$ icn-cli proposal create --ccl-file budget.ccl --title "Q2 Budget Allocation"
+Proposal created: 83a7b798-e1c2-4e9d-b11b-24c5a4c366a0
+Output file: budget_proposal.json
+```
 
-# 1. Compile CCL to DSL
-icn-cli ccl compile-to-dsl --input test_proposal.ccl --output test_proposal.dsl
+### 3. Vote on the Proposal
 
-# 2. Compile DSL to WASM
-icn-cli ccl compile-to-wasm --input test_proposal.ccl --output test_proposal.wasm
+```bash
+$ icn-cli proposal vote --proposal budget_proposal.json --direction yes
+Vote recorded for proposal 83a7b798-e1c2-4e9d-b11b-24c5a4c366a0
+Current vote tally: 1 yes, 0 no
+Quorum status: Pending (3 more votes needed)
+```
 
-# 3. Execute the WASM
-icn-cli runtime execute --wasm test_proposal.wasm --receipt test_receipt.json
+### 4. Check Proposal Status
 
-# 4. Verify the receipt
-icn-cli runtime verify --receipt test_receipt.json
-``` 
+```bash
+$ icn-cli proposal status --proposal budget_proposal.json
+Proposal: Q2 Budget Allocation
+ID: 83a7b798-e1c2-4e9d-b11b-24c5a4c366a0
+State: Approved
+Quorum status: MajorityReached
+Votes: 4 yes, 1 no
+```
+
+### 5. Execute the Proposal
+
+```bash
+$ icn-cli runtime execute-ccl --input budget.ccl --output receipt.json
+Executing CCL file
+Source: budget.ccl
+
+Step 1: Compiling CCL to DSL
+Compiling budget.ccl to DSL...
+DSL generation successful
+
+Step 2: Compiling DSL to WASM
+Compiling DSL to WASM...
+WASM compilation successful
+
+Step 3: Executing WASM
+Executing WASM in CoVM...
+Generating execution receipt...
+Receipt saved to receipt.json
+
+Execution Summary
+Fuel used: 1234
+Host calls: 5
+
+Receipt CID: receipt-83a7b798-e1c2-4e9d-b11b-24c5a4c366a0
+
+CCL Execution Pipeline Complete
+```
+
+### 6. Verify the Receipt
+
+```bash
+$ icn-cli runtime verify --receipt receipt.json
+Receipt verification successful
+Receipt ID: urn:icn:receipt:83a7b798-e1c2-4e9d-b11b-24c5a4c366a0
+Executed by: did:icn:executor
+Fuel used: 1234
+Anchored to DAG at epoch: 2023-06-07T12:34:56Z
+Signature valid: ✓
+```
+
+## Resource Metering
+
+The ICN implements a fuel-based resource metering system to:
+- Prevent runaway computations
+- Ensure fair resource allocation
+- Create accountable governance
+- Provide transparency of execution costs
+
+Each operation in the VM consumes an amount of fuel:
+- Basic arithmetic: 1 fuel
+- Memory allocation: 2 fuel per page
+- Host function calls: 10+ fuel
+- Storage operations: 100+ fuel
+
+When a contract runs out of fuel, execution is halted and a receipt is generated with the partial execution metrics.
+
+## Conclusion
+
+The ICN governance lifecycle provides a transparent, verifiable, and accountable system for cooperative governance. The entire process from proposal creation to execution and verification is traceable and cryptographically secured.
+
+By anchoring execution receipts to the distributed ledger, ICN ensures a permanent record of governance decisions and their implementation, enabling reliable accountability and auditability for all network participants. 

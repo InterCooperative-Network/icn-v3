@@ -1,10 +1,12 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics, HostContext, ResourceLimits};
+use icn_identity_core::vc::{ExecutionReceiptCredential, ExecutionMetrics as VcExecutionMetrics};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
+use wasmtime::{Engine, Func, Instance, Module, Store};
 
 /// Error types specific to the runtime
 #[derive(Error, Debug)]
@@ -20,6 +22,44 @@ pub enum RuntimeError {
     
     #[error("Invalid proposal state: {0}")]
     InvalidProposalState(String),
+    
+    #[error("Resource authorization failed: {0}")]
+    AuthorizationFailed(String),
+}
+
+/// Context for WASM virtual machine execution
+#[derive(Debug, Clone, Default)]
+pub struct VmContext {
+    /// DID of the executor
+    pub executor_did: String,
+    
+    /// Scope of the execution
+    pub scope: Option<String>,
+    
+    /// Epoch of the DAG at execution time
+    pub epoch: Option<String>,
+    
+    /// CID of the code being executed
+    pub code_cid: Option<String>,
+    
+    /// Resource limits
+    pub resource_limits: Option<ResourceLimits>,
+}
+
+/// Result of a WASM execution
+#[derive(Debug, Clone)]
+pub struct ExecutionResult {
+    /// The metrics collected during execution
+    pub metrics: ExecutionMetrics,
+    
+    /// List of CIDs anchored during execution
+    pub anchored_cids: Vec<String>,
+    
+    /// Resource usage during execution
+    pub resource_usage: Vec<(String, u64)>,
+    
+    /// Log messages produced during execution
+    pub logs: Vec<String>,
 }
 
 /// Represents a governance proposal that can be executed
@@ -271,6 +311,87 @@ impl Runtime {
         
         Ok(receipt)
     }
+    
+    /// Execute a WASM binary with the given context
+    pub fn execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
+        // Create CoVM host context
+        let mut host_context = HostContext::default();
+        
+        // Apply resource limits if specified
+        let vm = if let Some(limits) = context.resource_limits {
+            CoVm::new(limits)
+        } else {
+            self.vm.clone()
+        };
+        
+        // Execute the WASM module
+        vm.execute(wasm_bytes, &mut host_context)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e)))?;
+        
+        // Extract execution metrics and results
+        let metrics = host_context.metrics.lock().unwrap().clone();
+        let anchored_cids = host_context.anchored_cids.lock().unwrap().clone();
+        let resource_usage = host_context.resource_usage.lock().unwrap().clone();
+        let logs = host_context.logs.lock().unwrap().clone();
+        
+        Ok(ExecutionResult {
+            metrics,
+            anchored_cids,
+            resource_usage,
+            logs,
+        })
+    }
+    
+    /// Issue an execution receipt after successful execution
+    pub fn issue_receipt(
+        &self, 
+        wasm_cid: &str, 
+        ccl_cid: &str, 
+        result: &ExecutionResult, 
+        context: &VmContext
+    ) -> Result<ExecutionReceiptCredential> {
+        // Convert ExecutionMetrics to VC ExecutionMetrics
+        let vc_metrics = VcExecutionMetrics {
+            fuel_used: result.metrics.fuel_used,
+            host_calls: result.metrics.host_calls,
+            io_bytes: result.metrics.io_bytes,
+        };
+        
+        // Create a unique ID for the receipt
+        let receipt_id = format!("urn:icn:receipt:{}", uuid::Uuid::new_v4());
+        
+        // Create the execution receipt
+        let receipt = ExecutionReceiptCredential::new(
+            receipt_id,
+            context.executor_did.clone(),  // issuer
+            format!("proposal-{}", uuid::Uuid::new_v4()),  // placeholder proposal ID
+            wasm_cid.to_string(),
+            ccl_cid.to_string(),
+            vc_metrics,
+            result.anchored_cids.clone(),
+            result.resource_usage.clone(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            None, // dag_epoch
+            None, // receipt_cid
+        );
+        
+        Ok(receipt)
+    }
+    
+    /// Anchor a receipt to the DAG and return the CID
+    pub async fn anchor_receipt(&self, receipt: &ExecutionReceiptCredential) -> Result<String> {
+        // Convert to JSON
+        let receipt_json = serde_json::to_string(receipt)
+            .map_err(|e| RuntimeError::ReceiptError(format!("Failed to serialize receipt: {}", e)))?;
+        
+        // Store the receipt 
+        let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;
+        
+        Ok(receipt_cid)
+    }
 }
 
 /// Module providing executable trait for CCL DSL files
@@ -286,5 +407,119 @@ pub mod dsl {
 
 #[cfg(test)]
 mod tests {
-    // Tests will be added once we have the full implementation
+    use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+    
+    // A mock storage implementation for testing
+    struct MockStorage {
+        proposals: Mutex<Vec<Proposal>>,
+        wasm_modules: Mutex<std::collections::HashMap<String, Vec<u8>>>,
+        receipts: Mutex<std::collections::HashMap<String, String>>,
+        anchored_cids: Mutex<Vec<String>>,
+    }
+    
+    impl MockStorage {
+        fn new() -> Self {
+            Self {
+                proposals: Mutex::new(vec![]),
+                wasm_modules: Mutex::new(std::collections::HashMap::new()),
+                receipts: Mutex::new(std::collections::HashMap::new()),
+                anchored_cids: Mutex::new(vec![]),
+            }
+        }
+    }
+    
+    #[async_trait]
+    impl RuntimeStorage for MockStorage {
+        async fn load_proposal(&self, id: &str) -> Result<Proposal> {
+            let proposals = self.proposals.lock().unwrap();
+            proposals
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+                .ok_or_else(|| anyhow!("Proposal not found"))
+        }
+        
+        async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
+            let mut proposals = self.proposals.lock().unwrap();
+            
+            // Remove existing proposal with the same ID
+            proposals.retain(|p| p.id != proposal.id);
+            
+            // Add the updated proposal
+            proposals.push(proposal.clone());
+            
+            Ok(())
+        }
+        
+        async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
+            let modules = self.wasm_modules.lock().unwrap();
+            modules
+                .get(cid)
+                .cloned()
+                .ok_or_else(|| anyhow!("WASM module not found"))
+        }
+        
+        async fn store_receipt(&self, receipt: &ExecutionReceipt) -> Result<String> {
+            let receipt_json = serde_json::to_string(receipt)?;
+            let receipt_cid = format!("receipt-{}", uuid::Uuid::new_v4());
+            
+            let mut receipts = self.receipts.lock().unwrap();
+            receipts.insert(receipt_cid.clone(), receipt_json);
+            
+            Ok(receipt_cid)
+        }
+        
+        async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
+            let mut anchored = self.anchored_cids.lock().unwrap();
+            anchored.push(cid.to_string());
+            
+            let anchor_id = format!("anchor-{}", uuid::Uuid::new_v4());
+            Ok(anchor_id)
+        }
+    }
+    
+    #[tokio::test]
+    async fn test_execute_wasm_file() -> Result<()> {
+        // This test requires a compiled WASM file from CCL/DSL
+        // For testing, we'll check if the file exists first
+        let wasm_path = Path::new("../../../examples/budget.wasm");
+        
+        if !wasm_path.exists() {
+            println!("Test WASM file not found, skipping test_execute_wasm_file test");
+            return Ok(());
+        }
+        
+        // Read the WASM file
+        let wasm_bytes = fs::read(wasm_path)?;
+        
+        // Create a runtime with mock storage
+        let storage = Arc::new(MockStorage::new());
+        let runtime = Runtime::new(storage);
+        
+        // Create a VM context
+        let context = VmContext {
+            executor_did: "did:icn:test".to_string(),
+            scope: Some("test-scope".to_string()),
+            epoch: Some("2023-01-01".to_string()),
+            code_cid: Some("test-cid".to_string()),
+            resource_limits: None,
+        };
+        
+        // Execute the WASM module
+        let result = runtime.execute_wasm(&wasm_bytes, context.clone())?;
+        
+        // Verify that execution succeeded and metrics were collected
+        assert!(result.metrics.fuel_used > 0, "Expected fuel usage metrics");
+        
+        // Issue a receipt
+        let receipt = runtime.issue_receipt("test-wasm-cid", "test-ccl-cid", &result, &context)?;
+        
+        // Verify that receipt was created correctly
+        assert_eq!(receipt.issuer, "did:icn:test");
+        assert_eq!(receipt.credential_subject.wasm_cid, "test-wasm-cid");
+        
+        Ok(())
+    }
 } 

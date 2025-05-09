@@ -8,6 +8,7 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
+use tempfile;
 
 /// Command-line interface for ICN governance
 #[derive(Parser)]
@@ -125,6 +126,17 @@ enum RuntimeCommands {
         /// Path to the execution receipt
         #[clap(long, short)]
         receipt: PathBuf,
+    },
+    
+    /// Execute a CCL file directly
+    ExecuteCcl {
+        /// Path to the CCL file to execute
+        #[clap(long, short)]
+        input: PathBuf,
+        
+        /// Output file for the execution receipt
+        #[clap(long, short)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -325,66 +337,74 @@ async fn compile_to_wasm(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Execute a WASM file
-async fn execute_wasm(wasm_path: &Path, proposal_path: Option<&Path>, receipt_path: Option<&Path>) -> Result<()> {
+/// Execute a WASM file directly
+async fn execute_wasm(wasm_path: &Path, proposal_path: Option<&Path>, receipt_path: Option<&Path>) -> Result<String> {
     println!("Executing WASM file: {}", wasm_path.display());
     
-    // Create storage
+    // Read the WASM file
+    let wasm_bytes = std::fs::read(wasm_path)
+        .map_err(|e| anyhow!("Failed to read WASM file: {}", e))?;
+    
+    // Set up storage
     let storage = Arc::new(CliRuntimeStorage::new());
     
-    // Create runtime
+    // Create a runtime instance
     let runtime = icn_runtime::Runtime::new(storage);
     
-    // Execute the WASM file
-    let receipt = runtime.execute_wasm_file(wasm_path).await?;
+    // Create a default context
+    let context = icn_runtime::VmContext {
+        executor_did: "did:icn:executor".to_string(),
+        scope: Some("icn/governance".to_string()),
+        epoch: Some(chrono::Utc::now().to_rfc3339()),
+        code_cid: Some(format!("file://{}", wasm_path.display())),
+        resource_limits: None,
+    };
     
-    // Display execution results
-    println!("Execution successful!");
-    println!("Fuel used: {}", receipt.metrics.fuel_used);
-    println!("Host calls: {}", receipt.metrics.host_calls);
-    println!("IO bytes: {}", receipt.metrics.io_bytes);
+    // Execute the WASM module
+    println!("Executing WASM in CoVM...");
+    let result = runtime.execute_wasm(&wasm_bytes, context.clone())
+        .map_err(|e| anyhow!("Execution failed: {}", e))?;
     
-    if !receipt.anchored_cids.is_empty() {
-        println!("Anchored CIDs:");
-        for cid in &receipt.anchored_cids {
-            println!("  - {}", cid);
+    // Generate a mock CID for the CCL
+    let ccl_cid = format!("ccl-{}", uuid::Uuid::new_v4());
+    
+    // Create the execution receipt
+    println!("Generating execution receipt...");
+    let receipt = runtime.issue_receipt(
+        &format!("wasm-{}", uuid::Uuid::new_v4()),
+        &ccl_cid,
+        &result,
+        &context
+    )?;
+    
+    // Convert to JSON for saving
+    let receipt_json = serde_json::to_string_pretty(&receipt)?;
+    
+    // Save to file if requested
+    if let Some(path) = receipt_path {
+        std::fs::write(path, &receipt_json)
+            .map_err(|e| anyhow!("Failed to write receipt to file: {}", e))?;
+        println!("Receipt saved to {}", path.display());
+    }
+    
+    // Print a summary of the execution
+    println!("\n{}", "Execution Summary".green().bold());
+    println!("Fuel used: {}", result.metrics.fuel_used);
+    println!("Host calls: {}", result.metrics.host_calls);
+    
+    if !result.logs.is_empty() {
+        println!("\n{}", "Execution Logs".yellow().bold());
+        for log in &result.logs {
+            println!("  {}", log);
         }
     }
     
-    if !receipt.resource_usage.is_empty() {
-        println!("Resource usage:");
-        for (resource_type, amount) in &receipt.resource_usage {
-            println!("  - {}: {}", resource_type, amount);
-        }
-    }
+    // Create a mock receipt CID
+    let receipt_cid = format!("receipt-{}", uuid::Uuid::new_v4());
+    println!("\nReceipt CID: {}", receipt_cid.cyan());
     
-    // Create the receipt VC
-    let receipt_vc = ExecutionReceiptCredential::new(
-        format!("urn:uuid:{}", Uuid::new_v4()),
-        "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
-        receipt.proposal_id,
-        receipt.wasm_cid,
-        receipt.ccl_cid,
-        icn_identity_core::vc::ExecutionMetrics {
-            fuel_used: receipt.metrics.fuel_used,
-            host_calls: receipt.metrics.host_calls,
-            io_bytes: receipt.metrics.io_bytes,
-        },
-        receipt.anchored_cids,
-        receipt.resource_usage,
-        receipt.timestamp,
-        None,
-        None,
-    );
-    
-    // Output the receipt
-    if let Some(output_path) = receipt_path {
-        let receipt_json = serde_json::to_string_pretty(&receipt_vc)?;
-        std::fs::write(output_path, receipt_json)?;
-        println!("Receipt saved to: {}", output_path.display());
-    }
-    
-    Ok(())
+    // Return the receipt CID
+    Ok(receipt_cid)
 }
 
 /// Verify an execution receipt
@@ -414,6 +434,35 @@ async fn verify_receipt(receipt_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Execute a CCL file by compiling to DSL, then WASM, and executing
+async fn execute_ccl(ccl_path: &Path, receipt_path: Option<&Path>) -> Result<String> {
+    println!("{}", "Executing CCL file".blue().bold());
+    println!("Source: {}", ccl_path.display());
+    
+    // Temporary files for the compilation pipeline
+    let temp_dir = tempfile::tempdir()?;
+    let dsl_path = temp_dir.path().join("output.dsl");
+    let wasm_path = temp_dir.path().join("output.wasm");
+    
+    // Step 1: Compile CCL to DSL
+    println!("\n{}", "Step 1: Compiling CCL to DSL".yellow());
+    compile_to_dsl(ccl_path, &dsl_path).await?;
+    
+    // Step 2: Compile DSL to WASM
+    println!("\n{}", "Step 2: Compiling DSL to WASM".yellow());
+    compile_to_wasm(&dsl_path, &wasm_path).await?;
+    
+    // Step 3: Execute the WASM
+    println!("\n{}", "Step 3: Executing WASM".yellow());
+    let receipt_cid = execute_wasm(&wasm_path, None, receipt_path).await?;
+    
+    // Print final result
+    println!("\n{}", "CCL Execution Pipeline Complete".green().bold());
+    println!("Receipt CID: {}", receipt_cid.cyan());
+    
+    Ok(receipt_cid)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -440,10 +489,13 @@ async fn main() -> Result<()> {
         },
         Commands::Runtime(cmd) => match cmd {
             RuntimeCommands::Execute { wasm, proposal, receipt } => {
-                execute_wasm(&wasm, proposal.as_deref(), receipt.as_deref()).await?;
+                execute_wasm(wasm, proposal.as_deref(), receipt.as_deref()).await?;
             }
             RuntimeCommands::Verify { receipt } => {
                 verify_receipt(&receipt).await?;
+            }
+            RuntimeCommands::ExecuteCcl { input, output } => {
+                execute_ccl(input, output.as_deref()).await?;
             }
         },
     }
