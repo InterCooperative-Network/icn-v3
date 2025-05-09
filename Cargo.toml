@@ -11,6 +11,7 @@ members = [
     "crates/p2p/planetary-mesh",
     "crates/tools/icn-cli",
     "crates/tools/meshctl",
+    "crates/services/icn-agoranet",
     "tests/codec_tests"
 ]
 resolver = "2"
