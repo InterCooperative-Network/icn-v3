@@ -155,7 +155,7 @@ async fn cast_vote(
 // Helper to get proposal votes
 async fn get_proposal_votes(client: &Client, base_url_for_test: &str, proposal_id: &str) -> ProposalVotesResponse {
     client
-        .get(format!("{}/votes/{}", base_url_for_test, proposal_id))
+        .get(format!("{}/proposals/{}/votes", base_url_for_test, proposal_id))
         .send()
         .await
         .expect("Failed to send get proposal votes request")
@@ -317,7 +317,7 @@ async fn test_full_lifecycle() {
 
     // 5. Get the proposal votes to see individual votes and summary
     let proposal_votes_response =
-        get_proposal_votes(&client, &created_proposal_detail.summary.id).await;
+        get_proposal_votes(&client, &server_url, &created_proposal_detail.summary.id).await;
     assert_eq!(proposal_votes_response.votes.len(), 3);
     assert!(proposal_votes_response
         .votes
@@ -343,24 +343,25 @@ async fn test_full_lifecycle() {
     println!("Proposal votes response: {:?}", proposal_votes_response);
 
     // Optional: Verify thread detail (if proposals are linked back to threads, which they are not in the current model)
-    // let final_thread_detail = get_thread_detail(&client, &created_thread_summary.id).await;
+    let final_thread_detail = get_thread_detail(&client, &server_url, &created_thread_summary.id).await;
     // Depending on whether ThreadDetail is updated to show linked proposals, add assertions here.
     // For now, we just check that the thread still exists.
-    assert_eq!(thread_detail.summary.id, created_thread_summary.id);
+    assert_eq!(final_thread_detail.summary.id, created_thread_summary.id);
 }
 
 #[tokio::test]
 async fn test_get_threads_with_query_params() {
+    let (server_url, _handle, _db) = spawn_app().await;
     let client = Client::new();
 
     // Create a couple of threads with different scopes
-    let _ = create_thread(&client, "Thread A Scope X", "did:test:authorA", "scope.x").await;
-    let _ = create_thread(&client, "Thread B Scope Y", "did:test:authorB", "scope.y").await;
-    let _ = create_thread(&client, "Thread C Scope X", "did:test:authorC", "scope.x").await;
+    let _ = create_thread(&client, &server_url, "Thread A Scope X", "did:test:authorA", "scope.x").await;
+    let _ = create_thread(&client, &server_url, "Thread B Scope Y", "did:test:authorB", "scope.y").await;
+    let _ = create_thread(&client, &server_url, "Thread C Scope X", "did:test:authorC", "scope.x").await;
 
     // Test filtering by scope
     let threads_scope_x = client
-        .get(format!("{}/threads?scope=scope.x", BASE_URL))
+        .get(format!("{}/threads?scope=scope.x", server_url))
         .send()
         .await
         .expect("Failed request")
@@ -380,7 +381,7 @@ async fn test_get_threads_with_query_params() {
 
     // Test limit
     let threads_limit_1 = client
-        .get(format!("{}/threads?limit=1", BASE_URL))
+        .get(format!("{}/threads?limit=1", server_url))
         .send()
         .await
         .expect("Failed request")
@@ -393,9 +394,11 @@ async fn test_get_threads_with_query_params() {
 
 #[tokio::test]
 async fn test_get_proposals_with_query_params() {
+    let (server_url, _handle, _db) = spawn_app().await;
     let client = Client::new();
     let thread_summary = create_thread(
         &client,
+        &server_url,
         "Proposal Test Thread",
         "did:test:proposer",
         "proposal.test.scope",
@@ -405,6 +408,7 @@ async fn test_get_proposals_with_query_params() {
     // Create some proposals
     let _p1 = create_proposal(
         &client,
+        &server_url,
         "Prop Alpha Open",
         "text",
         "gov.alpha",
@@ -413,6 +417,7 @@ async fn test_get_proposals_with_query_params() {
     .await;
     let _p2 = create_proposal(
         &client,
+        &server_url,
         "Prop Beta Open",
         "text",
         "gov.beta",
@@ -425,7 +430,7 @@ async fn test_get_proposals_with_query_params() {
 
     // Test filtering by scope
     let proposals_gov_alpha = client
-        .get(format!("{}/proposals?scope=gov.alpha", BASE_URL))
+        .get(format!("{}/proposals?scope=gov.alpha", server_url))
         .send()
         .await
         .expect("Failed request")
@@ -447,7 +452,7 @@ async fn test_get_proposals_with_query_params() {
 
     // Test filtering by status (all should be Open initially)
     let proposals_open = client
-        .get(format!("{}/proposals?status=Open", BASE_URL))
+        .get(format!("{}/proposals?status=Open", server_url))
         .send()
         .await
         .expect("Failed request")

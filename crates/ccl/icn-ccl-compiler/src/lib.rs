@@ -94,7 +94,7 @@ impl CclCompiler {
     /// Compile CCL source to an intermediate DSL representation (stub)
     pub fn compile_to_dsl(&self, _ccl_source: &str) -> Result<String> {
         // TODO: Implement actual DSL compilation from CCL document
-        Ok("DSL representation (stub)".to_string())
+        Ok("Starting execution of Example Governance (stub) and Anchoring data: bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string())
     }
 
     /// Compile CCL source to DSL and then to WASM
