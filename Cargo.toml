@@ -4,13 +4,13 @@ members = [
     "crates/common/icn-crypto",
     "crates/common/icn-identity-core",
     "crates/ccl/icn-ccl-parser",
+    "crates/ccl/icn-ccl-compiler",
+    "crates/runtime/icn-core-vm",
+    "crates/runtime/icn-runtime",
+    "crates/tools/icn-cli",
     "tests/codec_tests"
 ]
 resolver = "2"
 
 [workspace.metadata.dev-dependencies]
 cargo-deny = { version = "^0.14", default-features = false }
-
-[[test]]
-name = "codec_verification"
-path = "tests/codec_verification.rs"

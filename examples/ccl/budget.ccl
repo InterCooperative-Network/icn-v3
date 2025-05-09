@@ -1,0 +1,65 @@
+// Budget Allocation CCL Example
+// This is a simplified example of a budget allocation proposal
+
+// Metadata
+title: "Q3 Budget Allocation";
+description: "Allocate funds for Q3 2023 cooperative activities";
+author: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+created: "2023-10-15T14:30:00Z";
+version: "1.0.0";
+
+// Budget allocation
+budget {
+  // Total allocation
+  total: 10000;
+  currency: "USDC";
+  
+  // Budget categories
+  categories {
+    development: 6000;
+    marketing: 2000;
+    operations: 1500;
+    community: 500;
+  }
+  
+  // Disbursement schedule
+  disbursement {
+    schedule: "monthly";
+    start_date: "2023-10-01";
+    end_date: "2023-12-31";
+  }
+  
+  // Authorization rules
+  authorization {
+    threshold: 2;
+    roles: ["treasurer", "director"];
+    require_review: true;
+  }
+}
+
+// Execution instructions
+execution {
+  // Anchor this proposal to the DAG
+  anchor_data("budget_q3_2023");
+  
+  // Allocate the funds
+  perform_action("budget_allocation", 10000);
+  
+  // Mint governance tokens for participation
+  mint_tokens("participation_token", 100, "community_pool");
+}
+
+// Accountability
+accountability {
+  // Report requirements
+  reports {
+    frequency: "monthly";
+    metrics: ["spend_by_category", "completion_status", "remaining_funds"];
+  }
+  
+  // Transparency requirements
+  transparency {
+    disclosure_level: "public";
+    public_dashboard: true;
+  }
+} 

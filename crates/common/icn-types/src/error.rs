@@ -73,20 +73,96 @@ pub enum DagError {
     IoError(#[from] std::io::Error),
 }
 
-#[derive(Error, Debug)]
+/// Generic error type for ICN operations
+#[derive(Debug, thiserror::Error)]
 pub enum IcnError {
-    #[error("DAG error: {0}")]
-    Dag(#[from] DagError),
-
     #[error("Crypto error: {0}")]
     Crypto(#[from] CryptoError),
+    
+    #[error("DAG error: {0}")]
+    Dag(#[from] DagError),
+    
+    #[error("Multicodec error: {0}")]
+    Multicodec(#[from] MulticodecError),
+    
+    #[error("Network error: {0}")]
+    Network(String),
+    
+    #[error("Storage error: {0}")]
+    Storage(String),
+    
+    #[error("General error: {0}")]
+    General(String),
+}
 
-    #[error("Identity error: {0}")]
-    Identity(#[from] IdentityError),
+/// Crypto-related error types
+#[derive(Debug, thiserror::Error)]
+pub enum CryptoError {
+    #[error("Key generation error: {0}")]
+    KeyGenError(String),
+    
+    #[error("Signature error: {0}")]
+    SignatureError(String),
+    
+    #[error("Verification error: {0}")]
+    VerificationError(String),
+    
+    #[error("Invalid key format: {0}")]
+    InvalidKeyFormat(String),
+    
+    #[error("Encoding error: {0}")]
+    EncodingError(String),
+    
+    #[error("JWS error: {0}")]
+    JwsError(String),
+    
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+}
 
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+/// Multicodec-related error types
+#[derive(Debug, thiserror::Error)]
+pub enum MulticodecError {
+    #[error("Unknown codec: {0}")]
+    UnknownCodec(String),
+    
+    #[error("Unsupported codec: {0}")]
+    UnsupportedCodec(String),
+    
+    #[error("Invalid multicodec header: {0}")]
+    InvalidHeader(String),
+    
+    #[error("Encoding error: {0}")]
+    EncodingError(String),
+    
+    #[error("Decoding error: {0}")]
+    DecodingError(String),
+}
 
-    #[error("Unknown error: {0}")]
-    Unknown(String),
+/// DAG-related error types
+#[derive(Debug, thiserror::Error)]
+pub enum DagError {
+    #[error("Invalid link: {0}")]
+    InvalidLink(String),
+    
+    #[error("Missing link: {0}")]
+    MissingLink(String),
+    
+    #[error("Invalid CID: {0}")]
+    InvalidCid(String),
+    
+    #[error("Invalid DAG node: {0}")]
+    InvalidNode(String),
+    
+    #[error("DAG verification failed: {0}")]
+    VerificationFailed(String),
+    
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
+    
+    #[error("Invalid structure: {0}")]
+    InvalidStructure(String),
+    
+    #[error("Serialization error: {0}")]
+    Serialization(String),
 }
