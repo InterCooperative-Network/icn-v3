@@ -27,6 +27,20 @@ use icn_agoranet::models::{
 };
 use reqwest::Client;
 use serde_json::json; // For ad-hoc json creation in tests
+use axum::{
+    routing::{get, post},
+    Router,
+    Server,
+};
+use icn_agoranet::{
+    handlers::{Db, InMemoryStore, create_proposal_handler, create_thread_handler, cast_vote_handler, get_proposal_detail_handler, get_threads_handler, health_check_handler, get_proposal_votes_handler},
+    models::{NewProposalRequest, NewThreadRequest, NewVoteRequest, ProposalStatus, VoteType, Timestamp, VoteCounts, ThreadSummary, ProposalSummary, ProposalDetail},
+};
+use std::net::SocketAddr;
+use std::sync::{Arc, RwLock};
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+use chrono::Utc;
 
 const BASE_URL: &str = "http://127.0.0.1:8787";
 
@@ -139,6 +153,29 @@ async fn get_thread_detail(client: &Client, thread_id: &str) -> ThreadDetail {
         .expect("Failed to parse get thread detail response")
 }
 
+// Helper to spawn a test server
+async fn spawn_test_server() -> (JoinHandle<()>, String) {
+    let store = Arc::new(RwLock::new(InMemoryStore::new()));
+    let app = Router::new()
+        .route("/health", get(health_check_handler))
+        .route("/threads", get(get_threads_handler).post(create_thread_handler))
+        // .route("/threads/:id", get(get_thread_detail_handler)) // Assuming get_thread_detail_handler exists
+        .route("/proposals", get(icn_agoranet::handlers::get_proposals_handler).post(create_proposal_handler))
+        .route("/proposals/:id", get(get_proposal_detail_handler))
+        .route("/proposals/:id/votes", get(get_proposal_votes_handler))
+        .route("/votes", post(cast_vote_handler))
+        .with_state(store.clone() as Db);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{}", addr);
+
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service()).await.unwrap();
+    });
+
+    (handle, base_url)
+}
 
 #[tokio::test]
 async fn test_full_lifecycle() {
@@ -341,6 +378,103 @@ async fn test_get_proposals_with_query_params() {
 
     // Note: Filtering by `type` is not implemented in the handlers yet (it's a placeholder)
     // So we don't test it here.
+}
+
+#[tokio::test]
+async fn thread_proposal_vote_flow() {
+    let (_server_handle, base_url) = spawn_test_server().await;
+    let client = Client::new();
+
+    let scope = "test.scope".to_string();
+    let author_did = "did:test:author".to_string();
+
+    // 1. POST /threads -> assert 201
+    let new_thread_req = NewThreadRequest {
+        title: "Test Thread for Integration Flow".to_string(),
+        author_did: author_did.clone(),
+        scope: scope.clone(),
+        metadata: None,
+    };
+    let res = client.post(format!("{}/threads", base_url))
+        .json(&new_thread_req)
+        .send()
+        .await
+        .expect("Failed to create thread");
+    assert_eq!(res.status(), reqwest::StatusCode::CREATED);
+    let thread: ThreadSummary = res.json().await.expect("Failed to parse thread summary");
+    assert_eq!(thread.title, new_thread_req.title);
+    let thread_id = thread.id.clone();
+
+    // 2. POST /proposals -> assert 201
+    let new_proposal_req = NewProposalRequest {
+        title: "Test Proposal for Integration Flow".to_string(),
+        full_text: "This is a detailed description of the test proposal.".to_string(),
+        scope: scope.clone(),
+        linked_thread_id: Some(thread_id.clone()),
+        voting_deadline: Some(Utc::now() + chrono::Duration::days(1)),
+    };
+    let res = client.post(format!("{}/proposals", base_url))
+        .json(&new_proposal_req)
+        .send()
+        .await
+        .expect("Failed to create proposal");
+    assert_eq!(res.status(), reqwest::StatusCode::CREATED);
+    let proposal: ProposalSummary = res.json().await.expect("Failed to parse proposal summary");
+    assert_eq!(proposal.title, new_proposal_req.title);
+    let proposal_id = proposal.id.clone();
+
+    // 3. POST /votes -> cast Approve & Reject
+    let voter1_did = "did:test:voter1".to_string();
+    let approve_vote_req = NewVoteRequest {
+        proposal_id: proposal_id.clone(),
+        voter_did: voter1_did.clone(),
+        vote_type: VoteType::Approve,
+        justification: Some("I approve this test proposal".to_string()),
+    };
+    let res = client.post(format!("{}/votes", base_url))
+        .json(&approve_vote_req)
+        .send()
+        .await
+        .expect("Failed to cast approve vote");
+    assert_eq!(res.status(), reqwest::StatusCode::CREATED);
+
+    let voter2_did = "did:test:voter2".to_string();
+    let reject_vote_req = NewVoteRequest {
+        proposal_id: proposal_id.clone(),
+        voter_did: voter2_did.clone(),
+        vote_type: VoteType::Reject,
+        justification: Some("I reject this test proposal".to_string()),
+    };
+    let res = client.post(format!("{}/votes", base_url))
+        .json(&reject_vote_req)
+        .send()
+        .await
+        .expect("Failed to cast reject vote");
+    assert_eq!(res.status(), reqwest::StatusCode::CREATED);
+
+    // 4. GET /proposals/:id -> assert vote_counts updated
+    let res = client.get(format!("{}/proposals/{}", base_url, proposal_id))
+        .send()
+        .await
+        .expect("Failed to get proposal detail");
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    let proposal_detail: ProposalDetail = res.json().await.expect("Failed to parse proposal detail");
+    assert_eq!(proposal_detail.summary.vote_counts.approve, 1);
+    assert_eq!(proposal_detail.summary.vote_counts.reject, 1);
+    assert_eq!(proposal_detail.summary.vote_counts.abstain, 0);
+
+    // 5. GET /threads -> assert thread list length >= 1 (can be more if InMemoryStore is not reset)
+    let res = client.get(format!("{}/threads?scope={}", base_url, scope))
+        .send()
+        .await
+        .expect("Failed to get threads");
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    let threads: Vec<ThreadSummary> = res.json().await.expect("Failed to parse thread list");
+    assert!(!threads.is_empty()); 
+    // More specific check if we know the exact number or can filter by specific ID
+    assert!(threads.iter().any(|t| t.id == thread_id));
+
+    // TODO: Add assertions for GET /proposals/:id/votes to check the actual votes if needed
 }
 
 // TODO: Add more tests:

@@ -14,6 +14,7 @@ use icn_agoranet::handlers::{InMemoryStore, Db};
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        icn_agoranet::handlers::health_check_handler,
         icn_agoranet::handlers::get_threads_handler,
         icn_agoranet::handlers::create_thread_handler,
         icn_agoranet::handlers::get_thread_detail_handler,
@@ -29,7 +30,8 @@ use icn_agoranet::handlers::{InMemoryStore, Db};
             icn_agoranet::models::ProposalSummary, icn_agoranet::models::ProposalDetail, icn_agoranet::models::Vote,
             icn_agoranet::models::VoteCounts, icn_agoranet::models::ProposalStatus, icn_agoranet::models::VoteType,
             icn_agoranet::models::NewThreadRequest, icn_agoranet::models::NewProposalRequest, icn_agoranet::models::NewVoteRequest,
-            icn_agoranet::models::GetThreadsQuery, icn_agoranet::models::GetProposalsQuery, icn_agoranet::models::ProposalVotesResponse
+            icn_agoranet::models::GetThreadsQuery, icn_agoranet::models::GetProposalsQuery, icn_agoranet::models::ProposalVotesResponse,
+            icn_agoranet::error::ApiError
         )
     ),
     tags(
@@ -58,6 +60,7 @@ async fn main() {
 
     let app = Router::new()
         .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
+        .route("/health", get(icn_agoranet::handlers::health_check_handler))
         .route("/threads", get(icn_agoranet::handlers::get_threads_handler).post(icn_agoranet::handlers::create_thread_handler))
         .route("/threads/:id", get(icn_agoranet::handlers::get_thread_detail_handler))
         // Proposals routes
@@ -65,7 +68,7 @@ async fn main() {
         .route("/proposals/:id", get(icn_agoranet::handlers::get_proposal_detail_handler))
         // Votes routes
         .route("/votes", post(icn_agoranet::handlers::cast_vote_handler))
-        .route("/votes/:proposal_id", get(icn_agoranet::handlers::get_proposal_votes_handler))
+        .route("/proposals/:proposal_id/votes", get(icn_agoranet::handlers::get_proposal_votes_handler))
         .layer(cors)
         // .layer(Extension(db)); // Extension layer is not needed when using with_state
         .with_state(db); // Pass the state to the router

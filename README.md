@@ -35,3 +35,7 @@ The InterCooperative Network is built as a layered architecture designed to repl
 ## Documentation
 
 See the [RFC index](./rfcs/README.md) for detailed design decisions and project structure.
+
+## Services
+
+- **AgoraNet API** — Threaded deliberation & governance endpoints ([docs](docs/agoranet_api.md))

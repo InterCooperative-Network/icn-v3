@@ -119,7 +119,8 @@ pub struct NewProposalRequest {
     #[schema(example = "coop.nw.governance")]
     pub scope: String,
     #[schema(example = "thread_abc123")]
-    pub thread_id: Option<String>, // Optional: proposal can be standalone or linked to a thread
+    pub linked_thread_id: Option<String>,
+    pub voting_deadline: Option<Timestamp>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
@@ -158,6 +159,6 @@ pub struct GetProposalsQuery {
 // Response for GET /votes/:proposal_id
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
 pub struct ProposalVotesResponse {
+    pub proposal_id: String,
     pub votes: Vec<Vote>,
-    pub summary: VoteCounts,
 } 

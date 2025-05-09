@@ -1,0 +1,36 @@
+use axum::{
+    response::{IntoResponse, Response},
+    http::StatusCode,
+    Json,
+};
+use serde_json::json;
+
+#[derive(Debug)]
+pub enum ApiError {
+    NotFound(String),
+    InternalServerError(String),
+    BadRequest(String),
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = match self {
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            ApiError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+        };
+
+        let body = Json(json!({
+            "error": error_message,
+        }));
+
+        (status, body).into_response()
+    }
+}
+
+// Helper for mapping any error to ApiError::InternalServerError
+impl<E: std::error::Error> From<E> for ApiError {
+    fn from(err: E) -> Self {
+        ApiError::InternalServerError(err.to_string())
+    }
+} 
