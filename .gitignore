@@ -1,6 +1,51 @@
+# Rust
 /target
+**/target/
 Cargo.lock
 **/*.rs.bk
+
+# IDEs and editors
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
 .DS_Store
-.idea
-.vscode
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.npm/
+
+# Documentation
+book/
+docs/_build/
+_site/
+site/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+.nyc_output/
+
+# Build artifacts
+/dist
+/out
+build/
+*.profraw
+
+# WASM
+*.wasm
+**/pkg/
+
+# Misc
+*.log
+.cache/
+.temp/
