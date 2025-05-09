@@ -1,9 +1,9 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
-use icn_types::dag::{DagNodeBuilder, DagEventType};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use icn_types::dag::{DagEventType, DagNodeBuilder};
 
 fn benchmark_dag_node_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("dag_node_creation");
-    
+
     // Simple node creation with only required fields
     group.bench_function("simple", |b| {
         b.iter(|| {
@@ -25,7 +25,7 @@ fn benchmark_dag_node_creation(c: &mut Criterion) {
             .scope_id("test_scope".to_string())
             .build()
             .unwrap();
-        
+
         let parent_cid = parent_node.cid().unwrap();
 
         b.iter(|| {
@@ -45,28 +45,28 @@ fn benchmark_dag_node_creation(c: &mut Criterion) {
 
 fn benchmark_dag_node_cid(c: &mut Criterion) {
     let mut group = c.benchmark_group("dag_node_cid");
-    
+
     // Generate nodes of different sizes
     let sizes = [10, 100, 1000, 10000];
-    
+
     for size in sizes.iter() {
         // Create content of specified size
         let content = "X".repeat(*size);
-        
+
         let node = DagNodeBuilder::new()
             .content(content)
             .event_type(DagEventType::Genesis)
             .scope_id("test_scope".to_string())
             .build()
             .unwrap();
-        
+
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             b.iter(|| node.cid())
         });
     }
-    
+
     group.finish();
 }
 
 criterion_group!(benches, benchmark_dag_node_creation, benchmark_dag_node_cid);
-criterion_main!(benches); 
+criterion_main!(benches);

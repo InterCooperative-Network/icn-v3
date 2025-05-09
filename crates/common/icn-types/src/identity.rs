@@ -122,6 +122,12 @@ pub struct VerifiableCredentialBuilder {
     proof: Option<CredentialProof>,
 }
 
+impl Default for VerifiableCredentialBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VerifiableCredentialBuilder {
     /// Creates a new VerifiableCredentialBuilder with default context
     pub fn new() -> Self {
@@ -188,11 +194,21 @@ impl VerifiableCredentialBuilder {
 
     /// Builds a VerifiableCredential if all required fields are set
     pub fn build(self) -> Result<VerifiableCredential, IdentityError> {
-        let id = self.id.ok_or_else(|| IdentityError::InvalidCredential("ID is required".to_string()))?;
-        let issuer = self.issuer.ok_or_else(|| IdentityError::InvalidCredential("Issuer is required".to_string()))?;
-        let issuance_date = self.issuance_date.ok_or_else(|| IdentityError::InvalidCredential("Issuance date is required".to_string()))?;
-        let subject_id = self.subject_id.ok_or_else(|| IdentityError::InvalidCredential("Subject ID is required".to_string()))?;
-        let proof = self.proof.ok_or_else(|| IdentityError::InvalidCredential("Proof is required".to_string()))?;
+        let id = self
+            .id
+            .ok_or_else(|| IdentityError::InvalidCredential("ID is required".to_string()))?;
+        let issuer = self
+            .issuer
+            .ok_or_else(|| IdentityError::InvalidCredential("Issuer is required".to_string()))?;
+        let issuance_date = self.issuance_date.ok_or_else(|| {
+            IdentityError::InvalidCredential("Issuance date is required".to_string())
+        })?;
+        let subject_id = self.subject_id.ok_or_else(|| {
+            IdentityError::InvalidCredential("Subject ID is required".to_string())
+        })?;
+        let proof = self
+            .proof
+            .ok_or_else(|| IdentityError::InvalidCredential("Proof is required".to_string()))?;
 
         Ok(VerifiableCredential {
             context: self.context,
@@ -208,4 +224,4 @@ impl VerifiableCredentialBuilder {
             proof,
         })
     }
-} 
+}

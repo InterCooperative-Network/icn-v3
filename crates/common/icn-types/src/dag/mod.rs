@@ -1,7 +1,7 @@
-use serde::{Serialize, Deserialize};
+use crate::error::DagError;
 use cid::multihash::{Code, MultihashDigest};
 use cid::Cid;
-use crate::error::DagError;
+use serde::{Deserialize, Serialize};
 
 /// The type of event stored in the DAG
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -23,7 +23,10 @@ pub struct DagNode {
     /// Content of the node (serialized payload)
     pub content: String,
     /// Optional parent CID
-    #[serde(serialize_with = "serialize_cid_option", deserialize_with = "deserialize_cid_option")]
+    #[serde(
+        serialize_with = "serialize_cid_option",
+        deserialize_with = "deserialize_cid_option"
+    )]
     pub parent: Option<Cid>,
     /// Type of event this node represents
     pub event_type: DagEventType,
@@ -80,7 +83,10 @@ pub struct LineageAttestation {
     #[serde(serialize_with = "serialize_cid", deserialize_with = "deserialize_cid")]
     pub event_cid: Cid,
     /// Previous attestations in the lineage chain
-    #[serde(serialize_with = "serialize_cid_vec", deserialize_with = "deserialize_cid_vec")]
+    #[serde(
+        serialize_with = "serialize_cid_vec",
+        deserialize_with = "deserialize_cid_vec"
+    )]
     pub previous_attestations: Vec<Cid>,
     /// Signatures from authenticating entities
     pub signatures: Vec<String>,
@@ -138,7 +144,7 @@ where
 }
 
 // Serializer for Vec<Cid>
-fn serialize_cid_vec<S>(cids: &Vec<Cid>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_cid_vec<S>(cids: &[Cid], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -153,28 +159,29 @@ where
 {
     let strings: Vec<String> = Vec::deserialize(deserializer)?;
     let mut cids = Vec::with_capacity(strings.len());
-    
+
     for s in strings {
         let cid = Cid::try_from(s)
             .map_err(|e| serde::de::Error::custom(format!("Invalid CID: {}", e)))?;
         cids.push(cid);
     }
-    
+
     Ok(cids)
 }
 
 impl DagNode {
     pub fn cid(&self) -> Result<Cid, DagError> {
-        let encoded = serde_cbor::to_vec(&self).map_err(|e| DagError::Serialization(e.to_string()))?;
+        let encoded =
+            serde_cbor::to_vec(&self).map_err(|e| DagError::Serialization(e.to_string()))?;
         let hash = Code::Sha2_256.digest(&encoded);
         Ok(Cid::new_v1(0x71, hash))
     }
-    
+
     /// Creates a builder initialized with values from this DagNode
     pub fn builder(&self) -> DagNodeBuilder {
         DagNodeBuilder {
             content: Some(self.content.clone()),
-            parent: self.parent.clone(),
+            parent: self.parent,
             event_type: Some(self.event_type.clone()),
             timestamp: Some(self.timestamp),
             scope_id: Some(self.scope_id.clone()),
@@ -189,6 +196,12 @@ pub struct DagNodeBuilder {
     event_type: Option<DagEventType>,
     timestamp: Option<u64>,
     scope_id: Option<String>,
+}
+
+impl Default for DagNodeBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DagNodeBuilder {
@@ -235,12 +248,12 @@ impl DagNodeBuilder {
 
     /// Builds a DagNode if all required fields are set
     pub fn build(self) -> Result<DagNode, DagError> {
-        let timestamp = self.timestamp.unwrap_or_else(|| 
+        let timestamp = self.timestamp.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("Time went backwards")
                 .as_millis() as u64
-        );
+        });
 
         match (self.content, self.event_type, self.scope_id) {
             (Some(content), Some(event_type), Some(scope_id)) => Ok(DagNode {
@@ -250,9 +263,15 @@ impl DagNodeBuilder {
                 timestamp,
                 scope_id,
             }),
-            (None, _, _) => Err(DagError::InvalidStructure("Content is required".to_string())),
-            (_, None, _) => Err(DagError::InvalidStructure("Event type is required".to_string())),
-            (_, _, None) => Err(DagError::InvalidStructure("Scope ID is required".to_string())),
+            (None, _, _) => Err(DagError::InvalidStructure(
+                "Content is required".to_string(),
+            )),
+            (_, None, _) => Err(DagError::InvalidStructure(
+                "Event type is required".to_string(),
+            )),
+            (_, _, None) => Err(DagError::InvalidStructure(
+                "Scope ID is required".to_string(),
+            )),
         }
     }
 }
@@ -285,12 +304,12 @@ mod tests {
             .scope_id("test_scope".to_string())
             .build()
             .unwrap();
-        
+
         let parent_cid = parent_node.cid().unwrap();
 
         let child_node = DagNodeBuilder::new()
             .content("Child content".to_string())
-            .parent(parent_cid.clone())
+            .parent(parent_cid)
             .event_type(DagEventType::Proposal)
             .scope_id("test_scope".to_string())
             .build()

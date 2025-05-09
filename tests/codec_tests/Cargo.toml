@@ -1,0 +1,12 @@
+[package]
+name = "codec-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+icn-types = { path = "../../crates/common/icn-types" }
+cid = { version = "0.10", features = ["serde"] }
+multihash = "0.18"
+
+[dev-dependencies]
+assert_matches = "1.5" 
