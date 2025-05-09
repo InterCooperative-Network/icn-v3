@@ -2,6 +2,13 @@
 _default:
     @just --list
 
+alias icn-agoranet := agoranet-dev
+
+# Run AgoraNet development server
+agoranet-dev:
+    @echo "Starting AgoraNet development server on port 8787..."
+    @RUST_LOG=icn_agoranet=debug,tower_http=debug cargo run -p icn-agoranet
+
 # Run all CI checks
 ci: lint test
 
