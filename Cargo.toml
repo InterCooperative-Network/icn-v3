@@ -3,11 +3,14 @@ members = [
     "crates/common/icn-types",
     "crates/common/icn-crypto",
     "crates/common/icn-identity-core",
+    "crates/common/icn-economics",
     "crates/ccl/icn-ccl-parser",
     "crates/ccl/icn-ccl-compiler",
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
+    "crates/p2p/planetary-mesh",
     "crates/tools/icn-cli",
+    "crates/tools/meshctl",
     "tests/codec_tests"
 ]
 resolver = "2"

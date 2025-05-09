@@ -1,0 +1,99 @@
+// Mesh Job Submission CCL Example
+// This is an example of a CCL file that submits a computation job to the mesh network
+
+// Metadata
+title: "Data Processing Job";
+description: "Submit a data analysis task to the mesh network";
+author: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+created: "2023-11-15T10:30:00Z";
+version: "1.0.0";
+
+// Resource allocation
+resources {
+  // Total resource allocation
+  compute: 1000;
+  storage: 5000;
+  bandwidth: 2000;
+  
+  // Token scope
+  scope: "data-analysis";
+  
+  // Usage policies
+  policies {
+    compute: "quota";
+    storage: "rate-limit";
+    bandwidth: "allow-all";
+  }
+}
+
+// Job configuration
+job {
+  // Execution parameters
+  wasm_cid: "bafybeih7q27itb576mtmy5yzggkfzqnfj5dis4h2og6epvyvjyvcedwmze";
+  description: "Analyze cooperative voting patterns";
+  priority: "medium";
+  
+  // Resource requirements
+  requirements {
+    min_memory: 2048;
+    min_cpu_cores: 4;
+    min_storage: 10240;
+    max_execution_time: 3600;
+    features: ["avx", "sse4"];
+  }
+  
+  // Data inputs and outputs
+  input_data: "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+  output_location: "data/results";
+  
+  // Node preferences
+  node_preferences {
+    reputation_min: 80;
+    location: "us-west";
+    max_bid: 200;
+  }
+}
+
+// Execution instructions
+execution {
+  // Anchor this job to the DAG
+  anchor_data("mesh_job_submission");
+  
+  // Authorize resource usage
+  perform_action("compute_authorization", 1000);
+  
+  // Submit the job to the mesh network
+  submit_job(
+    wasm_cid: "bafybeih7q27itb576mtmy5yzggkfzqnfj5dis4h2og6epvyvjyvcedwmze",
+    description: "Analyze cooperative voting patterns",
+    resource_type: "compute",
+    resource_amount: 1000,
+    priority: "medium"
+  );
+  
+  // Mint receipt token for the submission
+  mint_tokens("job_submission_receipt", 1, "submitter");
+}
+
+// Result handling
+results {
+  // Verification requirements
+  verification {
+    federation_quorum: 0.5;
+    required_validators: 3;
+    verification_timeout: 3600;
+  }
+  
+  // Result storage
+  storage {
+    dag_anchor: true;
+    retention_period: "30d";
+    access_control: ["stewards", "analysis_committee"];
+  }
+  
+  // Result distribution
+  distribution {
+    notify_channels: ["email", "matrix"];
+    publish_summary: true;
+  }
+} 

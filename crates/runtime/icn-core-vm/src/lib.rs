@@ -68,6 +68,28 @@ pub struct HostContext {
     
     /// Resource usage records
     pub resource_usage: Arc<Mutex<Vec<(String, u64)>>>,
+    
+    /// Job submissions from this execution
+    pub job_submissions: Arc<Mutex<Vec<JobSubmission>>>,
+}
+
+/// A job submission from a WASM module
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobSubmission {
+    /// The WASM CID to execute
+    pub wasm_cid: String,
+    
+    /// Description of the job
+    pub description: String,
+    
+    /// Resource type to use
+    pub resource_type: String,
+    
+    /// Amount of resources to allocate
+    pub resource_amount: u64,
+    
+    /// Job priority
+    pub priority: String,
 }
 
 impl Default for HostContext {
@@ -77,6 +99,7 @@ impl Default for HostContext {
             logs: Arc::new(Mutex::new(Vec::new())),
             anchored_cids: Arc::new(Mutex::new(Vec::new())),
             resource_usage: Arc::new(Mutex::new(Vec::new())),
+            job_submissions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -124,6 +147,7 @@ impl CoVm {
         let anchor_func = self.create_anchor_function(&mut store)?;
         let check_auth_func = self.create_check_auth_function(&mut store)?;
         let record_usage_func = self.create_record_usage_function(&mut store)?;
+        let submit_job_func = self.create_submit_job_function(&mut store)?;
         
         // Instantiate the module with host functions
         let instance = Instance::new(
@@ -134,6 +158,7 @@ impl CoVm {
                 anchor_func.into(),
                 check_auth_func.into(),
                 record_usage_func.into(),
+                submit_job_func.into(),
             ],
         ).map_err(|e| anyhow!("Failed to instantiate WASM module: {}", e))?;
         
@@ -345,6 +370,92 @@ impl CoVm {
         );
         
         Ok(record_usage_func)
+    }
+    
+    /// Create host function for submitting a job
+    fn create_submit_job_function(&self, store: &mut Store<&mut HostContext>) -> Result<Func> {
+        let submit_job_func = Func::wrap(
+            store,
+            |mut caller: wasmtime::Caller<'_, &mut HostContext>, 
+             wasm_cid_ptr: i32, wasm_cid_len: i32,
+             desc_ptr: i32, desc_len: i32,
+             type_ptr: i32, type_len: i32,
+             amount: i64,
+             priority_ptr: i32, priority_len: i32| -> Result<i32, wasmtime::Trap> {
+                // Increment host call counter
+                {
+                    let mut metrics = caller.data().metrics.lock().unwrap();
+                    metrics.host_calls += 1;
+                }
+                
+                // Read memory from WASM
+                let memory = match caller.get_export("memory") {
+                    Some(wasmtime::Extern::Memory(mem)) => mem,
+                    _ => return Err(wasmtime::Trap::new("Failed to find memory export")),
+                };
+                
+                let wasm_cid_data = memory.data(&caller)
+                    .get(wasm_cid_ptr as u32 as usize..(wasm_cid_ptr as u32 + wasm_cid_len as u32) as usize)
+                    .ok_or_else(|| wasmtime::Trap::new("Invalid memory access"))?;
+                
+                let wasm_cid = match std::str::from_utf8(wasm_cid_data) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => return Err(wasmtime::Trap::new("Invalid UTF-8 in WASM CID")),
+                };
+                
+                let desc_data = memory.data(&caller)
+                    .get(desc_ptr as u32 as usize..(desc_ptr as u32 + desc_len as u32) as usize)
+                    .ok_or_else(|| wasmtime::Trap::new("Invalid memory access"))?;
+                
+                let description = match std::str::from_utf8(desc_data) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => return Err(wasmtime::Trap::new("Invalid UTF-8 in job description")),
+                };
+                
+                let type_data = memory.data(&caller)
+                    .get(type_ptr as u32 as usize..(type_ptr as u32 + type_len as u32) as usize)
+                    .ok_or_else(|| wasmtime::Trap::new("Invalid memory access"))?;
+                
+                let resource_type = match std::str::from_utf8(type_data) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => return Err(wasmtime::Trap::new("Invalid UTF-8 in resource type")),
+                };
+                
+                let priority_data = memory.data(&caller)
+                    .get(priority_ptr as u32 as usize..(priority_ptr as u32 + priority_len as u32) as usize)
+                    .ok_or_else(|| wasmtime::Trap::new("Invalid memory access"))?;
+                
+                let priority = match std::str::from_utf8(priority_data) {
+                    Ok(s) => s.to_string(),
+                    Err(_) => return Err(wasmtime::Trap::new("Invalid UTF-8 in job priority")),
+                };
+                
+                // Create the job submission
+                let submission = JobSubmission {
+                    wasm_cid,
+                    description,
+                    resource_type,
+                    resource_amount: amount as u64,
+                    priority,
+                };
+                
+                // Record the job submission
+                caller.data().job_submissions.lock().unwrap().push(submission);
+                
+                // Update IO metrics
+                {
+                    let mut metrics = caller.data().metrics.lock().unwrap();
+                    metrics.io_bytes += wasm_cid_data.len() as u64 +
+                        desc_data.len() as u64 +
+                        type_data.len() as u64 +
+                        priority_data.len() as u64;
+                }
+                
+                Ok(1)
+            },
+        );
+        
+        Ok(submit_job_func)
     }
 }
 

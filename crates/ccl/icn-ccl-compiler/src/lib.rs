@@ -45,6 +45,15 @@ pub enum DslOpcode {
     
     /// Mint a token
     MintToken { token_type: String, amount: u64, recipient: String },
+    
+    /// Submit a job to the planetary mesh
+    SubmitJob { 
+        wasm_cid: String, 
+        description: String,
+        resource_type: String,
+        resource_amount: u64,
+        priority: String,
+    },
 }
 
 /// DSL program structure
@@ -96,6 +105,19 @@ extern "C" {
     
     // Record resource usage
     fn host_record_resource_usage(type_ptr: *const u8, type_len: usize, amount: i64);
+    
+    // Submit a job to the mesh network
+    fn host_submit_job(
+        wasm_cid_ptr: *const u8, 
+        wasm_cid_len: usize,
+        description_ptr: *const u8,
+        description_len: usize,
+        resource_type_ptr: *const u8,
+        resource_type_len: usize,
+        resource_amount: u64,
+        priority_ptr: *const u8,
+        priority_len: usize
+    ) -> i32;
 }
 
 // Helper function to log a message
@@ -136,6 +158,24 @@ fn record_usage(resource_type: &str, amount: u64) {
     }
 }
 
+// Helper function to submit a job to the mesh network
+fn submit_job(wasm_cid: &str, description: &str, resource_type: &str, amount: u64, priority: &str) -> bool {
+    let result = unsafe {
+        host_submit_job(
+            wasm_cid.as_ptr(),
+            wasm_cid.len(),
+            description.as_ptr(),
+            description.len(),
+            resource_type.as_ptr(),
+            resource_type.len(),
+            amount,
+            priority.as_ptr(),
+            priority.len()
+        )
+    };
+    result != 0
+}
+
 // Program entrypoint
 #[no_mangle]
 pub extern "C" fn run() {
@@ -170,6 +210,29 @@ pub extern "C" fn run() {
         log("Token minting authorized and recorded");
     } else {
         log("Token minting not authorized");
+    }
+    {{/if}}
+    
+    {{#if (eq this.type "SubmitJob")}}
+    // Submit job to mesh network
+    log("Submitting job: {{this.description}} (WASM: {{this.wasm_cid}})");
+    if check_authorization("{{this.resource_type}}", {{this.resource_amount}}) {
+        let job_submitted = submit_job(
+            "{{this.wasm_cid}}",
+            "{{this.description}}",
+            "{{this.resource_type}}",
+            {{this.resource_amount}},
+            "{{this.priority}}"
+        );
+        
+        if job_submitted {
+            record_usage("{{this.resource_type}}", {{this.resource_amount}});
+            log("Job submitted successfully");
+        } else {
+            log("Failed to submit job");
+        }
+    } else {
+        log("Job submission not authorized - insufficient resource quota");
     }
     {{/if}}
     {{/each}}
@@ -235,6 +298,13 @@ impl CclCompiler {
                     token_type: "governance_token".to_string(),
                     amount: 100,
                     recipient: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
+                },
+                DslOpcode::SubmitJob {
+                    wasm_cid: "bafybeih7q27itb576mtmy5yzggkfzqnfj5dis4h2og6epvyvjyvcedwmze".to_string(),
+                    description: "Data processing task".to_string(),
+                    resource_type: "compute".to_string(),
+                    resource_amount: 500,
+                    priority: "medium".to_string(),
                 },
             ],
         };
