@@ -24,6 +24,7 @@ if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/
 fi
 
 COMPOSE_FILE="monitoring/docker-compose.yml"
+PROJECT_ROOT=$(pwd)
 
 # Check if compose file exists
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -45,6 +46,33 @@ if docker ps | grep -q "icn-prometheus" || docker ps | grep -q "icn-grafana"; th
         exit 0
     fi
 fi
+
+# Create data directories for development setup
+echo -e "\n${BLUE}▶ Creating data directories...${NC}"
+mkdir -p $PROJECT_ROOT/monitoring/data/prometheus
+mkdir -p $PROJECT_ROOT/monitoring/data/grafana
+
+# Process federation endpoints for Prometheus
+echo -e "\n${BLUE}▶ Generating Prometheus configuration...${NC}"
+FEDERATION_TARGETS=""
+FEDERATION_ENDPOINTS="localhost:8081"
+IFS=',' read -ra ENDPOINTS <<< "$FEDERATION_ENDPOINTS"
+for ENDPOINT in "${ENDPOINTS[@]}"; do
+  FEDERATION_TARGETS+="      - targets: [\"$ENDPOINT\"]\n        labels:\n          federation: \"test-federation\"\n          instance_type: \"federation\"\n"
+done
+
+# Create the prometheus.yml file from template
+cd $PROJECT_ROOT
+sed "s|\$FEDERATION_TARGETS|$FEDERATION_TARGETS|g" "monitoring/prometheus.yml.template" | \
+sed "s|\$COOPERATIVE_TARGETS||g" | \
+sed "s|\$COMMUNITY_TARGETS||g" > "monitoring/prometheus.yml"
+
+# Setup environment variables for development
+export PROMETHEUS_DATA_DIR="$PROJECT_ROOT/monitoring/data/prometheus"
+export GRAFANA_DATA_DIR="$PROJECT_ROOT/monitoring/data/grafana"
+export PROMETHEUS_PORT=9090
+export GRAFANA_PORT=3000
+export GRAFANA_ADMIN_PASSWORD=admin
 
 # Start the monitoring stack
 echo -e "\n${BLUE}▶ Starting monitoring stack...${NC}"
@@ -78,6 +106,6 @@ echo -e "- Grafana: ${GREEN}http://localhost:3000${NC} (default login: admin/adm
 echo -e "\n${BLUE}▶ Next steps:${NC}"
 echo -e "1. Configure your ICN Agoranet instance to expose metrics on port 8081"
 echo -e "2. Log in to Grafana and explore the 'ICN Federation Overview' dashboard"
-echo -e "3. Add your federation-specific targets to Prometheus configuration"
+echo -e "3. For production deployment, use: ${GREEN}sudo ./monitoring/install_monitoring.sh${NC}"
 
-echo -e "\n${GREEN}Setup complete!${NC}" 
+echo -e "\n${GREEN}Development setup complete!${NC}" 

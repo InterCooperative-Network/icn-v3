@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "prometheus-rules.yml"
+
+# A scrape configuration containing ICN endpoints to scrape
+scrape_configs:
+  - job_name: "icn_federation"
+    static_configs:
+      # Federation endpoints will be populated dynamically
+      $FEDERATION_TARGETS
+
+  - job_name: "icn_cooperative"
+    static_configs:
+      # Cooperative endpoints will be populated dynamically
+      $COOPERATIVE_TARGETS
+
+  - job_name: "icn_community"
+    static_configs:
+      # Community endpoints will be populated dynamically
+      $COMMUNITY_TARGETS
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"] 

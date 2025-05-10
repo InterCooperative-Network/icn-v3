@@ -97,7 +97,7 @@ Follow these steps to deploy a complete ICN v3 federation:
 4. **Setup Monitoring (Optional but Recommended)**
 
 ```bash
-# Set up monitoring for your federation
+# Set up monitoring for your federation with Docker Compose
 cd ../monitoring
 ./setup_monitoring_stack.sh
 ```
@@ -105,8 +105,12 @@ cd ../monitoring
 For production deployments, it's recommended to install monitoring as a systemd service:
 
 ```bash
-# Install monitoring as a systemd service
-sudo ./monitoring/install_monitoring.sh
+# Install monitoring as a systemd service with custom federation settings
+sudo ./monitoring/install_monitoring.sh \
+  --federation-id myfederation \
+  --federation-name "My Federation" \
+  --data-dir /var/lib/icn \
+  --federation-endpoints localhost:8081,localhost:8082
 ```
 
 The monitoring stack provides:
@@ -114,6 +118,11 @@ The monitoring stack provides:
 - Performance and health monitoring
 - Resource utilization tracking
 - Alerts and notifications
+- Systemd integration for automatic startup
+
+To verify your monitoring installation, visit:
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (default login: admin/admin)
 
 ## ICN Structure Overview
 

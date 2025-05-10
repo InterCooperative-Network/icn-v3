@@ -7,7 +7,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml
-      - prometheus_data:/prometheus
+      - ${PROMETHEUS_DATA_DIR:-./data/prometheus}:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -15,7 +15,7 @@ services:
       - --web.console.templates=/usr/share/prometheus/consoles
       - --web.enable-lifecycle
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     restart: unless-stopped
     networks:
       - monitoring
@@ -24,16 +24,17 @@ services:
     image: grafana/grafana:9.1.0
     container_name: icn-grafana
     volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana-dashboard-federation-overview.json:/var/lib/grafana/dashboards/federation-overview.json
+      - ${GRAFANA_DATA_DIR:-./data/grafana}:/var/lib/grafana
+      - ./dashboards:/var/lib/grafana/dashboards
       - ./grafana-provisioning:/etc/grafana/provisioning
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
-      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANONYMOUS_ACCESS:-false}
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
     restart: unless-stopped
