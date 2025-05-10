@@ -11,7 +11,7 @@ import { TokenCharts } from '../../components/dashboard/token-charts';
 export default function TokensPage() {
   const searchParams = useSearchParams();
   const dateParam = searchParams.get('date');
-  const accountParam = searchParams.get('account');
+  const didParam = searchParams.get('account') || searchParams.get('did');
   
   const [tokens, setTokens] = useState<Token[]>([]);
   const [transactions, setTransactions] = useState<TokenTransaction[]>([]);
@@ -32,7 +32,7 @@ export default function TokensPage() {
         // Create filter object from URL parameters
         const filter: TokenFilter = {};
         if (dateParam) filter.date = dateParam;
-        if (accountParam) filter.account = accountParam;
+        if (didParam) filter.did = didParam;
         
         // Try to fetch token balances from API first
         let tokenData;
@@ -44,7 +44,7 @@ export default function TokensPage() {
           tokenData = await ICNApi.getTokenBalances(filter);
           
           // Get transactions if we have a date or account filter
-          if (dateParam || accountParam) {
+          if (dateParam || didParam) {
             transactionData = await ICNApi.getTokenTransactions(filter);
           }
           
@@ -54,7 +54,7 @@ export default function TokensPage() {
           // If API calls fail, use mock data
           tokenData = getMockData.tokenBalances();
           
-          if (dateParam || accountParam) {
+          if (dateParam || didParam) {
             transactionData = getMockData.tokenTransactions(filter);
           }
           
@@ -73,18 +73,18 @@ export default function TokensPage() {
     };
 
     fetchData();
-  }, [dateParam, accountParam]);
+  }, [dateParam, didParam]);
 
   // Apply URL parameter filters
   useEffect(() => {
     if (dateParam) {
       setFilterInfo(`Showing token activity on ${dateParam}`);
-    } else if (accountParam) {
-      setFilterInfo(`Showing details for account ${formatCID(accountParam)}`);
+    } else if (didParam) {
+      setFilterInfo(`Showing details for account ${formatCID(didParam)}`);
     } else {
       setFilterInfo(null);
     }
-  }, [dateParam, accountParam]);
+  }, [dateParam, didParam]);
 
   // Clear any active filters
   const clearFilters = () => {
@@ -173,7 +173,7 @@ export default function TokensPage() {
         )}
         
         {/* Token metrics - hide if filtered to a specific date or account */}
-        {stats && !dateParam && !accountParam && (
+        {stats && !dateParam && !didParam && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
               <CardContent className="pt-6">
@@ -203,13 +203,13 @@ export default function TokensPage() {
         )}
         
         {/* Token chart or table view */}
-        {view === "chart" && !accountParam ? (
+        {view === "chart" && !didParam ? (
           <TokenCharts />
         ) : (
           <Card>
             <CardHeader>
               <CardTitle>
-                {accountParam ? `Account Details: ${formatCID(accountParam)}` : 
+                {didParam ? `Account Details: ${formatCID(didParam)}` : 
                  dateParam ? `Token Activity on ${dateParam}` : 
                  "Token Balances"}
               </CardTitle>
@@ -257,7 +257,7 @@ export default function TokensPage() {
                   </div>
                   
                   {/* Transaction history section */}
-                  {(dateParam || accountParam) && transactions.length > 0 && (
+                  {(dateParam || didParam) && transactions.length > 0 && (
                     <div className="mt-8">
                       <h3 className="text-lg font-medium mb-4">
                         {dateParam ? "Transactions on this date" : "Account Transactions"}
@@ -277,12 +277,12 @@ export default function TokensPage() {
                           <tbody>
                             {transactions.map((tx, index) => (
                               <tr key={index} className={index % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                                <td className="px-4 py-2 text-sm font-mono">{tx.id}</td>
+                                <td className="px-4 py-2 text-sm font-mono">{tx.id || `-`}</td>
                                 <td className="px-4 py-2 text-sm font-mono">
-                                  {formatCID(tx.from_did)}
+                                  {formatCID(tx.from)}
                                 </td>
                                 <td className="px-4 py-2 text-sm font-mono">
-                                  {formatCID(tx.to_did)}
+                                  {formatCID(tx.to)}
                                 </td>
                                 <td className="px-4 py-2 text-sm text-right">{tx.amount.toLocaleString()}</td>
                                 <td className="px-4 py-2 text-sm">
@@ -293,7 +293,7 @@ export default function TokensPage() {
                                       ? "bg-red-100 text-red-800"
                                       : "bg-blue-100 text-blue-800"
                                   }`}>
-                                    {tx.operation}
+                                    {tx.operation || "transfer"}
                                   </span>
                                 </td>
                                 <td className="px-4 py-2 text-sm">{formatDate(tx.timestamp)}</td>

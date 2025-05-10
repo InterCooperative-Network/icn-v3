@@ -21,6 +21,7 @@ import {
   CardTitle 
 } from "../ui/card";
 import { ExecutionReceipt, ICNApi, getMockData } from "../../lib/api";
+import { useRealtimeEvent, RealtimeEvent } from "../../lib/realtime";
 
 // Function to process receipts for visualization
 const processReceiptsForChart = (receipts: ExecutionReceipt[]) => {
@@ -101,6 +102,12 @@ export function ReceiptCharts() {
   }>({ executorData: [], timeSeriesData: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Subscribe to real-time receipt updates
+  const { data: newReceipts, lastUpdated, isConnected } = useRealtimeEvent<ExecutionReceipt>(
+    RealtimeEvent.RECEIPT_CREATED, 
+    []
+  );
 
   useEffect(() => {
     const fetchData = async () => {
@@ -123,6 +130,65 @@ export function ReceiptCharts() {
 
     fetchData();
   }, []);
+  
+  // Update charts when new receipts come in via WebSocket
+  useEffect(() => {
+    if (newReceipts.length > 0) {
+      // Get current data
+      const allReceipts = [...newReceipts];
+      
+      // Process the combined data
+      const processedData = processReceiptsForChart(allReceipts);
+      
+      // Update the state with merged data
+      setReceiptData(prevData => {
+        // Merge the new executor data with existing data
+        const mergedExecutorData = [...prevData.executorData];
+        processedData.executorData.forEach(newItem => {
+          const existingIndex = mergedExecutorData.findIndex(item => item.executorDid === newItem.executorDid);
+          if (existingIndex >= 0) {
+            // Update existing executor data
+            mergedExecutorData[existingIndex] = {
+              ...mergedExecutorData[existingIndex],
+              CPU: mergedExecutorData[existingIndex].CPU + newItem.CPU,
+              Memory: mergedExecutorData[existingIndex].Memory + newItem.Memory,
+              Storage: mergedExecutorData[existingIndex].Storage + newItem.Storage,
+              count: mergedExecutorData[existingIndex].count + newItem.count
+            };
+          } else {
+            // Add new executor data
+            mergedExecutorData.push(newItem);
+          }
+        });
+        
+        // Merge the time series data
+        const mergedTimeSeriesData = [...prevData.timeSeriesData];
+        processedData.timeSeriesData.forEach(newItem => {
+          const existingIndex = mergedTimeSeriesData.findIndex(item => item.date === newItem.date);
+          if (existingIndex >= 0) {
+            // Update existing time series data
+            mergedTimeSeriesData[existingIndex] = {
+              ...mergedTimeSeriesData[existingIndex],
+              count: mergedTimeSeriesData[existingIndex].count + newItem.count,
+              totalCPU: mergedTimeSeriesData[existingIndex].totalCPU + newItem.totalCPU,
+              totalMemory: mergedTimeSeriesData[existingIndex].totalMemory + newItem.totalMemory
+            };
+          } else {
+            // Add new time series data
+            mergedTimeSeriesData.push(newItem);
+          }
+        });
+        
+        // Return the merged data
+        return {
+          executorData: mergedExecutorData,
+          timeSeriesData: mergedTimeSeriesData.sort((a, b) => 
+            new Date(a.date).getTime() - new Date(b.date).getTime()
+          )
+        };
+      });
+    }
+  }, [newReceipts]);
 
   // Handle clicks on chart data points
   const handleDateClick = (data: any) => {
@@ -142,7 +208,15 @@ export function ReceiptCharts() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Receipt Analytics</CardTitle>
+        <CardTitle className="flex justify-between items-center">
+          <span>Receipt Analytics</span>
+          {lastUpdated && (
+            <span className="text-xs text-slate-500 flex items-center">
+              <span className={`inline-block w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+              Last updated: {new Date(lastUpdated).toLocaleTimeString()}
+            </span>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {loading ? (
@@ -173,14 +247,20 @@ export function ReceiptCharts() {
                       dataKey="count" 
                       stroke="#8884d8" 
                       name="Receipts"
-                      activeDot={{ r: 8, onClick: (e, payload) => handleDateClick(payload.payload) }}
+                      activeDot={{ 
+                        r: 8, 
+                        onClick: (e: any, payload: any) => handleDateClick(payload) 
+                      }}
                     />
                     <Line 
                       type="monotone" 
                       dataKey="totalCPU" 
                       stroke="#82ca9d" 
                       name="CPU Usage" 
-                      activeDot={{ r: 8, onClick: (e, payload) => handleDateClick(payload.payload) }}
+                      activeDot={{ 
+                        r: 8, 
+                        onClick: (e: any, payload: any) => handleDateClick(payload) 
+                      }}
                     />
                   </LineChart>
                 </ResponsiveContainer>

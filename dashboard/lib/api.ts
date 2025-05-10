@@ -3,7 +3,7 @@ import axios from "axios";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
 const apiClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: `${API_BASE_URL}/api/v1`,
   headers: {
     "Content-Type": "application/json",
   },
@@ -54,11 +54,11 @@ export interface Token {
 }
 
 export interface TokenTransaction {
-  id: string;
-  from_did: string;
-  to_did: string;
+  id?: string;
+  from: string;
+  to: string;
   amount: number;
-  operation: "mint" | "burn" | "transfer";
+  operation?: "mint" | "burn" | "transfer";
   timestamp: string;
 }
 
@@ -89,8 +89,8 @@ export interface ReceiptFilter {
 }
 
 export interface TokenFilter {
+  did?: string;
   date?: string;
-  account?: string;
   limit?: number;
   offset?: number;
 }
@@ -99,13 +99,13 @@ export interface TokenFilter {
 export const ICNApi = {
   // Federation nodes
   async getFederationNodes(): Promise<FederationNode[]> {
-    const { data } = await apiClient.get("/api/v1/federation/nodes");
+    const { data } = await apiClient.get("/federation/nodes");
     return data;
   },
 
   // Receipts
   async getLatestReceipts(limit: number = 10): Promise<ExecutionReceipt[]> {
-    const { data } = await apiClient.get(`/api/v1/receipts/latest?limit=${limit}`);
+    const { data } = await apiClient.get(`/receipts?limit=${limit}`);
     return data;
   },
 
@@ -117,23 +117,23 @@ export const ICNApi = {
     if (filter.limit) params.append('limit', filter.limit.toString());
     if (filter.offset) params.append('offset', filter.offset.toString());
     
-    const { data } = await apiClient.get(`/api/v1/receipts?${params.toString()}`);
+    const { data } = await apiClient.get(`/receipts?${params.toString()}`);
     return data;
   },
 
   async getReceiptsByExecutor(executorDid: string): Promise<ExecutionReceipt[]> {
-    const { data } = await apiClient.get(`/api/v1/receipts/by-executor/${executorDid}`);
+    const { data } = await apiClient.get(`/receipts?executor=${executorDid}`);
     return data;
   },
 
   async getReceiptsByDate(date: string): Promise<ExecutionReceipt[]> {
-    const { data } = await apiClient.get(`/api/v1/receipts/by-date/${date}`);
+    const { data } = await apiClient.get(`/receipts?date=${date}`);
     return data;
   },
 
   async getReceiptsByCID(cid: string): Promise<ExecutionReceipt | null> {
     try {
-      const { data } = await apiClient.get(`/api/v1/receipts/${cid}`);
+      const { data } = await apiClient.get(`/receipts/${cid}`);
       return data;
     } catch (error) {
       return null;
@@ -153,7 +153,7 @@ export const ICNApi = {
     if (filter?.date) params.append('date', filter.date);
     if (filter?.executor) params.append('executor', filter.executor);
     
-    const { data } = await apiClient.get(`/api/v1/receipts/stats?${params.toString()}`);
+    const { data } = await apiClient.get(`/receipts/stats?${params.toString()}`);
     return data;
   },
 
@@ -161,11 +161,11 @@ export const ICNApi = {
   async getTokenBalances(filter?: TokenFilter): Promise<Token[]> {
     const params = new URLSearchParams();
     
-    if (filter?.account) params.append('account', filter.account);
+    if (filter?.did) params.append('did', filter.did);
     if (filter?.limit) params.append('limit', filter.limit.toString());
     if (filter?.offset) params.append('offset', filter.offset.toString());
     
-    const { data } = await apiClient.get(`/api/v1/tokens/balances?${params.toString()}`);
+    const { data } = await apiClient.get(`/tokens/balances?${params.toString()}`);
     return data;
   },
 
@@ -173,11 +173,11 @@ export const ICNApi = {
     const params = new URLSearchParams();
     
     if (filter?.date) params.append('date', filter.date);
-    if (filter?.account) params.append('account', filter.account);
+    if (filter?.did) params.append('did', filter.did);
     if (filter?.limit) params.append('limit', filter.limit.toString());
     if (filter?.offset) params.append('offset', filter.offset.toString());
     
-    const { data } = await apiClient.get(`/api/v1/tokens/transactions?${params.toString()}`);
+    const { data } = await apiClient.get(`/tokens/transactions?${params.toString()}`);
     return data;
   },
 
@@ -186,21 +186,21 @@ export const ICNApi = {
     
     if (filter?.date) params.append('date', filter.date);
     
-    const { data } = await apiClient.get(`/api/v1/tokens/stats?${params.toString()}`);
+    const { data } = await apiClient.get(`/tokens/stats?${params.toString()}`);
     return data;
   },
 
   // Governance
   async getGovernanceProposals(): Promise<GovernanceProposal[]> {
-    const { data } = await apiClient.get("/api/v1/governance/proposals");
+    const { data } = await apiClient.get("/governance/proposals");
     return data;
   },
 
   // DAG access
   async getDagNodes(eventType?: string, limit: number = 10): Promise<DagNode[]> {
     const url = eventType
-      ? `/api/v1/dag/nodes?type=${eventType}&limit=${limit}`
-      : `/api/v1/dag/nodes?limit=${limit}`;
+      ? `/dag/nodes?type=${eventType}&limit=${limit}`
+      : `/dag/nodes?limit=${limit}`;
     const { data } = await apiClient.get(url);
     return data;
   },
@@ -379,8 +379,8 @@ export const getMockData = {
       
       transactions.push({
         id: `tx-${i}`,
-        from_did: operation === "burn" ? fromAccount : operation === "mint" ? "did:icn:treasury" : fromAccount,
-        to_did: operation === "mint" ? toAccount : operation === "burn" ? "did:icn:treasury" : toAccount,
+        from: operation === "burn" ? fromAccount : operation === "mint" ? "did:icn:treasury" : fromAccount,
+        to: operation === "mint" ? toAccount : operation === "burn" ? "did:icn:treasury" : toAccount,
         amount: Math.floor(Math.random() * 1000) + 100,
         operation,
         timestamp: new Date(Date.now() - daysAgo * 86400000).toISOString()
@@ -398,9 +398,9 @@ export const getMockData = {
     }
     
     // Apply account filter
-    if (filter?.account) {
+    if (filter?.did) {
       filtered = filtered.filter(tx => 
-        tx.from_did === filter.account || tx.to_did === filter.account
+        tx.from === filter.did || tx.to === filter.did
       );
     }
     
@@ -439,8 +439,8 @@ export const getMockData = {
       
       const activeAccounts = new Set();
       transactions.forEach(tx => {
-        if (tx.from_did !== "did:icn:treasury") activeAccounts.add(tx.from_did);
-        if (tx.to_did !== "did:icn:treasury") activeAccounts.add(tx.to_did);
+        if (tx.from !== "did:icn:treasury") activeAccounts.add(tx.from);
+        if (tx.to !== "did:icn:treasury") activeAccounts.add(tx.to);
       });
       
       return {

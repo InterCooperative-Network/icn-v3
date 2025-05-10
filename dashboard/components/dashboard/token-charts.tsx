@@ -21,7 +21,8 @@ import {
   CardHeader, 
   CardTitle 
 } from "../ui/card";
-import { ICNApi, getMockData, Token } from "../../lib/api";
+import { ICNApi, getMockData, Token, TokenTransaction } from "../../lib/api";
+import { useRealtimeEvent, RealtimeEvent } from "../../lib/realtime";
 
 // Mock historical data since our API doesn't provide it yet
 const generateMockHistoricalData = () => {
@@ -62,6 +63,32 @@ export function TokenCharts() {
   const [historicalData, setHistoricalData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Subscribe to real-time token events
+  const { 
+    data: tokenMints, 
+    lastUpdated: mintLastUpdated, 
+    isConnected: mintConnected 
+  } = useRealtimeEvent<TokenTransaction>(RealtimeEvent.TOKEN_MINTED, []);
+  
+  const { 
+    data: tokenBurns,
+    lastUpdated: burnLastUpdated,
+    isConnected: burnConnected
+  } = useRealtimeEvent<TokenTransaction>(RealtimeEvent.TOKEN_BURNED, []);
+  
+  const { 
+    data: tokenTransfers,
+    lastUpdated: transferLastUpdated,
+    isConnected: transferConnected
+  } = useRealtimeEvent<TokenTransaction>(RealtimeEvent.TOKEN_TRANSFERRED, []);
+  
+  // Determine the latest update from any token event
+  const lastUpdated = [mintLastUpdated, burnLastUpdated, transferLastUpdated]
+    .filter(Boolean)
+    .sort((a, b) => b!.getTime() - a!.getTime())[0] || null;
+  
+  const isConnected = mintConnected || burnConnected || transferConnected;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -88,6 +115,66 @@ export function TokenCharts() {
 
     fetchData();
   }, []);
+  
+  // Update charts when new token transfers come in
+  useEffect(() => {
+    if (tokenTransfers.length > 0 || tokenMints.length > 0 || tokenBurns.length > 0) {
+      // For simplicity, we'll just refetch the data when we get any token event
+      // In a production app, you might want to update the state more intelligently
+      
+      ICNApi.getTokenBalances().catch(() => {
+        return getMockData.tokenBalances();
+      }).then(newTokenData => {
+        setTokens(newTokenData);
+      });
+      
+      // Update the historical data with the new token activity
+      setHistoricalData(prevData => {
+        const today = new Date().toISOString().split('T')[0];
+        const todayIndex = prevData.findIndex(item => item.date === today);
+        
+        // Calculate new mints and burns for today
+        let newMints = 0;
+        let newBurns = 0;
+        
+        tokenMints.forEach((mint: TokenTransaction) => {
+          if (new Date(mint.timestamp).toISOString().split('T')[0] === today) {
+            newMints += mint.amount;
+          }
+        });
+        
+        tokenBurns.forEach((burn: TokenTransaction) => {
+          if (new Date(burn.timestamp).toISOString().split('T')[0] === today) {
+            newBurns += burn.amount;
+          }
+        });
+        
+        if (todayIndex >= 0) {
+          // Update today's data
+          const updatedData = [...prevData];
+          updatedData[todayIndex] = {
+            ...updatedData[todayIndex],
+            minted: updatedData[todayIndex].minted + newMints,
+            burnt: updatedData[todayIndex].burnt + newBurns,
+            totalSupply: updatedData[todayIndex].totalSupply + (newMints - newBurns)
+          };
+          return updatedData;
+        } else {
+          // Add today's data if it doesn't exist
+          const lastItem = prevData[prevData.length - 1];
+          return [
+            ...prevData,
+            {
+              date: today,
+              totalSupply: lastItem.totalSupply + (newMints - newBurns),
+              minted: newMints,
+              burnt: newBurns
+            }
+          ];
+        }
+      });
+    }
+  }, [tokenTransfers, tokenMints, tokenBurns]);
 
   // Handle clicks on chart data points
   const handleDateClick = (data: any) => {
@@ -100,7 +187,7 @@ export function TokenCharts() {
   const handleHolderClick = (data: any) => {
     if (data && data.did) {
       // Navigate to tokens page with holder filter
-      router.push(`/tokens?account=${data.did}`);
+      router.push(`/tokens?did=${data.did}`);
     }
   };
 
@@ -140,7 +227,15 @@ export function TokenCharts() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Token Analytics</CardTitle>
+        <CardTitle className="flex justify-between items-center">
+          <span>Token Analytics</span>
+          {lastUpdated && (
+            <span className="text-xs text-slate-500 flex items-center">
+              <span className={`inline-block w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+              Last updated: {new Date(lastUpdated).toLocaleTimeString()}
+            </span>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {loading ? (

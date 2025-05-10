@@ -10,6 +10,7 @@ A modern, responsive dashboard for monitoring and managing the ICN (Inter-Crania
 - **Token Ledger**: Track token balances and economics metrics
 - **Visual Analytics**: Interactive charts for receipt and token statistics
 - **Detail Drill-Down**: Click on chart elements to explore filtered data views
+- **Live Updates**: WebSocket integration for real-time data streaming
 - **Governance Interface**: View and vote on governance proposals (coming soon)
 
 ## Tech Stack
@@ -17,8 +18,9 @@ A modern, responsive dashboard for monitoring and managing the ICN (Inter-Crania
 - **Next.js**: React framework for server-rendered applications
 - **TypeScript**: Type safety for better developer experience
 - **Tailwind CSS**: Utility-first CSS framework
-- **Axios**: Promise-based HTTP client for API requests
 - **Recharts**: Composable charting library for data visualization
+- **Socket.IO**: Real-time WebSocket communication
+- **Axios**: Promise-based HTTP client for API requests
 
 ## Getting Started
 
@@ -57,13 +59,29 @@ Create a `.env.local` file in the dashboard directory:
 
 ```
 NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_SOCKET_URL=http://localhost:8081
 ```
 
 ## Connecting to ICN Runtime
 
-By default, the dashboard connects to an ICN runtime at `http://localhost:8080`. You can change this by setting the `NEXT_PUBLIC_API_URL` environment variable.
+By default, the dashboard connects to an ICN runtime at `http://localhost:8080` for REST API calls and `http://localhost:8081` for WebSocket events. You can change these by setting the appropriate environment variables.
 
 If the API is not available, the dashboard will fall back to mock data for demonstration purposes.
+
+## Real-time Updates
+
+The dashboard includes WebSocket integration for live updates:
+
+- **Receipt Creation**: Receipt charts update automatically when new receipts are created
+- **Token Transactions**: Token balance and history charts update on mints, burns, and transfers
+- **Federation Nodes**: Node status indicators update when nodes go online or offline
+
+To test the real-time features locally, you can use the included WebSocket server example:
+
+```
+npm install socket.io express
+node websocket-server-example.js
+```
 
 ## Interactive Features
 
@@ -94,6 +112,14 @@ Create a new file in the `app` directory, e.g., `app/network/page.tsx`.
 ### API Integration
 
 Update the API client in `lib/api.ts` to add new endpoints as needed.
+
+### WebSocket Events
+
+The real-time events are defined in `lib/realtime.ts`. To add new event types:
+
+1. Add a new event type to the `RealtimeEvent` enum
+2. Update the WebSocket server to emit events with the matching type
+3. Use the `useRealtimeEvent` hook in your component to subscribe to the event
 
 ## License
 
