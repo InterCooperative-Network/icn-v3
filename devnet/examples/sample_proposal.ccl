@@ -1,7 +1,50 @@
-proposal "demo" {
-    thresholds {
-        range 0 10 {
-            approvers 1
-        }
+proposal {
+  title: "Test Federation Join Proposal"
+  version: "1.0.0"
+  description: "A test proposal for federation join workflow verification"
+  
+  // Governance rules
+  governance {
+    quorum_type: "majority"
+    min_signers: 2
+    voting_period: "24h"
+  }
+  
+  // Join requirements
+  join_requirements {
+    min_members: 3
+    max_members: 10
+    required_roles: ["steward", "validator"]
+    standing: "good"
+  }
+  
+  // Resource allocation
+  resources {
+    compute: {
+      allocation: 1000
+      unit: "credits"
     }
+    storage: {
+      allocation: 100
+      unit: "GB"
+    }
+    bandwidth: {
+      allocation: 50
+      unit: "Mbps"
+    }
+  }
+  
+  // Verification requirements
+  verification {
+    federation_quorum: 0.5
+    required_validators: 3
+    verification_timeout: 3600
+  }
+  
+  // Result storage
+  storage {
+    dag_anchor: true
+    retention_period: "30d"
+    access_control: ["stewards", "validators"]
+  }
 } 

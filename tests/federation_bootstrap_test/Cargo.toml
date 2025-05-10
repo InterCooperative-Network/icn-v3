@@ -1,0 +1,10 @@
+[package]
+name = "federation_bootstrap_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+icn-types = { path = "../../crates/common/icn-types" }
+icn-cli = { path = "../../crates/tools/icn-cli" } 

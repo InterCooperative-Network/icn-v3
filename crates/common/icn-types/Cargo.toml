@@ -14,10 +14,13 @@ rand = "0.7" # Required for ed25519-dalek v1.0
 base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
 icn-crypto = { path = "../icn-crypto" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "rt"] }
 
 [dev-dependencies]
 serde_test = "1"
 criterion = "0.4"
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [[bench]]
 name = "dag_benchmarks"

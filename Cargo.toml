@@ -14,9 +14,24 @@ members = [
     "crates/tools/icn-cli",
     "crates/tools/meshctl",
     "crates/services/icn-agoranet",
-    "tests/codec_tests"
+    "tests/federation_bootstrap_test"
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["ICN Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/intercooperative/icn-v3"
+
+[workspace.dependencies]
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [workspace.metadata.dev-dependencies]
 cargo-deny = { version = "^0.14", default-features = false }
