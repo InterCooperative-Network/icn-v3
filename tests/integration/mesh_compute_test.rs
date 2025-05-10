@@ -10,6 +10,8 @@ use p2p::planetary_mesh::{
 use std::path::Path;
 use std::{fs, str::FromStr};
 use uuid::Uuid;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 /// Test mesh job submission and execution flow
 #[tokio::test]
@@ -118,4 +120,129 @@ async fn test_mesh_compute_flow() -> Result<()> {
     assert_eq!(retrieved_receipt.job_id, job_id);
     
     Ok(())
+}
+
+#[test]
+fn test_submit_job_ccl_to_runtime_queue() {
+    // 1. Define a CCL Test Script
+    let ccl_script = r#"
+        actions:
+          - SubmitJob:
+              wasm_cid: "test_wasm_cid_123"
+              description: "A test mesh job"
+              input_data_cid: "test_input_cid_456"
+              entry_function: "main"
+              required_resources_json: "{"Cpu": 100, "Token": 10, "Memory": 256}"
+              qos_profile_json: "{"type": "BestEffort"}" 
+              max_acceptable_bid_tokens: 100
+              deadline_utc_ms: 1678886400000 # Example: 2023-03-15T12:00:00Z
+              metadata_json: "{"custom_key": "custom_value"}"
+    "#;
+
+    // 2. Compile CCL to WASM
+    let dsl_module_list: DslModuleList = parse_ccl(ccl_script).expect("CCL parsing failed");
+    let program = compile_dsl_to_program(dsl_module_list).expect("CCL compilation to program failed");
+    let wasm_bytes = program_to_wasm(&program);
+
+    // 3. Set Up icn-runtime::Runtime
+    let caller_did_str = "did:example:meshjobcaller";
+    let caller_did = Did::parse(caller_did_str).expect("Failed to parse caller_did");
+
+    let pending_mesh_jobs: Arc<Mutex<VecDeque<MeshJob>>> = Arc::new(Mutex::new(VecDeque::new()));
+    
+    let runtime_context = Arc::new(RuntimeContext {
+        pending_mesh_jobs: pending_mesh_jobs.clone(),
+        // Add other RuntimeContext fields with default/mock values if necessary
+        // For example, if RuntimeContext has an economic_state or similar that needs to be set up
+        // for host_submit_mesh_job's economic pre-checks.
+        // For now, assuming default construction or that these are not strictly needed for queueing.
+        ..Default::default() 
+    });
+
+    let host_env = ConcreteHostEnvironment::new(
+        caller_did.clone(),
+        Arc::new(MockStorage::new()),
+        runtime_context.clone(),
+        Arc::new(NoopTrustValidator),
+    );
+    
+    let runtime = Runtime::new_with_host_env(Arc::new(Mutex::new(host_env)));
+
+    // 4. Execute WASM
+    // The VMContext might be implicit if ConcreteHostEnvironment already has the caller_did
+    // Or it might be an explicit argument to execute_wasm. Checking Runtime::execute_wasm signature.
+    // Assuming execute_wasm doesn't need an explicit VmContext if host_env is configured.
+    // If execute_wasm expects a VmContext, it would be created here.
+    // For now, let's assume direct execution.
+    
+    // The default function executed by the CCL->WASM output might be "_start" or "main".
+    // If our program_to_wasm generates one function per opcode, we need a way to call that specific function,
+    // or ensure the first function in the WASM module is the one containing SubmitJob.
+    // The current program_to_wasm creates a function for each opcode, but doesn't export a main entry point
+    // that calls them sequentially. This needs to be addressed in the codegen or the test setup.
+    
+    // For this test to pass, program_to_wasm should ideally produce a WASM with a known entry point
+    // (e.g. "_start") that executes the opcodes, or we need to invoke a specific function.
+    // Let's assume for now program_to_wasm creates an implicit main flow or we can call the first function.
+    // This is a simplification for now.
+    
+    // Typically, the execute_wasm would call a main/exported function.
+    // The current CCL codegen puts each opcode into its own WASM function body.
+    // A "real" CCL execution would likely have a primary function in the WASM.
+    // For this test, we might need to know which function index corresponds to SubmitJob or ensure
+    // the WASM module has a single entry point executing all compiled opcodes.
+
+    // A more robust approach would be to have `program_to_wasm` create a main `_start` function.
+    // UPDATE: program_to_wasm now creates _start, and runtime calls it.
+    let execution_result = runtime.execute_wasm(&wasm_bytes, None, vec![]); // Call _start implicitly
+    
+    assert!(execution_result.is_ok(), "WASM execution failed: {:?}", execution_result.err());
+    let opt_return_values = execution_result.unwrap();
+    
+    assert!(opt_return_values.is_some(), "_start function did not return any values");
+    let return_values = opt_return_values.unwrap();
+    assert_eq!(return_values.len(), 1, "_start function should return exactly one i32 value");
+    
+    let job_id_len_or_error = return_values[0].i32().expect("_start function return value is not an i32");
+    assert!(job_id_len_or_error > 0, "host_submit_mesh_job (via _start) returned an error or zero length: {}", job_id_len_or_error);
+
+    // 5. Verify Job in Queue
+    let jobs_guard = pending_mesh_jobs.lock().unwrap();
+    assert_eq!(jobs_guard.len(), 1, "Expected 1 job in the queue");
+
+    let mesh_job = jobs_guard.front().expect("Job queue is empty after lock");
+
+    assert_eq!(mesh_job.originator_did, caller_did.to_string(), "Originator DID mismatch");
+    assert_eq!(mesh_job.params.wasm_cid, "test_wasm_cid_123", "WASM CID mismatch");
+    assert_eq!(mesh_job.params.description, "A test mesh job", "Description mismatch");
+    assert_eq!(mesh_job.params.input_data_cid, Some("test_input_cid_456".to_string()), "Input Data CID mismatch");
+    
+    let expected_resources: Vec<(ResourceType, u64)> = vec![
+        (ResourceType::Cpu, 100),
+        (ResourceType::Token, 10),
+        (ResourceType::Memory, 256),
+    ];
+    // Sort both for comparison as HashMap iteration order is not guaranteed
+    let mut sorted_actual_resources = mesh_job.params.resources_required.clone();
+    sorted_actual_resources.sort_by_key(|k| format!("{:?}", k.0)); 
+    // Expected is already sorted by key due to manual definition order, but good practice:
+    // let mut sorted_expected_resources = expected_resources;
+    // sorted_expected_resources.sort_by_key(|k| format!("{:?}", k.0));
+
+    assert_eq!(sorted_actual_resources.len(), expected_resources.len(), "Resource count mismatch");
+    for (actual, expected) in sorted_actual_resources.iter().zip(expected_resources.iter()) {
+        assert_eq!(actual.0, expected.0, "Resource type mismatch");
+        assert_eq!(actual.1, expected.1, "Resource amount mismatch for type {:?}", expected.0);
+    }
+
+    assert_eq!(mesh_job.params.qos_profile, QoSProfile::BestEffort, "QoS Profile mismatch");
+    assert_eq!(mesh_job.params.deadline, Some(1678886400000), "Deadline mismatch");
+    // metadata_json is not directly in MeshJobParams in the current icn-types/src/mesh.rs
+    // If it were added, we would assert it here. The opcode includes it.
+    // For example:
+    // assert_eq!(mesh_job.params.metadata.as_ref().unwrap().get("custom_key"), Some(&"custom_value".to_string()));
+
+    // Check JobId format (e.g., starts with "job_") - the actual UUID part is random
+    assert!(mesh_job.job_id.starts_with("job_"), "JobId format is incorrect");
+    assert!(mesh_job.job_id.len() > 4, "JobId seems too short"); 
 } 
