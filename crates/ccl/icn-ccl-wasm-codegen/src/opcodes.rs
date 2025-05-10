@@ -14,6 +14,7 @@ pub enum Opcode {
     // actions
     MintToken { res_type: String, amount: u64, recipient: Option<String> },
     AnchorData { path: Option<String>, data_ref: String },
+    CallHost { fn_name: String, args: Vec<String> },
 
     // control flow
     If { condition: String },

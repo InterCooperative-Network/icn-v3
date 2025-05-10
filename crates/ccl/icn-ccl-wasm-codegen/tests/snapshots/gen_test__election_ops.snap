@@ -29,16 +29,46 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: nomination = Map([Rule { key: \"duration\", value: String(\"14d\") }, Rule { key: \"self_nomination\", value: String(\"allowed\") }, Rule { key: \"peer_nomination\", value: Map([Rule { key: \"allowed\", value: Boolean(true) }, Rule { key: \"seconds_required\", value: Number(2.0) }]) }, Rule { key: \"confirmation_required\", value: Boolean(true) }])"
+      "Todo": "Unhandled DslRule in walk_rules: duration = String(\"14d\")"
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: campaign = Map([Rule { key: \"duration\", value: String(\"14d\") }, Rule { key: \"statement_allowed\", value: Boolean(true) }, Rule { key: \"q_and_a_session\", value: String(\"required\") }])"
+      "Todo": "Unhandled DslRule in walk_rules: self_nomination = String(\"allowed\")"
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: voting = Map([Rule { key: \"duration\", value: String(\"7d\") }, Rule { key: \"method\", value: String(\"single_transferable_vote\") }, Rule { key: \"eligibility\", value: Map([Rule { key: \"membership_duration\", value: String(\"30d\") }, Rule { key: \"standing\", value: String(\"good\") }]) }, Rule { key: \"quorum\", value: Number(0.4) }])"
+      "Todo": "Unhandled DslRule in walk_rules: allowed = Boolean(true)"
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: results = Map([Rule { key: \"publication_delay\", value: String(\"1d\") }])"
+      "Todo": "Unhandled DslRule in walk_rules: seconds_required = Number(2.0)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: confirmation_required = Boolean(true)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: duration = String(\"14d\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: statement_allowed = Boolean(true)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: q_and_a_session = String(\"required\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: duration = String(\"7d\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: method = String(\"single_transferable_vote\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: membership_duration = String(\"30d\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: standing = String(\"good\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: quorum = Number(0.4)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: publication_delay = String(\"1d\")"
     },
     "EndSection",
     {

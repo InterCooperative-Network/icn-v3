@@ -45,8 +45,44 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: thresholds = Map([Rule { key: \"range_0_500\", value: Range(RangeRule { start: 0.0, end: 500.0, rules: [Rule { key: \"approvers\", value: Number(1.0) }, Rule { key: \"required_role\", value: String(\"steward\") }] }) }, Rule { key: \"range_501_5000\", value: Range(RangeRule { start: 501.0, end: 5000.0, rules: [Rule { key: \"approvers\", value: Number(2.0) }, Rule { key: \"required_role\", value: String(\"finance_committee\") }] }) }, Rule { key: \"range_5001_999999999\", value: Range(RangeRule { start: 5001.0, end: 999999999.0, rules: [Rule { key: \"approval_threshold\", value: Number(0.6) }, Rule { key: \"quorum\", value: Number(0.5) }] }) }])"
+      "BeginSection": {
+        "kind": "range_0_500",
+        "title": "range_0_500"
+      }
     },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: approvers = Number(1.0)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: required_role = String(\"steward\")"
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "range_501_5000",
+        "title": "range_501_5000"
+      }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: approvers = Number(2.0)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: required_role = String(\"finance_committee\")"
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "range_5001_999999999",
+        "title": "range_5001_999999999"
+      }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: approval_threshold = Number(0.6)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: quorum = Number(0.5)"
+    },
+    "EndSection",
     "EndSection",
     {
       "BeginSection": {
@@ -58,7 +94,10 @@ expression: program_ops
       "Todo": "Unhandled DslRule in walk_rules: frequency = String(\"monthly\")"
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: reports = Map([Rule { key: \"spending_summary\", value: Map([Rule { key: \"fields\", value: List([String(\"category\"), String(\"subcategory\"), String(\"amount\"), String(\"remaining_budget\"), String(\"percentage_used\")]) }]) }, Rule { key: \"transaction_log\", value: Map([Rule { key: \"fields\", value: List([String(\"date\"), String(\"amount\"), String(\"category\"), String(\"description\"), String(\"authorized_by\")]) }]) }])"
+      "Todo": "Unhandled DslRule in walk_rules: fields = List([String(\"category\"), String(\"subcategory\"), String(\"amount\"), String(\"remaining_budget\"), String(\"percentage_used\")])"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: fields = List([String(\"date\"), String(\"amount\"), String(\"category\"), String(\"description\"), String(\"authorized_by\")])"
     },
     "EndSection",
     {

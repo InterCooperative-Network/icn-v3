@@ -50,7 +50,7 @@ expression: program_ops
     {
       "BeginSection": {
         "kind": "range_18_120",
-        "title": null
+        "title": "member_age_requirement"
       }
     },
     {
@@ -61,10 +61,36 @@ expression: program_ops
     },
     "EndSection",
     {
-      "Todo": "Unhandled DslRule in walk_rules: proposal_processing = Map([Rule { key: \"min_duration\", value: String(\"7d\") }, Rule { key: \"max_duration\", value: String(\"21d\") }, Rule { key: \"default_duration\", value: String(\"14d\") }, Rule { key: \"pass_threshold_percentage\", value: Number(0.66) }, Rule { key: \"quorum_percentage\", value: Number(0.1) }, Rule { key: \"can_be_emergency\", value: Boolean(true) }, Rule { key: \"emergency_pass_threshold_percentage\", value: Number(0.75) }, Rule { key: \"emergency_quorum_percentage\", value: Number(0.2) }])"
+      "Todo": "Unhandled DslRule in walk_rules: min_duration = String(\"7d\")"
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: log_event = Map([Rule { key: \"function_name\", value: String(\"log_event\") }, Rule { key: \"args\", value: Map([Rule { key: \"name\", value: String(\"bylaws_loaded\") }, Rule { key: \"detail\", value: String(\"Cooperative Bylaws v1.0.0 processed\") }]) }])"
+      "Todo": "Unhandled DslRule in walk_rules: max_duration = String(\"21d\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: default_duration = String(\"14d\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: pass_threshold_percentage = Number(0.66)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: quorum_percentage = Number(0.1)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: can_be_emergency = Boolean(true)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: emergency_pass_threshold_percentage = Number(0.75)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: emergency_quorum_percentage = Number(0.2)"
+    },
+    {
+      "CallHost": {
+        "fn_name": "log_event",
+        "args": [
+          "Map([Rule { key: \"name\", value: String(\"bylaws_loaded\") }, Rule { key: \"detail\", value: String(\"Cooperative Bylaws v1.0.0 processed\") }])"
+        ]
+      }
     }
   ]
 }

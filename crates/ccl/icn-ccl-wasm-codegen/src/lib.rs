@@ -1,7 +1,8 @@
 //'!' Pass #2: lower `icn-ccl-dsl` structures into an executable opcode stream.
 
-use icn_ccl_dsl::{ActionStep, DslModule, Rule, RuleValue, IfExpr};
-// Removed DslValue from here as it's used qualified like DslValue::If
+use icn_ccl_dsl::{
+    ActionStep, DslModule, IfExpr, Rule, RuleValue,
+};
 use crate::opcodes::{Opcode, Program};
 
 pub mod opcodes;
@@ -15,11 +16,11 @@ impl WasmGenerator {
         Self { ops: Vec::new() }
     }
 
-    pub fn generate(mut self, modules: Vec<DslModule>) -> Program { // Changed to take Vec, not slice, and consume self
+    pub fn generate(mut self, modules: Vec<DslModule>) -> Program { 
         for module in modules {
             self.walk_module(&module);
         }
-        Program::new(self.ops) // Program::new now takes ops
+        Program::new(self.ops) 
     }
 
     fn walk_module(&mut self, m: &DslModule) {
@@ -47,8 +48,6 @@ impl WasmGenerator {
             }
             DslModule::Role(r) => {
                 self.ops.push(Opcode::Todo(format!("Role definition: {}", r.name)));
-                // If Role has rules, uncomment and ensure DslRule.rules exists:
-                // self.walk_rules(&r.rules);
             }
             other => self.ops.push(Opcode::Todo(format!("Unhandled DslModule: {:?}", other))),
         }
@@ -72,21 +71,41 @@ impl WasmGenerator {
         }
     }
 
+    /// Walk a vector of `Rule`s and push op-codes
     fn walk_rules(&mut self, rules: &[Rule]) {
         for r in rules {
             match &r.value {
-                RuleValue::If(ifx) => self.walk_if_expr(ifx),
+                RuleValue::If(expr) => self.walk_if_expr(expr),
+
                 RuleValue::Range(range) => {
                     self.ops.push(Opcode::BeginSection {
                         kind: format!("range_{}_{}", range.start, range.end),
-                        title: None,
+                        title: Some(r.key.clone()),
                     });
                     self.walk_rules(&range.rules);
                     self.ops.push(Opcode::EndSection);
                 }
-                _ => {
-                    self.ops.push(Opcode::Todo(format!("Unhandled DslRule in walk_rules: {} = {:?}", r.key, r.value)));
+
+                RuleValue::Map(kv) => { // General handling for RuleValue::Map
+                    if is_function_call(kv) {
+                        let fn_name = &r.key; 
+                        let default_args = RuleValue::List(vec![]);
+                        let args_val = kv
+                            .iter()
+                            .find(|k| k.key == "args")
+                            .map(|k| &k.value)
+                            .unwrap_or(&default_args);
+                        self.walk_function_call(fn_name, args_val);
+                    } else {
+                        // It's a generic map (like 'thresholds'), walk its inner rules.
+                        // This allows inner named ranges to pick up their correct titles.
+                        self.walk_rules(kv); 
+                    }
                 }
+                
+                _ => self
+                    .ops
+                    .push(Opcode::Todo(format!("Unhandled DslRule in walk_rules: {} = {:?}", r.key, r.value))),
             }
         }
     }
@@ -104,4 +123,32 @@ impl WasmGenerator {
         }
         self.ops.push(Opcode::EndIf);
     }
+
+    // --------------------------------------------------------
+    //  Helpers
+    // --------------------------------------------------------
+
+    /// Convert a lowered function-call into an opcode
+    fn walk_function_call(&mut self, fn_name: &str, args_rule: &RuleValue) {
+        let args = match args_rule {
+            RuleValue::List(xs) => xs.iter().map(|v| format!("{:?}", v)).collect(),
+            other @ RuleValue::Map(_) => vec![format!("{:?}", other)],
+            other => vec![format!("{:?}", other)],
+        };
+
+        self.ops.push(Opcode::CallHost {
+            fn_name: fn_name.to_string(),
+            args,
+        });
+    }
+}
+
+// -------------------------------------------------------------------------
+//  Utility – recognise the map-structure produced by the lowerer for calls
+// -------------------------------------------------------------------------
+
+fn is_function_call(kv: &[Rule]) -> bool {
+    kv.first()
+        .map(|first| first.key == "function_name")
+        .unwrap_or(false)
 } 
