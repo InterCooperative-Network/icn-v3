@@ -1,1 +1,7 @@
- 
+proposal "demo" {
+    thresholds {
+        range 0 10 {
+            approvers 1
+        }
+    }
+} 

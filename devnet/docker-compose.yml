@@ -22,6 +22,8 @@ services:
       - DATABASE_URL=postgres://icn:icn@postgres:5432/icn_federation
     ports:
       - "7001:7000"
+    volumes:
+      - ./devnet/configs/node-1.toml:/config/node.toml:ro
     depends_on:
       - postgres
 
@@ -35,6 +37,8 @@ services:
       - DATABASE_URL=postgres://icn:icn@postgres:5432/icn_federation
     ports:
       - "7002:7000"
+    volumes:
+      - ./devnet/configs/node-2.toml:/config/node.toml:ro
     depends_on:
       - postgres
 
@@ -48,6 +52,8 @@ services:
       - DATABASE_URL=postgres://icn:icn@postgres:5432/icn_federation
     ports:
       - "7003:7000"
+    volumes:
+      - ./devnet/configs/node-3.toml:/config/node.toml:ro
     depends_on:
       - postgres
 

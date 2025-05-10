@@ -1,1 +1,17 @@
- 
+[federation]
+name = "LocalDevNet"
+did = "did:key:z6MkpzMyPMvLgViC9bYV9dG2uC6fC1Jj8Y1ZwZuXZfQpWbJ3" # Placeholder DID, replace with actual generated one
+quorum_type = "majority"
+min_signers = 2
+
+[[nodes]]
+id = "node-1"
+addr = "node-1:7000"
+
+[[nodes]]
+id = "node-2"
+addr = "node-2:7000"
+
+[[nodes]]
+id = "node-3"
+addr = "node-3:7000" 

@@ -1,2 +1,23 @@
-FROM ubuntu:22.04
-CMD echo "TODO: Replace with real ICN service build" 
+# ────────────────────────────────────────────────────────────────────────────────
+# ICN Runtime Node image
+# Multi-stage build:
+#   1. Compile icn-runtime (static Rust binary)
+#   2. Copy into slim Debian base
+# ────────────────────────────────────────────────────────────────────────────────
+FROM rust:1.77 AS builder
+WORKDIR /src
+COPY . .
+RUN cargo build -p icn-runtime --release
+
+# ── Runtime stage ───────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+# (optional) install ca-certificates if your runtime does outbound TLS
+RUN apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/target/release/icn-runtime /usr/local/bin/icn-runtime
+
+# Config will be mounted from the host (see docker-compose volume)
+VOLUME ["/config"]
+EXPOSE 7000
+CMD ["icn-runtime", "--config", "/config/node.toml"] 
