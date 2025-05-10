@@ -25,10 +25,13 @@ The ICN Wallet consists of several core components:
 
 ### Prerequisites
 
-- Node.js 16.x or later
+- Node.js 18.x or later (required by Next.js)
 - npm or yarn
+- OR Podman for containerized development
 
 ### Setup
+
+#### Local Development (requires Node.js 18+)
 
 ```bash
 # Install dependencies
@@ -40,6 +43,22 @@ npm run dev
 ```
 
 The development server will start at http://localhost:3001.
+
+#### Using Podman (no specific Node.js version needed)
+
+If you don't want to install Node.js 18+ directly on your machine, you can use Podman:
+
+```bash
+# Make sure Podman is installed
+# On Ubuntu/Debian: sudo apt-get install podman
+# On Fedora: sudo dnf install podman
+
+# Run the provided script
+cd crates/wallet/icn-wallet-pwa
+./run-podman.sh
+```
+
+This will build a container with Node.js 18 and start the development server.
 
 ### Building for Production
 
