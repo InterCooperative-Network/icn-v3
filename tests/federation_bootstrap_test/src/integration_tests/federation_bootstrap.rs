@@ -1,5 +1,8 @@
 use anyhow::Result;
+use async_trait::async_trait;
+use icn_runtime::{Runtime, RuntimeContext};
 use icn_types::{
+    dag::{DagEventType, DagNodeBuilder},
     dag_store::{DagStore, SharedDagStore},
 };
 use std::{
@@ -7,6 +10,7 @@ use std::{
     process::Command,
     sync::Arc,
     time::{Duration, Instant},
+    collections::HashSet,
 };
 use tokio::time::sleep;
 
@@ -280,9 +284,9 @@ async fn test_federation_join(dag_store: Arc<SharedDagStore>) -> Result<()> {
         
     // Simulate anchor to DAG store - in a real implementation, this would happen
     // automatically when proposal is submitted
-    let node_builder = icn_types::dag::DagNodeBuilder::new()
+    let node_builder = DagNodeBuilder::new()
         .content(proposal_id.clone())
-        .event_type(icn_types::dag::DagEventType::Proposal)
+        .event_type(DagEventType::Proposal)
         .scope_id("test-federation".to_string())
         .timestamp(std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -381,17 +385,17 @@ async fn populate_test_dag(dag_store: Arc<SharedDagStore>) -> Result<Vec<String>
     
     // Create nodes representing different DAG events (genesis, proposals, votes, etc.)
     let event_types = [
-        icn_types::dag::DagEventType::Genesis,
-        icn_types::dag::DagEventType::Proposal,
-        icn_types::dag::DagEventType::Vote,
-        icn_types::dag::DagEventType::Execution,
-        icn_types::dag::DagEventType::Attestation
+        DagEventType::Genesis,
+        DagEventType::Proposal,
+        DagEventType::Vote,
+        DagEventType::Execution,
+        DagEventType::Attestation
     ];
     
     // Add a genesis node first
-    let genesis_node = icn_types::dag::DagNodeBuilder::new()
+    let genesis_node = DagNodeBuilder::new()
         .content("genesis-content".to_string())
-        .event_type(icn_types::dag::DagEventType::Genesis)
+        .event_type(DagEventType::Genesis)
         .scope_id("test-federation".to_string())
         .timestamp(1000)
         .build()?;
@@ -406,7 +410,7 @@ async fn populate_test_dag(dag_store: Arc<SharedDagStore>) -> Result<Vec<String>
     for i in 0..20 {
         let event_type = event_types[i % event_types.len()].clone();
         
-        let node_builder = icn_types::dag::DagNodeBuilder::new()
+        let node_builder = DagNodeBuilder::new()
             .content(format!("event-{}-content", i))
             .event_type(event_type)
             .scope_id("test-federation".to_string())
@@ -434,4 +438,79 @@ async fn populate_test_dag(dag_store: Arc<SharedDagStore>) -> Result<Vec<String>
     }
     
     Ok(event_ids)
+}
+
+/// A simplified test that demonstrates integrating SharedDagStore with RuntimeContext
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_runtime_dag_store_integration() -> Result<()> {
+    // 1. Create shared store and runtime with context
+    let dag_store = Arc::new(SharedDagStore::new());
+    let context = RuntimeContext::with_dag_store(dag_store.clone())
+        .with_federation_id("test-federation")
+        .with_executor_id("test-executor");
+    
+    let storage = Arc::new(MockRuntimeStorage::new());
+    let runtime = Runtime::with_context(storage, context);
+
+    // 2. Simulate federation genesis: anchor three trust bundles
+    for i in 1..=3 {
+        let node = DagNodeBuilder::new()
+            .content(format!("trust-bundle-{}", i))
+            .event_type(DagEventType::Genesis)
+            .scope_id("test-federation".to_string())
+            .timestamp(i)
+            .build()?;
+            
+        runtime.dag_store().insert(node).await?;
+    }
+
+    // 3. Assert DAG size
+    let nodes = dag_store.list().await?;
+    assert_eq!(nodes.len(), 3, "DAG should contain 3 nodes");
+
+    // 4. Verify we can access each node and they have unique CIDs
+    let mut seen_cids = HashSet::new();
+    for node in nodes {
+        let cid = node.cid()?.to_string();
+        assert!(seen_cids.insert(cid.clone()), "Duplicate CID found: {}", cid);
+        
+        // Test retrieval by CID
+        let retrieved = dag_store.get(&cid).await?;
+        assert!(retrieved.is_some(), "Node with CID {} not found", cid);
+    }
+
+    Ok(())
+}
+
+/// Mock storage for testing runtime integration
+#[derive(Default)]
+struct MockRuntimeStorage {}
+
+impl MockRuntimeStorage {
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait::async_trait]
+impl icn_runtime::RuntimeStorage for MockRuntimeStorage {
+    async fn load_proposal(&self, _id: &str) -> anyhow::Result<icn_runtime::Proposal> {
+        unimplemented!("Not needed for this test")
+    }
+
+    async fn update_proposal(&self, _proposal: &icn_runtime::Proposal) -> anyhow::Result<()> {
+        unimplemented!("Not needed for this test")
+    }
+
+    async fn load_wasm(&self, _cid: &str) -> anyhow::Result<Vec<u8>> {
+        unimplemented!("Not needed for this test")
+    }
+
+    async fn store_receipt(&self, _receipt: &icn_runtime::ExecutionReceipt) -> anyhow::Result<String> {
+        unimplemented!("Not needed for this test")
+    }
+
+    async fn anchor_to_dag(&self, _cid: &str) -> anyhow::Result<String> {
+        Ok("test-anchor".to_string())
+    }
 } 
