@@ -22,7 +22,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
             Opcode::SetProperty { .. } => 9, // Was previously part of '_'
             Opcode::Todo(_) => 10,        // Was previously part of '_'
             Opcode::OnEvent { .. } => 11,   // New
-            Opcode::RangeCheck { .. } => 12, // New
+            Opcode::RangeCheck { .. } => 13, // New type index for (F64, F64) -> ()
         };
         functions_section.function(type_index); // Map this function body to its type index
 
@@ -95,9 +95,11 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 encode_push_string(&mut f, event);
                 f.instruction(&Instruction::Call(11)); // host fn 11: on_event
             }
-            Opcode::RangeCheck { .. } => { // Log entire opcode for MVP
-                encode_push_string(&mut f, &format!("{:?}", op));
-                f.instruction(&Instruction::Call(12)); // host fn 12: log_range_check
+            Opcode::RangeCheck { start, end } => {
+                f.instruction(&Instruction::F64Const(*start));
+                f.instruction(&Instruction::F64Const(*end));
+                // TODO: Define and use the correct range_check_func_idx, assuming 13 for now as it's next.
+                f.instruction(&Instruction::Call(13));
             }
         }
         f.instruction(&Instruction::End);
@@ -119,6 +121,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     type_section.function(vec![ValType::I32], vec![]);                     // 10: log_todo(msg: ptr)
     type_section.function(vec![ValType::I32], vec![]);                     // 11: on_event(event_str: ptr) - New
     type_section.function(vec![ValType::I32], vec![]);                     // 12: log_range_check(debug_str: ptr) - New
+    type_section.function(vec![ValType::F64, ValType::F64], vec![]);       // 13: range_check(start: f64, end: f64)
 
 
     // Imports: Define all imported host functions
@@ -137,6 +140,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
         ("log_todo", 10u32),
         ("on_event", 11u32),             // New
         ("log_range_check", 12u32),      // New
+        ("range_check", 13u32),         // New for actual range check
     ];
     for (name, type_idx) in host_fns.iter() {
         import_section.import("icn", name, EntityType::Function(*type_idx));

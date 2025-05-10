@@ -56,6 +56,11 @@ bylaws_def "Cooperative Bylaws" version "1.0.0" {
         data proposal.content
       }
     }
+
+    perform_metered_action {
+      resource_type "noop"
+      amount 0
+    }
   }
 
   // ─────────────  Logging example  ─────────────
