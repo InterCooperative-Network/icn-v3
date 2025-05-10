@@ -21,4 +21,8 @@ criterion     = "0.5"
 
 [[bench]]
 name = "vc_verify"
+harness = false
+
+[[bench]]
+name = "trustbundle_verify"
 harness = false 

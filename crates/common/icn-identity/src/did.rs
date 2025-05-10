@@ -1,6 +1,7 @@
 use multibase::{Base, decode};
 use thiserror::Error;
 use std::str::FromStr;
+use std::fmt;
 use serde::{Deserialize, Serialize};
 
 // Ed25519 public key multicodec prefix
@@ -82,5 +83,11 @@ impl FromStr for Did {
         did.to_ed25519()?;
         
         Ok(did)
+    }
+}
+
+impl fmt::Display for Did {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 } 
