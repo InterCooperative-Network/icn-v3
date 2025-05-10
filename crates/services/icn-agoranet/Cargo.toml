@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = "0.7"
+axum = { version = "0.7", features = ["ws", "macros"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_cbor = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 utoipa = { version = "4", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
@@ -15,10 +16,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
+futures = "0.3"
+thiserror = "1.0"
+rand = "0.8"
 
-# Workspace dependencies (assuming they might be needed later)
-# icn-types = { path = "../../common/icn-types" }
-# icn-identity-core = { path = "../../common/icn-identity-core" }
+# Workspace dependencies
+icn-types = { path = "../../common/icn-types" }
+icn-economics = { path = "../../common/icn-economics" }
+icn-identity = { path = "../../common/icn-identity" }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

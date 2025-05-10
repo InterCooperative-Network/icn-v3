@@ -1,9 +1,19 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use std::collections::HashMap;
 
 // Timestamp alias for clarity
 pub type Timestamp = DateTime<Utc>;
+
+// Simple enum for resource types
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ResourceType {
+    Cpu,
+    Memory,
+    Storage,
+    Token,
+}
 
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
 pub struct ThreadSummary {
@@ -161,4 +171,160 @@ pub struct GetProposalsQuery {
 pub struct ProposalVotesResponse {
     pub proposal_id: String,
     pub votes: Vec<Vote>,
+}
+
+// New models for organization-scoped API
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
+pub struct ExecutionReceiptSummary {
+    #[schema(example = "bafy2bzacedz7h3vxthx4nm3uoif2vyxbpnmyifzwwp2sgoj5exptpa2hbk7mg")]
+    pub cid: String,
+    #[schema(example = "did:icn:node1")]
+    pub executor: String,
+    pub resource_usage: HashMap<String, u64>,
+    pub timestamp: Timestamp,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
+pub struct ExecutionReceiptDetail {
+    #[serde(flatten)]
+    pub summary: ExecutionReceiptSummary,
+    #[schema(example = "bafy2bzacedxxxyyy")]
+    pub task_cid: String,
+    pub anchored_cids: Vec<String>,
+    #[schema(example = "base64encodedstring")]
+    pub signature: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
+pub struct TokenBalance {
+    #[schema(example = "did:icn:user1")]
+    pub did: String,
+    #[schema(example = 15000)]
+    pub balance: u64,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
+pub struct TokenTransaction {
+    #[schema(example = "tx-1")]
+    pub id: String,
+    #[schema(example = "did:icn:treasury")]
+    pub from_did: String,
+    #[schema(example = "did:icn:node1")]
+    pub to_did: String,
+    #[schema(example = 500)]
+    pub amount: u64,
+    #[schema(example = "mint")]
+    pub operation: String,
+    pub timestamp: Timestamp,
+    #[schema(example = "coop-123")]
+    pub from_coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub from_community_id: Option<String>,
+    #[schema(example = "coop-123")]
+    pub to_coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub to_community_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
+pub struct ReceiptStats {
+    #[schema(example = 150)]
+    pub total_receipts: u64,
+    #[schema(example = 450)]
+    pub avg_cpu_usage: u64,
+    #[schema(example = 1024)]
+    pub avg_memory_usage: u64,
+    #[schema(example = 5000)]
+    pub avg_storage_usage: u64,
+    pub receipts_by_executor: HashMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
+pub struct TokenStats {
+    #[schema(example = 60000)]
+    pub total_minted: u64,
+    #[schema(example = 5000)]
+    pub total_burnt: u64,
+    #[schema(example = 5)]
+    pub active_accounts: u64,
+    #[schema(example = 10000)]
+    pub daily_volume: Option<u64>,
+}
+
+// Query parameters for GET /receipts
+#[derive(Deserialize, ToSchema, IntoParams, Debug)]
+pub struct GetReceiptsQuery {
+    #[schema(example = "2023-05-10")]
+    pub date: Option<String>,
+    #[schema(example = "did:icn:node1")]
+    pub executor: Option<String>,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
+    #[schema(example = 10)]
+    pub limit: Option<u32>,
+    #[schema(example = 0)]
+    pub offset: Option<u32>,
+}
+
+// Query parameters for GET /tokens/balances
+#[derive(Deserialize, ToSchema, IntoParams, Debug)]
+pub struct GetTokenBalancesQuery {
+    #[schema(example = "did:icn:user1")]
+    pub account: Option<String>,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
+    #[schema(example = 10)]
+    pub limit: Option<u32>,
+    #[schema(example = 0)]
+    pub offset: Option<u32>,
+}
+
+// Query parameters for GET /tokens/transactions
+#[derive(Deserialize, ToSchema, IntoParams, Debug)]
+pub struct GetTokenTransactionsQuery {
+    #[schema(example = "2023-05-10")]
+    pub date: Option<String>,
+    #[schema(example = "did:icn:user1")]
+    pub account: Option<String>,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
+    #[schema(example = 10)]
+    pub limit: Option<u32>,
+    #[schema(example = 0)]
+    pub offset: Option<u32>,
+}
+
+// Response for GET /receipts/stats
+#[derive(Serialize, Deserialize, ToSchema, Debug)]
+pub struct ReceiptStatsResponse {
+    pub stats: ReceiptStats,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
+}
+
+// Response for GET /tokens/stats
+#[derive(Serialize, Deserialize, ToSchema, Debug)]
+pub struct TokenStatsResponse {
+    pub stats: TokenStats,
+    #[schema(example = "coop-123")]
+    pub coop_id: Option<String>,
+    #[schema(example = "community-456")]
+    pub community_id: Option<String>,
 }

@@ -5,8 +5,9 @@ use axum::{
 };
 use chrono::Utc;
 use std::sync::{Arc, RwLock}; // For in-memory storage
-                              // use serde_json::json; // Removed unused import
+use std::collections::HashMap;
 use uuid::Uuid;
+use chrono::{DateTime, Duration};
 
 use crate::error::ApiError;
 use crate::models::*; // Added ApiError import
@@ -20,6 +21,10 @@ pub struct InMemoryStore {
     threads: Vec<ThreadDetail>,
     proposals: Vec<ProposalDetail>,
     votes: Vec<Vote>,
+    // New fields for organization-scoped resources
+    receipts: Vec<ExecutionReceiptDetail>,
+    token_balances: Vec<TokenBalance>,
+    token_transactions: Vec<TokenTransaction>,
 }
 
 impl InMemoryStore {
@@ -28,6 +33,142 @@ impl InMemoryStore {
         let example_thread_id = format!("thread_{}", Uuid::new_v4());
         let example_proposal_id = format!("proposal_{}", Uuid::new_v4());
         let now = Utc::now();
+
+        // Create mock receipts with organization scoping
+        let receipts = vec![
+            // Global receipt (no org scoping)
+            ExecutionReceiptDetail {
+                summary: ExecutionReceiptSummary {
+                    cid: format!("bafy2bzace{}", Uuid::new_v4()),
+                    executor: "did:icn:node1".to_string(),
+                    resource_usage: HashMap::from([
+                        ("CPU".to_string(), 250),
+                        ("Memory".to_string(), 1024),
+                    ]),
+                    timestamp: now - Duration::hours(1),
+                    coop_id: None,
+                    community_id: None,
+                },
+                task_cid: format!("task-{}", Uuid::new_v4()),
+                anchored_cids: vec![format!("anchor-{}", Uuid::new_v4())],
+                signature: "SomeBase64Signature==".to_string(),
+            },
+            // Cooperative-scoped receipt
+            ExecutionReceiptDetail {
+                summary: ExecutionReceiptSummary {
+                    cid: format!("bafy2bzace{}", Uuid::new_v4()),
+                    executor: "did:icn:node2".to_string(),
+                    resource_usage: HashMap::from([
+                        ("CPU".to_string(), 300),
+                        ("Memory".to_string(), 2048),
+                    ]),
+                    timestamp: now - Duration::hours(2),
+                    coop_id: Some("coop-123".to_string()),
+                    community_id: None,
+                },
+                task_cid: format!("task-{}", Uuid::new_v4()),
+                anchored_cids: vec![format!("anchor-{}", Uuid::new_v4())],
+                signature: "AnotherBase64Signature==".to_string(),
+            },
+            // Community-scoped receipt
+            ExecutionReceiptDetail {
+                summary: ExecutionReceiptSummary {
+                    cid: format!("bafy2bzace{}", Uuid::new_v4()),
+                    executor: "did:icn:node3".to_string(),
+                    resource_usage: HashMap::from([
+                        ("CPU".to_string(), 150),
+                        ("Memory".to_string(), 512),
+                    ]),
+                    timestamp: now - Duration::hours(3),
+                    coop_id: Some("coop-123".to_string()),
+                    community_id: Some("community-456".to_string()),
+                },
+                task_cid: format!("task-{}", Uuid::new_v4()),
+                anchored_cids: vec![format!("anchor-{}", Uuid::new_v4())],
+                signature: "ThirdBase64Signature==".to_string(),
+            },
+        ];
+
+        // Create mock token balances with organization scoping
+        let token_balances = vec![
+            // Global balance (no org scoping)
+            TokenBalance {
+                did: "did:icn:user1".to_string(),
+                balance: 15000,
+                coop_id: None,
+                community_id: None,
+            },
+            // Cooperative-scoped balance
+            TokenBalance {
+                did: "did:icn:user1".to_string(),
+                balance: 5000,
+                coop_id: Some("coop-123".to_string()),
+                community_id: None,
+            },
+            // Community-scoped balance
+            TokenBalance {
+                did: "did:icn:user1".to_string(),
+                balance: 2000,
+                coop_id: Some("coop-123".to_string()),
+                community_id: Some("community-456".to_string()),
+            },
+            // Another user with different balances
+            TokenBalance {
+                did: "did:icn:user2".to_string(),
+                balance: 25000,
+                coop_id: None,
+                community_id: None,
+            },
+            TokenBalance {
+                did: "did:icn:user2".to_string(),
+                balance: 10000,
+                coop_id: Some("coop-123".to_string()),
+                community_id: None,
+            },
+        ];
+
+        // Create mock token transactions with organization scoping
+        let token_transactions = vec![
+            // Global transaction (no org scoping)
+            TokenTransaction {
+                id: format!("tx-{}", Uuid::new_v4()),
+                from_did: "did:icn:treasury".to_string(),
+                to_did: "did:icn:user1".to_string(),
+                amount: 1000,
+                operation: "mint".to_string(),
+                timestamp: now - Duration::days(1),
+                from_coop_id: None,
+                from_community_id: None,
+                to_coop_id: None,
+                to_community_id: None,
+            },
+            // Cooperative-scoped transaction
+            TokenTransaction {
+                id: format!("tx-{}", Uuid::new_v4()),
+                from_did: "did:icn:user1".to_string(),
+                to_did: "did:icn:user2".to_string(),
+                amount: 500,
+                operation: "transfer".to_string(),
+                timestamp: now - Duration::days(2),
+                from_coop_id: Some("coop-123".to_string()),
+                from_community_id: None,
+                to_coop_id: Some("coop-123".to_string()),
+                to_community_id: None,
+            },
+            // Community-scoped transaction
+            TokenTransaction {
+                id: format!("tx-{}", Uuid::new_v4()),
+                from_did: "did:icn:user2".to_string(),
+                to_did: "did:icn:treasury".to_string(),
+                amount: 200,
+                operation: "burn".to_string(),
+                timestamp: now - Duration::days(3),
+                from_coop_id: Some("coop-123".to_string()),
+                from_community_id: Some("community-456".to_string()),
+                to_coop_id: None,
+                to_community_id: None,
+            },
+        ];
 
         Self {
             threads: vec![ThreadDetail {
@@ -63,7 +204,7 @@ impl InMemoryStore {
                         reject: 1,
                         abstain: 0,
                     },
-                    voting_deadline: now + chrono::Duration::days(7),
+                    voting_deadline: now + Duration::days(7),
                     scope: "coop.nw.governance".to_string(),
                 },
                 full_text:
@@ -87,6 +228,9 @@ impl InMemoryStore {
                     justification: Some("I have some concerns.".to_string()),
                 },
             ],
+            receipts,
+            token_balances,
+            token_transactions,
         }
     }
 
@@ -110,6 +254,241 @@ impl InMemoryStore {
                 VoteType::Reject => proposal_detail.summary.vote_counts.reject += 1,
                 VoteType::Abstain => proposal_detail.summary.vote_counts.abstain += 1,
             }
+        }
+    }
+
+    // New methods for organization-scoped resources
+
+    // Filter receipts based on query parameters
+    pub fn filter_receipts(&self, params: &GetReceiptsQuery) -> Vec<ExecutionReceiptSummary> {
+        self.receipts
+            .iter()
+            .filter(|r| {
+                // Filter by executor if provided
+                if let Some(executor) = &params.executor {
+                    if r.summary.executor != *executor {
+                        return false;
+                    }
+                }
+                
+                // Filter by date if provided
+                if let Some(date) = &params.date {
+                    let receipt_date = r.summary.timestamp.date().to_string();
+                    if !receipt_date.starts_with(date) {
+                        return false;
+                    }
+                }
+                
+                // Filter by cooperative ID
+                if let Some(coop_id) = &params.coop_id {
+                    match &r.summary.coop_id {
+                        Some(receipt_coop_id) if receipt_coop_id == coop_id => {}
+                        _ => return false,
+                    }
+                }
+                
+                // Filter by community ID
+                if let Some(community_id) = &params.community_id {
+                    match &r.summary.community_id {
+                        Some(receipt_community_id) if receipt_community_id == community_id => {}
+                        _ => return false,
+                    }
+                }
+                
+                true
+            })
+            .map(|r| r.summary.clone())
+            .collect()
+    }
+    
+    // Filter token balances based on query parameters
+    pub fn filter_token_balances(&self, params: &GetTokenBalancesQuery) -> Vec<TokenBalance> {
+        self.token_balances
+            .iter()
+            .filter(|b| {
+                // Filter by account if provided
+                if let Some(account) = &params.account {
+                    if b.did != *account {
+                        return false;
+                    }
+                }
+                
+                // Filter by cooperative ID
+                if let Some(coop_id) = &params.coop_id {
+                    match &b.coop_id {
+                        Some(balance_coop_id) if balance_coop_id == coop_id => {}
+                        _ => return false,
+                    }
+                }
+                
+                // Filter by community ID
+                if let Some(community_id) = &params.community_id {
+                    match &b.community_id {
+                        Some(balance_community_id) if balance_community_id == community_id => {}
+                        _ => return false,
+                    }
+                }
+                
+                true
+            })
+            .cloned()
+            .collect()
+    }
+    
+    // Filter token transactions based on query parameters
+    pub fn filter_token_transactions(&self, params: &GetTokenTransactionsQuery) -> Vec<TokenTransaction> {
+        self.token_transactions
+            .iter()
+            .filter(|tx| {
+                // Filter by account if provided (either sender or recipient)
+                if let Some(account) = &params.account {
+                    if tx.from_did != *account && tx.to_did != *account {
+                        return false;
+                    }
+                }
+                
+                // Filter by date if provided
+                if let Some(date) = &params.date {
+                    let tx_date = tx.timestamp.date().to_string();
+                    if !tx_date.starts_with(date) {
+                        return false;
+                    }
+                }
+                
+                // Filter by cooperative ID (either sender or recipient's coop)
+                if let Some(coop_id) = &params.coop_id {
+                    let from_match = tx.from_coop_id.as_ref().map_or(false, |id| id == coop_id);
+                    let to_match = tx.to_coop_id.as_ref().map_or(false, |id| id == coop_id);
+                    if !from_match && !to_match {
+                        return false;
+                    }
+                }
+                
+                // Filter by community ID (either sender or recipient's community)
+                if let Some(community_id) = &params.community_id {
+                    let from_match = tx.from_community_id.as_ref().map_or(false, |id| id == community_id);
+                    let to_match = tx.to_community_id.as_ref().map_or(false, |id| id == community_id);
+                    if !from_match && !to_match {
+                        return false;
+                    }
+                }
+                
+                true
+            })
+            .cloned()
+            .collect()
+    }
+    
+    // Calculate receipt statistics for a specific organization scope
+    pub fn get_receipt_stats(&self, coop_id: Option<&str>, community_id: Option<&str>) -> ReceiptStats {
+        // Filter receipts based on org scope
+        let filtered_receipts: Vec<_> = self.receipts
+            .iter()
+            .filter(|r| {
+                if let Some(cid) = coop_id {
+                    match &r.summary.coop_id {
+                        Some(receipt_coop_id) if receipt_coop_id == cid => {}
+                        _ => return false,
+                    }
+                }
+                
+                if let Some(cid) = community_id {
+                    match &r.summary.community_id {
+                        Some(receipt_community_id) if receipt_community_id == cid => {}
+                        _ => return false,
+                    }
+                }
+                
+                true
+            })
+            .collect();
+        
+        let total_receipts = filtered_receipts.len() as u64;
+        
+        // Calculate average resource usage
+        let mut total_cpu = 0;
+        let mut total_memory = 0;
+        let mut total_storage = 0;
+        let mut receipts_by_executor: HashMap<String, u64> = HashMap::new();
+        
+        for receipt in filtered_receipts {
+            // Count by executor
+            let executor = &receipt.summary.executor;
+            *receipts_by_executor.entry(executor.clone()).or_insert(0) += 1;
+            
+            // Sum resource usage
+            let cpu = receipt.summary.resource_usage.get("CPU").copied().unwrap_or(0);
+            let memory = receipt.summary.resource_usage.get("Memory").copied().unwrap_or(0);
+            let storage = receipt.summary.resource_usage.get("Storage").copied().unwrap_or(0);
+            
+            total_cpu += cpu;
+            total_memory += memory;
+            total_storage += storage;
+        }
+        
+        // Calculate averages, avoiding division by zero
+        let avg_cpu = if total_receipts > 0 { total_cpu / total_receipts } else { 0 };
+        let avg_memory = if total_receipts > 0 { total_memory / total_receipts } else { 0 };
+        let avg_storage = if total_receipts > 0 { total_storage / total_receipts } else { 0 };
+        
+        ReceiptStats {
+            total_receipts,
+            avg_cpu_usage: avg_cpu,
+            avg_memory_usage: avg_memory,
+            avg_storage_usage: avg_storage,
+            receipts_by_executor,
+        }
+    }
+    
+    // Calculate token statistics for a specific organization scope
+    pub fn get_token_stats(&self, coop_id: Option<&str>, community_id: Option<&str>) -> TokenStats {
+        // Filter transactions based on org scope
+        let filtered_transactions: Vec<_> = self.token_transactions
+            .iter()
+            .filter(|tx| {
+                if let Some(cid) = coop_id {
+                    let from_match = tx.from_coop_id.as_ref().map_or(false, |id| id == cid);
+                    let to_match = tx.to_coop_id.as_ref().map_or(false, |id| id == cid);
+                    if !from_match && !to_match {
+                        return false;
+                    }
+                }
+                
+                if let Some(cid) = community_id {
+                    let from_match = tx.from_community_id.as_ref().map_or(false, |id| id == cid);
+                    let to_match = tx.to_community_id.as_ref().map_or(false, |id| id == cid);
+                    if !from_match && !to_match {
+                        return false;
+                    }
+                }
+                
+                true
+            })
+            .collect();
+        
+        // Calculate stats
+        let mut total_minted = 0;
+        let mut total_burnt = 0;
+        let mut daily_volume = 0;
+        let mut active_accounts = std::collections::HashSet::new();
+        
+        for tx in filtered_transactions {
+            match tx.operation.as_str() {
+                "mint" => total_minted += tx.amount,
+                "burn" => total_burnt += tx.amount,
+                _ => {}
+            }
+            
+            daily_volume += tx.amount;
+            active_accounts.insert(tx.from_did.clone());
+            active_accounts.insert(tx.to_did.clone());
+        }
+        
+        TokenStats {
+            total_minted,
+            total_burnt,
+            active_accounts: active_accounts.len() as u64,
+            daily_volume: Some(daily_volume),
         }
     }
 }
@@ -438,14 +817,217 @@ pub async fn get_proposal_votes_handler(
     }))
 }
 
-// Example health check endpoint
+// GET /receipts
 #[utoipa::path(
     get,
-    path = "/health",
+    path = "/receipts",
+    params(
+        GetReceiptsQuery
+    ),
     responses(
-        (status = 200, description = "Service is healthy")
+        (status = 200, description = "List of execution receipt summaries", body = Vec<ExecutionReceiptSummary>)
     )
 )]
+pub async fn get_receipts_handler(
+    Query(params): Query<GetReceiptsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<ExecutionReceiptSummary>>, ApiError> {
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    let receipts = store.filter_receipts(&params);
+    
+    // Apply pagination if specified
+    let paginated_receipts = match (params.offset, params.limit) {
+        (Some(offset), Some(limit)) => {
+            receipts
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect()
+        }
+        (Some(offset), None) => receipts.into_iter().skip(offset as usize).collect(),
+        (None, Some(limit)) => receipts.into_iter().take(limit as usize).collect(),
+        (None, None) => receipts,
+    };
+    
+    Ok(Json(paginated_receipts))
+}
+
+// GET /receipts/{cid}
+#[utoipa::path(
+    get,
+    path = "/receipts/{cid}",
+    params(
+        ("cid" = String, Path, description = "Receipt CID")
+    ),
+    responses(
+        (status = 200, description = "Receipt detail", body = ExecutionReceiptDetail),
+        (status = 404, description = "Receipt not found")
+    )
+)]
+pub async fn get_receipt_detail_handler(
+    AxumPath(cid): AxumPath<String>,
+    State(db): State<Db>,
+) -> Result<Json<ExecutionReceiptDetail>, ApiError> {
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    store
+        .receipts
+        .iter()
+        .find(|r| r.summary.cid == cid)
+        .map(|r| Json(r.clone()))
+        .ok_or_else(|| ApiError::NotFound(format!("Receipt with CID {} not found", cid)))
+}
+
+// GET /receipts/stats
+#[utoipa::path(
+    get,
+    path = "/receipts/stats",
+    params(
+        ("coop_id" = Option<String>, Query, description = "Cooperative ID to filter by"),
+        ("community_id" = Option<String>, Query, description = "Community ID to filter by")
+    ),
+    responses(
+        (status = 200, description = "Receipt statistics", body = ReceiptStatsResponse)
+    )
+)]
+pub async fn get_receipt_stats_handler(
+    Query(params): Query<GetReceiptsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<ReceiptStatsResponse>, ApiError> {
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    let stats = store.get_receipt_stats(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref()
+    );
+    
+    let response = ReceiptStatsResponse {
+        stats,
+        coop_id: params.coop_id,
+        community_id: params.community_id,
+    };
+    
+    Ok(Json(response))
+}
+
+// GET /tokens/balances
+#[utoipa::path(
+    get,
+    path = "/tokens/balances",
+    params(
+        GetTokenBalancesQuery
+    ),
+    responses(
+        (status = 200, description = "List of token balances", body = Vec<TokenBalance>)
+    )
+)]
+pub async fn get_token_balances_handler(
+    Query(params): Query<GetTokenBalancesQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<TokenBalance>>, ApiError> {
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    let balances = store.filter_token_balances(&params);
+    
+    // Apply pagination if specified
+    let paginated_balances = match (params.offset, params.limit) {
+        (Some(offset), Some(limit)) => {
+            balances
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect()
+        }
+        (Some(offset), None) => balances.into_iter().skip(offset as usize).collect(),
+        (None, Some(limit)) => balances.into_iter().take(limit as usize).collect(),
+        (None, None) => balances,
+    };
+    
+    Ok(Json(paginated_balances))
+}
+
+// GET /tokens/transactions
+#[utoipa::path(
+    get,
+    path = "/tokens/transactions",
+    params(
+        GetTokenTransactionsQuery
+    ),
+    responses(
+        (status = 200, description = "List of token transactions", body = Vec<TokenTransaction>)
+    )
+)]
+pub async fn get_token_transactions_handler(
+    Query(params): Query<GetTokenTransactionsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<TokenTransaction>>, ApiError> {
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    let transactions = store.filter_token_transactions(&params);
+    
+    // Apply pagination if specified
+    let paginated_transactions = match (params.offset, params.limit) {
+        (Some(offset), Some(limit)) => {
+            transactions
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect()
+        }
+        (Some(offset), None) => transactions.into_iter().skip(offset as usize).collect(),
+        (None, Some(limit)) => transactions.into_iter().take(limit as usize).collect(),
+        (None, None) => transactions,
+    };
+    
+    Ok(Json(paginated_transactions))
+}
+
+// GET /tokens/stats
+#[utoipa::path(
+    get,
+    path = "/tokens/stats",
+    params(
+        ("coop_id" = Option<String>, Query, description = "Cooperative ID to filter by"),
+        ("community_id" = Option<String>, Query, description = "Community ID to filter by")
+    ),
+    responses(
+        (status = 200, description = "Token statistics", body = TokenStatsResponse)
+    )
+)]
+pub async fn get_token_stats_handler(
+    Query(params): Query<GetTokenTransactionsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<TokenStatsResponse>, ApiError> {
+    let store = db
+        .read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    let stats = store.get_token_stats(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref()
+    );
+    
+    let response = TokenStatsResponse {
+        stats,
+        coop_id: params.coop_id,
+        community_id: params.community_id,
+    };
+    
+    Ok(Json(response))
+}
+
+// Health check handler
 pub async fn health_check_handler() -> StatusCode {
     StatusCode::OK
 }
