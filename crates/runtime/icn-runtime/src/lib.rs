@@ -8,6 +8,10 @@ use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
+// Import the new context module
+mod context;
+pub use context::RuntimeContext;
+
 /// Error types specific to the runtime
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -179,6 +183,9 @@ pub struct Runtime {
 
     /// Storage backend
     storage: Arc<dyn RuntimeStorage>,
+    
+    /// Runtime context with shared DAG store
+    context: RuntimeContext,
 }
 
 impl Runtime {
@@ -187,6 +194,7 @@ impl Runtime {
         Self {
             vm: CoVm::default(),
             storage,
+            context: RuntimeContext::new(),
         }
     }
 
@@ -195,7 +203,27 @@ impl Runtime {
         Self {
             vm: CoVm::new(limits),
             storage,
+            context: RuntimeContext::new(),
         }
+    }
+    
+    /// Create a new runtime with specified context
+    pub fn with_context(storage: Arc<dyn RuntimeStorage>, context: RuntimeContext) -> Self {
+        Self {
+            vm: CoVm::default(),
+            storage,
+            context,
+        }
+    }
+    
+    /// Get a reference to the runtime context
+    pub fn context(&self) -> &RuntimeContext {
+        &self.context
+    }
+    
+    /// Get the shared DAG store
+    pub fn dag_store(&self) -> Arc<icn_types::dag_store::SharedDagStore> {
+        self.context.dag_store.clone()
     }
 
     /// Execute a proposal by ID
