@@ -13,6 +13,7 @@ serde_json = "1.0.108"
 log = "0.4.20"
 icn-types = { path = "../../common/icn-types" }
 icn-ccl-parser = { path = "../icn-ccl-parser" }
+icn-ccl-dsl = { path = "../icn-ccl-dsl" }
 wasmtime = "12.0.2"
 wasm-encoder = "0.30.0"
 wat = "1.0.78"

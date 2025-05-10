@@ -6,6 +6,7 @@ members = [
     "crates/common/icn-economics",
     "crates/ccl/icn-ccl-parser",
     "crates/ccl/icn-ccl-compiler",
+    "crates/ccl/icn-ccl-dsl",
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
     "crates/p2p/planetary-mesh",

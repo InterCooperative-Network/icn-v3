@@ -1,0 +1,12 @@
+---
+source: crates/ccl/icn-ccl-dsl/src/lib.rs
+expression: json
+---
+{
+  "id": "1d908585-c4d3-4bbe-8950-dfb7a68c074c",
+  "title": "Test",
+  "body": "hello",
+  "author": "did:key:z6M...",
+  "created_at": 0,
+  "rules": []
+}

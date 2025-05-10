@@ -1,0 +1,135 @@
+#![deny(missing_docs)]
+
+//! Core, serde-friendly AST that the CCL compiler emits before WASM code-gen.
+
+use serde::{Deserialize, Serialize};
+use strum::{Display, EnumString};
+use uuid::Uuid;
+
+/// Every top-level cooperative artefact the DSL can emit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DslModule {
+    /// A proposal module.
+    Proposal(Proposal),
+    /// A vote module.
+    Vote(Vote),
+    /// An anchor module.
+    Anchor(Anchor),
+    /// A metered action module.
+    MeteredAction(MeteredAction),
+}
+
+/// Canonically-typed proposal object (post-parse, pre-codegen).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Proposal {
+    /// Unique ID for the proposal.
+    pub id: Uuid,
+    /// Title of the proposal.
+    pub title: String,
+    /// Body content of the proposal.
+    pub body: String,
+    /// Author identifier (e.g., DID).
+    pub author: String,
+    /// Creation timestamp (Unix epoch seconds).
+    pub created_at: i64,
+    /// Associated rules for the proposal.
+    pub rules: Vec<Rule>,
+}
+
+/// Simple vote artefact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vote {
+    /// ID of the proposal being voted on.
+    pub proposal_id: Uuid,
+    /// Voter identifier.
+    pub voter: String,
+    /// Stance of the vote.
+    pub stance: VoteStance,
+    /// Optional rationale for the vote.
+    pub rationale: Option<String>,
+    /// Signature timestamp (Unix epoch seconds).
+    pub signed_at: i64,
+}
+
+/// Represents the stance of a vote.
+#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
+pub enum VoteStance {
+    /// Affirmative vote.
+    #[strum(serialize = "yes")]
+    Yes,
+    /// Negative vote.
+    #[strum(serialize = "no")]
+    No,
+    /// Abstention from voting.
+    #[strum(serialize = "abstain")]
+    Abstain,
+}
+
+/// Data anchoring request (will call `host_anchor_to_dag`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Anchor {
+    /// CID of the payload to anchor.
+    pub payload_cid: String,
+}
+
+/// Execution metering (resource consumption).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeteredAction {
+    /// Type of resource being consumed.
+    pub resource_type: String,
+    /// Amount of resource consumed.
+    pub amount: u64,
+}
+
+/// Generic on-chain rule block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rule {
+    /// Key for the rule.
+    pub key: String,
+    /// Value of the rule.
+    pub value: RuleValue,
+}
+
+/// Represents the value of a rule, which can be of various types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RuleValue {
+    /// A string value.
+    String(String),
+    /// A floating-point number value.
+    Number(f64),
+    /// A boolean value.
+    Boolean(bool),
+    /// A list of rule values.
+    List(Vec<RuleValue>),
+    /// A map represented as a list of rules (key-value pairs).
+    Map(Vec<Rule>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn roundtrip_proposal() {
+        let p = Proposal {
+            id: Uuid::new_v4(),
+            title: "Test".into(),
+            body: "hello".into(),
+            author: "did:key:z6M...".into(),
+            created_at: 0,
+            rules: vec![],
+        };
+        let json = serde_json::to_string_pretty(&p).unwrap();
+        let back: Proposal = serde_json::from_str(&json).unwrap();
+        insta::assert_snapshot!(json);
+        assert_eq!(p.title, back.title);
+        // Add more assertions if needed, e.g., for id, body, etc.
+        assert_eq!(p.id, back.id);
+        assert_eq!(p.body, back.body);
+        assert_eq!(p.author, back.author);
+        assert_eq!(p.created_at, back.created_at);
+        assert_eq!(p.rules.len(), back.rules.len());
+    }
+} 
