@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
+use wasmtime::{Module};
 #[cfg(feature = "legacy-identity")]
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use icn_identity::{TrustBundle, TrustValidationError, Did};
@@ -397,7 +398,7 @@ impl Runtime {
     /// Execute a WASM binary with the given context
     pub fn execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
         // Convert the VM context to a host context
-        let host_context = self.vm_context_to_host_context(context);
+        let host_context = self.vm_context_to_host_context(context.clone());
 
         // Create a wasmtime store and register the economics host functions
         let mut linker = wasmtime::Linker::new(self.vm.engine());
@@ -406,7 +407,7 @@ impl Runtime {
         // Set up the host environment in the store data
         let host_env = ConcreteHostEnvironment::new(
             Arc::new(self.context.clone()),
-            context.executor_did.clone()
+            context.executor_did.parse().unwrap_or_default()
         );
         store.data_mut().set_host(host_env);
         
@@ -414,25 +415,49 @@ impl Runtime {
         wasm::linker::register_host_functions(&mut linker)?;
         
         // Execute the WASM module
-        let updated_host_context = self
-            .vm
-            .execute_with_linker(wasm_bytes, host_context, &linker, &mut store)
-            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM: {}", e)))?;
+        let module = Module::new(self.vm.engine(), wasm_bytes)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to compile WASM: {}", e)))?;
+        
+        // Set initial fuel based on limits
+        let initial_fuel = if let Some(limits) = &context.resource_limits {
+            limits.max_fuel
+        } else {
+            10_000_000 // Default reasonable limit
+        };
+        store.set_fuel(initial_fuel)?;
+        
+        // Instantiate the module with the linker
+        let instance = linker.instantiate(&mut store, &module)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to instantiate WASM: {}", e)))?;
+            
+        // Call the entrypoint function
+        let entrypoint = instance.get_typed_func::<(), ()>(&mut store, "_start")
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to find entrypoint: {}", e)))?;
+        
+        entrypoint.call(&mut store, ())
+            .map_err(|e| RuntimeError::ExecutionError(format!("Execution failed: {}", e)))?;
+        
+        // Record resource usage
+        let fuel_remaining = store.get_fuel().unwrap_or(0);
+        let fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
+        
+        // Update the host context with resource usage
+        host_context.metrics.lock().unwrap().fuel_used = fuel_consumed;
 
         // Extract the final metrics and other data from the host context
-        let metrics_guard = updated_host_context.metrics.lock().unwrap();
+        let metrics_guard = host_context.metrics.lock().unwrap();
         let final_metrics = metrics_guard.clone();
         drop(metrics_guard);
 
-        let anchored_cids_guard = updated_host_context.anchored_cids.lock().unwrap();
+        let anchored_cids_guard = host_context.anchored_cids.lock().unwrap();
         let final_anchored_cids = anchored_cids_guard.clone();
         drop(anchored_cids_guard);
 
-        let resource_usage_guard = updated_host_context.resource_usage.lock().unwrap();
+        let resource_usage_guard = host_context.resource_usage.lock().unwrap();
         let final_resource_usage = resource_usage_guard.clone();
         drop(resource_usage_guard);
 
-        let logs_guard = updated_host_context.logs.lock().unwrap();
+        let logs_guard = host_context.logs.lock().unwrap();
         let final_logs = logs_guard.clone();
         drop(logs_guard);
 
@@ -498,29 +523,8 @@ impl Runtime {
 
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
     fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
-        // Create a ConcreteHostEnvironment to handle economics functions
-        let host_env = ConcreteHostEnvironment::new(
-            Arc::new(self.context.clone()),
-            vm_context.executor_did.clone()
-        );
-        
-        // Create a StoreData to hold the host environment
-        let mut store_data = wasm::linker::StoreData::new();
-        store_data.set_host(host_env);
-        
-        // Set up a HostContext with default values
-        let mut host_context = HostContext::default();
-        
-        // If resource limits are provided in the VM context, apply them to the host context
-        if let Some(limits) = &vm_context.resource_limits {
-            // Update metrics to track these limits
-            let mut metrics = host_context.metrics.lock().unwrap();
-            metrics.max_fuel = limits.max_fuel;
-            metrics.max_host_calls = limits.max_host_calls as u64;
-            metrics.max_io_bytes = limits.max_io_bytes;
-            metrics.max_anchored_cids = limits.max_anchored_cids;
-            metrics.max_job_submissions = limits.max_job_submissions;
-        }
+        // Create a HostContext with default values
+        let host_context = HostContext::default();
         
         // Return the configured host context
         host_context
@@ -588,6 +592,7 @@ mod tests {
     use super::*;
     use anyhow::anyhow;
     use icn_identity::{TrustBundle, TrustValidator};
+    use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType};
     use std::fs;
     use std::sync::{Arc, Mutex};
 
@@ -710,6 +715,72 @@ mod tests {
         // This will fail because no signers are registered and no quorum proof is added
         assert!(runtime.verify_trust_bundle(&test_bundle).is_err());
 
+        Ok(())
+    }
+    
+    #[tokio::test]
+    async fn test_resource_economics() -> Result<()> {
+        // Create a simple WAT (WebAssembly Text) module that calls the resource functions
+        let wat = r#"
+        (module
+          (import "icn_host" "host_check_resource_authorization" (func $check_auth (param i32 i64) (result i32)))
+          (import "icn_host" "host_record_resource_usage" (func $record_usage (param i32 i64) (result i32)))
+          (func $start
+            ;; Try to authorize CPU usage (resource type 0)
+            (call $check_auth
+              (i32.const 0)  ;; ResourceType::Cpu = 0
+              (i64.const 100)) ;; Amount = 100
+            drop
+            
+            ;; Record CPU usage
+            (call $record_usage
+              (i32.const 0)  ;; ResourceType::Cpu = 0
+              (i64.const 50)) ;; Amount = 50
+            drop
+          )
+          (export "_start" (func $start))
+        )
+        "#;
+
+        // Create a parser
+        let engine = wasmtime::Engine::default();
+        let module = Module::new(&engine, wat)?;
+        
+        // Create a policy that allows up to 1000 units of each resource type
+        let policy = ResourceAuthorizationPolicy::new_fixed_limit(1000);
+        let economics = Arc::new(Economics::new(policy));
+        
+        // Create a runtime with the economics engine
+        let storage = Arc::new(MockStorage::new());
+        let context = RuntimeContext::builder()
+            .with_economics(economics)
+            .build();
+        let runtime = Runtime::with_context(storage, context);
+        
+        // Create a VM context with a test DID
+        let vm_context = VmContext {
+            executor_did: "did:icn:test".to_string(),
+            scope: None,
+            epoch: None,
+            code_cid: None,
+            resource_limits: None,
+        };
+        
+        // Execute the WASM module
+        let result = runtime.execute_wasm(&module.serialize()?, vm_context)?;
+        
+        // Verify resource usage was recorded
+        let mut found_cpu_usage = false;
+        for (resource_type, amount) in &result.resource_usage {
+            if resource_type == "CPU" && *amount == 50 {
+                found_cpu_usage = true;
+                break;
+            }
+        }
+        
+        // Check that CPU usage was recorded
+        assert!(found_cpu_usage, "Expected CPU resource usage to be recorded");
+        
         Ok(())
     }
 }
