@@ -70,13 +70,14 @@ pub async fn revoke_token_handler(
     let mut revoked = false;
     let mut revoked_jti = None;
     let mut revoked_subject = None;
+    let mut revoked_issuer = None;
     
     // If we have a JTI, revoke that specific token
     if let Some(jti) = &payload.jti {
         let revoked_token = crate::auth::revocation::RevokedToken {
             jti: jti.clone(),
             subject: payload.subject.clone().unwrap_or_else(|| "unknown".to_string()),
-            issuer: Some(format!("did:icn:federation:{}", federation_id)),
+            issuer: payload.issuer.clone().or_else(|| Some(format!("did:icn:federation:{}", federation_id))),
             revoked_at: now,
             reason: payload.reason.clone(),
             revoked_by: auth.claims.sub.clone(),
@@ -85,13 +86,15 @@ pub async fn revoke_token_handler(
         revoked = revocation_store.revoke_token(revoked_token);
         revoked_jti = Some(jti.clone());
     } 
-    // If we have a subject, revoke all tokens for that subject
+    // If we have a subject, revoke all tokens for that subject and issuer
     else if let Some(subject) = &payload.subject {
-        // Create a dummy token with the subject
+        let issuer = payload.issuer.clone().or_else(|| Some(format!("did:icn:federation:{}", federation_id)));
+        
+        // Create a revoked token with the subject and issuer
         let revoked_token = crate::auth::revocation::RevokedToken {
             jti: format!("revoked-{}-{}", subject, Uuid::new_v4()),
             subject: subject.clone(),
-            issuer: Some(format!("did:icn:federation:{}", federation_id)),
+            issuer: issuer.clone(),
             revoked_at: now,
             reason: payload.reason.clone(),
             revoked_by: auth.claims.sub.clone(),
@@ -99,16 +102,18 @@ pub async fn revoke_token_handler(
         
         revoked = revocation_store.revoke_token(revoked_token);
         revoked_subject = Some(subject.clone());
+        revoked_issuer = issuer;
     }
     
     // Log the revocation action
     if revoked {
         tracing::info!(
-            "Token revoked by federation coordinator {} for federation {}: jti={:?}, subject={:?}, reason={:?}",
+            "Token revoked by federation coordinator {} for federation {}: jti={:?}, subject={:?}, issuer={:?}, reason={:?}",
             auth.claims.sub,
             federation_id,
             revoked_jti,
             revoked_subject,
+            revoked_issuer,
             payload.reason
         );
     }
@@ -119,6 +124,7 @@ pub async fn revoke_token_handler(
         revoked_at: now,
         jti: revoked_jti,
         subject: revoked_subject,
+        issuer: revoked_issuer,
     };
     
     Ok(Json(response))
@@ -144,11 +150,14 @@ pub async fn rotate_token_handler(
         }
     }
     
+    // Generate issuer for this federation
+    let issuer = Some(format!("did:icn:federation:{}", federation_id));
+    
     // First, revoke the old token
     let revoked_token = crate::auth::revocation::RevokedToken {
         jti: payload.current_jti.clone(),
         subject: payload.subject.clone(),
-        issuer: Some(format!("did:icn:federation:{}", federation_id)),
+        issuer: issuer.clone(),
         revoked_at: Utc::now(),
         reason: payload.reason.clone().or(Some("Token rotation".to_string())),
         revoked_by: auth.claims.sub.clone(),
@@ -171,7 +180,6 @@ pub async fn rotate_token_handler(
         roles: payload.roles.clone(),
     };
     
-    let issuer = Some(format!("did:icn:federation:{}", federation_id));
     let token_response = issue_token(&token_request, issuer, &jwt_config)?;
     
     // Log the token rotation

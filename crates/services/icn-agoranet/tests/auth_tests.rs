@@ -3,6 +3,7 @@ use chrono::Utc;
 use icn_agoranet::{
     app::create_app,
     auth::{Claims, JwtConfig},
+    auth::revocation::{RevokeTokenRequest, RotateTokenRequest},
     handlers::Db,
     models::{ExecutionReceiptSummary, TokenBalance, TokenTransaction},
     websocket::WebSocketState,
@@ -348,85 +349,134 @@ async fn test_unauthorized_federation_token_issuance() {
 
 #[tokio::test]
 async fn test_token_revocation() {
-    // 1. Spawn app and seed database
-    let (server_url, _handle, db, jwt_config) = spawn_app().await;
-    seed_test_data(&db).await;
+    use icn_agoranet::auth::revocation::{
+        RevokeTokenRequest, RevokeTokenResponse, RevokedToken, TokenRevocationStore, InMemoryRevocationStore
+    };
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    // Create a new in-memory store
+    let store = InMemoryRevocationStore::new();
     
-    // 2. Create a JWT token with federation admin role
+    // Test revoking by JTI
+    let jti = format!("test-jti-{}", Uuid::new_v4());
+    let token = RevokedToken {
+        jti: jti.clone(),
+        subject: "test-subject".to_string(),
+        issuer: Some("test-issuer".to_string()),
+        revoked_at: Utc::now(),
+        reason: Some("Test revocation".to_string()),
+        revoked_by: "test-admin".to_string(),
+    };
+    
+    assert!(store.revoke_token(token));
+    assert!(store.is_revoked(&jti));
+    
+    // Test revoking by subject+issuer
+    let subject = "another-subject";
+    let issuer = "another-issuer";
+    let jti2 = format!("test-jti-{}", Uuid::new_v4());
+    
+    let token2 = RevokedToken {
+        jti: jti2.clone(),
+        subject: subject.to_string(),
+        issuer: Some(issuer.to_string()),
+        revoked_at: Utc::now(),
+        reason: Some("Another test revocation".to_string()),
+        revoked_by: "test-admin".to_string(),
+    };
+    
+    assert!(store.revoke_token(token2));
+    assert!(store.is_revoked(&jti2));
+    assert!(store.is_revoked_by_subject_issuer(subject, Some(issuer)));
+    
+    // Get all revoked tokens for a subject
+    let revoked_tokens = store.get_revoked_tokens_for_subject(subject);
+    assert_eq!(revoked_tokens.len(), 1);
+    assert_eq!(revoked_tokens[0].jti, jti2);
+    
+    // Get tokens by subject+issuer
+    let specific_tokens = store.get_revoked_tokens_for_subject_issuer(subject, Some(issuer));
+    assert_eq!(specific_tokens.len(), 1);
+    assert_eq!(specific_tokens[0].jti, jti2);
+    
+    // Cleanup expired tokens (none should be cleaned as they're all recent)
+    let old_time = Utc::now() - chrono::Duration::days(7);
+    let removed = store.clear_expired_revocations(old_time);
+    assert_eq!(removed, 0);
+    
+    // Verify tokens still exist
+    assert!(store.is_revoked(&jti));
+    assert!(store.is_revoked(&jti2));
+}
+
+#[tokio::test]
+async fn test_token_revocation_endpoint() {
+    // Spawn test app
+    let (server_url, handle, store, jwt_config) = spawn_app().await;
+    
+    // Create a test client
+    let client = Client::new();
+    
+    // Create a token for a federation admin
     let mut roles = HashMap::new();
-    roles.insert("alpha".to_string(), vec!["federation_admin".to_string()]);
+    roles.insert("federation1".to_string(), vec!["federation_admin".to_string()]);
     
     let admin_token = create_jwt_token(
-        &jwt_config,
-        vec!["alpha".to_string()],
-        vec!["coop-econA".to_string()],
-        vec!["comm-govX".to_string()],
-        roles,
+        &jwt_config, 
+        vec!["federation1".to_string()], 
+        vec![],
+        vec![],
+        roles
     );
     
-    // 3. First issue a token to revoke
-    let client = Client::builder().build().unwrap();
+    // Create a test user token to revoke
+    let user_token = create_jwt_token(
+        &jwt_config,
+        vec!["federation1".to_string()],
+        vec![],
+        vec![],
+        HashMap::new()
+    );
     
-    let token_request = serde_json::json!({
-        "subject": "did:icn:revoke_test_user",
-        "expires_in": 3600,
-        "federation_ids": ["alpha"],
-        "coop_ids": ["coop-econA"],
-        "community_ids": ["comm-govX"]
-    });
+    // Decode the user token to get the JTI
+    let user_token_data = jsonwebtoken::decode::<icn_agoranet::auth::Claims>(
+        &user_token,
+        &jsonwebtoken::DecodingKey::from_secret(jwt_config.secret_key.as_bytes()),
+        &jwt_config.validation
+    ).unwrap();
     
-    let issue_response = client
-        .post(format!("{}/api/v1/federation/alpha/tokens", server_url))
+    // We need to ensure the token has a JTI claim
+    let jti = user_token_data.claims.jti.unwrap_or_else(|| "test-jti".to_string());
+    
+    // Call the revoke endpoint
+    let revoke_response = client.post(&format!("{}/api/v1/federation/federation1/tokens/revoke", server_url))
         .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&token_request)
+        .json(&RevokeTokenRequest {
+            jti: Some(jti.clone()),
+            subject: None,
+            issuer: None,
+            reason: Some("Test revocation".to_string()),
+        })
         .send()
         .await
-        .expect("Failed to send token issuance request");
-    
-    assert_eq!(issue_response.status(), StatusCode::OK);
-    
-    let token_data: serde_json::Value = issue_response.json().await.expect("Failed to parse response");
-    let token_to_revoke = token_data["token"].as_str().unwrap().to_string();
-    let token_id = token_data["token_id"].as_str().unwrap().to_string();
-    
-    // 4. Verify the token works before revocation
-    let access_response = client
-        .get(format!("{}/api/v1/receipts?coop_id=coop-econA", server_url))
-        .header("Authorization", format!("Bearer {}", token_to_revoke))
-        .send()
-        .await
-        .expect("Failed to send request");
-    
-    assert_eq!(access_response.status(), StatusCode::OK);
-    
-    // 5. Now revoke the token
-    let revoke_request = serde_json::json!({
-        "jti": token_id,
-        "reason": "Test revocation"
-    });
-    
-    let revoke_response = client
-        .post(format!("{}/api/v1/federation/alpha/tokens/revoke", server_url))
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&revoke_request)
-        .send()
-        .await
-        .expect("Failed to send token revocation request");
+        .unwrap();
     
     assert_eq!(revoke_response.status(), StatusCode::OK);
     
-    let revoke_data: serde_json::Value = revoke_response.json().await.expect("Failed to parse response");
-    assert_eq!(revoke_data["revoked"].as_bool().unwrap(), true);
-    
-    // 6. Verify the token no longer works after revocation
-    let access_after_revoke = client
-        .get(format!("{}/api/v1/receipts?coop_id=coop-econA", server_url))
-        .header("Authorization", format!("Bearer {}", token_to_revoke))
+    // Try to use the revoked token
+    let protected_response = client.get(&format!("{}/api/v1/tokens/balances", server_url))
+        .header("Authorization", format!("Bearer {}", user_token))
         .send()
         .await
-        .expect("Failed to send request");
+        .unwrap();
     
-    assert_eq!(access_after_revoke.status(), StatusCode::FORBIDDEN);
+    // It should be rejected as the token is now revoked
+    assert_eq!(protected_response.status(), StatusCode::UNAUTHORIZED);
+    
+    // Cleanup
+    drop(client);
+    handle.abort();
 }
 
 #[tokio::test]
@@ -515,6 +565,95 @@ async fn test_token_rotation() {
         .expect("Failed to send request");
     
     assert_eq!(new_token_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_token_rotation_endpoint() {
+    // Spawn test app
+    let (server_url, handle, store, jwt_config) = spawn_app().await;
+    
+    // Create a test client
+    let client = Client::new();
+    
+    // Create a token for a federation admin
+    let mut roles = HashMap::new();
+    roles.insert("federation1".to_string(), vec!["federation_admin".to_string()]);
+    
+    let admin_token = create_jwt_token(
+        &jwt_config, 
+        vec!["federation1".to_string()], 
+        vec![],
+        vec![],
+        roles
+    );
+    
+    // Create a test user token to rotate
+    let user_token = create_jwt_token(
+        &jwt_config,
+        vec!["federation1".to_string()],
+        vec![],
+        vec![],
+        HashMap::new()
+    );
+    
+    // Decode the user token to get the JTI
+    let user_token_data = jsonwebtoken::decode::<icn_agoranet::auth::Claims>(
+        &user_token,
+        &jsonwebtoken::DecodingKey::from_secret(jwt_config.secret_key.as_bytes()),
+        &jwt_config.validation
+    ).unwrap();
+    
+    // We need to ensure the token has a JTI claim
+    let jti = user_token_data.claims.jti.unwrap_or_else(|| "test-jti".to_string());
+    let subject = user_token_data.claims.sub;
+    
+    // Create a rotation request
+    let rotation_request = RotateTokenRequest {
+        current_jti: jti,
+        subject: subject.clone(),
+        expires_in: Some(3600),
+        federation_ids: Some(vec!["federation1".to_string()]),
+        coop_ids: None,
+        community_ids: None,
+        roles: None,
+        reason: Some("Test rotation".to_string()),
+    };
+    
+    // Call the rotate endpoint
+    let rotate_response = client.post(&format!("{}/api/v1/federation/federation1/tokens/rotate", server_url))
+        .header("Authorization", format!("Bearer {}", admin_token))
+        .json(&rotation_request)
+        .send()
+        .await
+        .unwrap();
+    
+    assert_eq!(rotate_response.status(), StatusCode::OK);
+    
+    // Extract the new token
+    let rotate_body: serde_json::Value = rotate_response.json().await.unwrap();
+    let new_token = rotate_body["token"].as_str().unwrap().to_string();
+    
+    // The old token should now be rejected
+    let old_token_response = client.get(&format!("{}/api/v1/tokens/balances", server_url))
+        .header("Authorization", format!("Bearer {}", user_token))
+        .send()
+        .await
+        .unwrap();
+    
+    assert_eq!(old_token_response.status(), StatusCode::UNAUTHORIZED);
+    
+    // The new token should work
+    let new_token_response = client.get(&format!("{}/api/v1/tokens/balances", server_url))
+        .header("Authorization", format!("Bearer {}", new_token))
+        .send()
+        .await
+        .unwrap();
+    
+    assert_eq!(new_token_response.status(), StatusCode::OK);
+    
+    // Cleanup
+    drop(client);
+    handle.abort();
 }
 
 #[tokio::test]

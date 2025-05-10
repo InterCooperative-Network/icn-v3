@@ -337,7 +337,15 @@ where
         
         // Check if token is revoked (if we have a revocation store)
         if let Some(store) = revocation_store {
+            // First check by JTI
             revocation::check_token_not_revoked(store.as_ref(), &claims.jti)?;
+            
+            // Then check by subject+issuer
+            revocation::check_subject_not_revoked(
+                store.as_ref(), 
+                &claims.sub, 
+                claims.iss.as_deref()
+            )?;
         }
         
         Ok(AuthenticatedRequest {
