@@ -39,3 +39,25 @@ See the [RFC index](./rfcs/README.md) for detailed design decisions and project 
 ## Services
 
 - **AgoraNet API** — Threaded deliberation & governance endpoints ([docs](docs/agoranet_api.md))
+
+## Federation Test Deployment
+
+To deploy a fully-instrumented federation test environment:
+
+```bash
+cd devnet
+./deploy.sh
+```
+
+This will:
+- Launch multiple federation nodes
+- Set up a PostgreSQL database for each node
+- Deploy the complete monitoring stack (Prometheus + Grafana)
+- Generate test load scripts for simulation
+
+Access points:
+- Federation API: http://localhost:8080
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (login: admin/admin)
+
+See [Federation Test Deployment](devnet/README.md) for more details.
