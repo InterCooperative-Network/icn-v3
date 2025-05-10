@@ -1,3 +1,15 @@
+#![forbid(unsafe_code)]
+
+pub mod types;
+pub mod policy;
+pub mod economics;
+
+pub use types::ResourceType;
+pub use policy::ResourceAuthorizationPolicy;
+pub use economics::Economics;
+// Using a different name for the import to avoid conflict
+pub use economics::EconomicsError as ResourceAuthorizationError;
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 // use icn_identity_core::did::Did;

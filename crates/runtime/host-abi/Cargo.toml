@@ -1,0 +1,10 @@
+[package]
+name = "host-abi"
+version = "0.1.0"
+edition = "2021"
+authors = ["ICN Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/intercooperative/icn-v3"
+description = "Host ABI definitions for the ICN runtime"
+
+[dependencies] 
