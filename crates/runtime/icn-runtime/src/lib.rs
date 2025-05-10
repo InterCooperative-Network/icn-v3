@@ -396,13 +396,30 @@ impl Runtime {
 
     /// Execute a WASM binary with the given context
     pub fn execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
+        // Convert the VM context to a host context
         let host_context = self.vm_context_to_host_context(context);
 
+        // Create a wasmtime store and register the economics host functions
+        let mut linker = wasmtime::Linker::new(self.vm.engine());
+        let mut store = wasmtime::Store::new(self.vm.engine(), wasm::linker::StoreData::new());
+        
+        // Set up the host environment in the store data
+        let host_env = ConcreteHostEnvironment::new(
+            Arc::new(self.context.clone()),
+            context.executor_did.clone()
+        );
+        store.data_mut().set_host(host_env);
+        
+        // Register the economic host functions
+        wasm::linker::register_host_functions(&mut linker)?;
+        
+        // Execute the WASM module
         let updated_host_context = self
             .vm
-            .execute(wasm_bytes, host_context)
+            .execute_with_linker(wasm_bytes, host_context, &linker, &mut store)
             .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM: {}", e)))?;
 
+        // Extract the final metrics and other data from the host context
         let metrics_guard = updated_host_context.metrics.lock().unwrap();
         let final_metrics = metrics_guard.clone();
         drop(metrics_guard);
@@ -480,10 +497,33 @@ impl Runtime {
     }
 
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
-    fn vm_context_to_host_context(&self, _vm_context: VmContext) -> HostContext {
-        // For now, just return a default context
-        // In the future, we should pass information from VmContext to HostContext
-        HostContext::default()
+    fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
+        // Create a ConcreteHostEnvironment to handle economics functions
+        let host_env = ConcreteHostEnvironment::new(
+            Arc::new(self.context.clone()),
+            vm_context.executor_did.clone()
+        );
+        
+        // Create a StoreData to hold the host environment
+        let mut store_data = wasm::linker::StoreData::new();
+        store_data.set_host(host_env);
+        
+        // Set up a HostContext with default values
+        let mut host_context = HostContext::default();
+        
+        // If resource limits are provided in the VM context, apply them to the host context
+        if let Some(limits) = &vm_context.resource_limits {
+            // Update metrics to track these limits
+            let mut metrics = host_context.metrics.lock().unwrap();
+            metrics.max_fuel = limits.max_fuel;
+            metrics.max_host_calls = limits.max_host_calls as u64;
+            metrics.max_io_bytes = limits.max_io_bytes;
+            metrics.max_anchored_cids = limits.max_anchored_cids;
+            metrics.max_job_submissions = limits.max_job_submissions;
+        }
+        
+        // Return the configured host context
+        host_context
     }
 
     /// Verify a trust bundle using the configured trust validator

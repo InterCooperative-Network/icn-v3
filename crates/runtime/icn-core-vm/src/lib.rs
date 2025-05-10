@@ -1,11 +1,12 @@
+// Core-VM: WebAssembly Virtual Machine for ICN runtime
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use wasmtime::{
     AsContextMut, Caller, Config, Engine, Extern, Func, FuncType, Instance, Module, OptLevel,
-    Store, Val, ValType,
+    Store, Val, ValType, Linker,
 };
+use std::sync::{Arc, Mutex};
 
 /// Error types specific to the Cooperative VM
 #[derive(Error, Debug)]
@@ -153,6 +154,11 @@ impl CoVm {
         Self { engine, limits }
     }
 
+    /// Get a reference to the Wasmtime engine
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     /// Execute a WASM module with the provided context
     pub fn execute(&self, wasm_bytes: &[u8], context: HostContext) -> Result<HostContext> {
         let module = Module::new(&self.engine, wasm_bytes)
@@ -204,10 +210,64 @@ impl CoVm {
         execution_result.map(|_| final_host_context)
     }
 
+    /// Execute a WASM module with a provided linker and store
+    pub fn execute_with_linker<T>(
+        &self, 
+        wasm_bytes: &[u8], 
+        context: HostContext,
+        linker: &Linker<T>,
+        store: &mut Store<T>,
+    ) -> Result<HostContext> 
+    where
+        T: wasmtime::AsContextMut,
+    {
+        // Compile the WASM module
+        let module = Module::new(&self.engine, wasm_bytes)
+            .map_err(|e| anyhow!("Failed to compile WASM module: {}", e))?;
+
+        // Set initial fuel based on limits
+        let initial_fuel = self.limits.max_fuel;
+        store.set_fuel(initial_fuel)?;
+        
+        // Instantiate the module with the provided linker
+        let instance = linker.instantiate(&mut *store, &module)
+            .map_err(|e| anyhow!("Failed to instantiate WASM module: {}", e))?;
+            
+        // Call the entrypoint function
+        self.call_entrypoint_with_store(store, &instance)?;
+        
+        // Calculate resource usage
+        let fuel_remaining = store.get_fuel().unwrap_or(0);
+        let fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
+        
+        // Track metrics in the host context
+        let mut host_context = context;
+        host_context.metrics.lock().unwrap().fuel_used = fuel_consumed;
+        
+        Ok(host_context)
+    }
+
     /// Try different entrypoints to call the WASM module
     fn call_entrypoint(&self, store: &mut Store<HostContext>, instance: &Instance) -> Result<()> {
         let entrypoint = instance
             .get_typed_func::<(), ()>(&mut *store, "_start")
+            .map_err(|e| anyhow!("Failed to get _start function: {}", e))?;
+        entrypoint.call(store.as_context_mut(), ()).map_err(|e| {
+            if e.to_string().contains("all fuel consumed") {
+                CoVmError::FuelExhausted.into()
+            } else {
+                anyhow!("WASM execution trapped: {}", e)
+            }
+        })
+    }
+    
+    /// Call entrypoint function with a generic store
+    fn call_entrypoint_with_store<T>(&self, store: &mut Store<T>, instance: &Instance) -> Result<()> 
+    where 
+        T: wasmtime::AsContextMut,
+    {
+        let entrypoint = instance
+            .get_typed_func::<(), ()>(store.as_context_mut(), "_start")
             .map_err(|e| anyhow!("Failed to get _start function: {}", e))?;
         entrypoint.call(store.as_context_mut(), ()).map_err(|e| {
             if e.to_string().contains("all fuel consumed") {
