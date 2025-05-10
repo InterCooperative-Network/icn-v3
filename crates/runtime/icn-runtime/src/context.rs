@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use icn_types::dag_store::SharedDagStore;
 use icn_identity::TrustValidator;
-use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType};
+use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType, LedgerKey};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 
@@ -28,8 +28,8 @@ pub struct RuntimeContext {
     /// Economics engine for resource management
     pub economics: Arc<Economics>,
 
-    /// Resource usage ledger
-    pub resource_ledger: Arc<RwLock<HashMap<ResourceType, u64>>>,
+    /// Resource usage ledger - maps (DID, ResourceType) to amount
+    pub resource_ledger: Arc<RwLock<HashMap<LedgerKey, u64>>>,
 }
 
 impl RuntimeContext {

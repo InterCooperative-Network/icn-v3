@@ -9,6 +9,7 @@ pub use policy::ResourceAuthorizationPolicy;
 pub use economics::Economics;
 // Using a different name for the import to avoid conflict
 pub use economics::EconomicsError as ResourceAuthorizationError;
+pub use economics::LedgerKey;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

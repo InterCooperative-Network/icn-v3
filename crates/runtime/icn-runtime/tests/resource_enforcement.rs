@@ -3,6 +3,7 @@ use std::sync::Arc;
 use icn_runtime::{Runtime, RuntimeContextBuilder, VmContext};
 use icn_types::dag_store::SharedDagStore;
 use icn_identity::KeyPair;
+use icn_economics::{ResourceType, LedgerKey};
 use anyhow::Result;
 use wat::parse_str;
 
@@ -67,7 +68,7 @@ async fn resource_usage_recording() -> Result<()> {
 
     // Generate a test DID
     let keypair = KeyPair::generate();
-    let did = keypair.did;
+    let did = keypair.did.clone();
 
     // Set up runtime context
     let ctx = RuntimeContextBuilder::new()
@@ -96,9 +97,19 @@ async fn resource_usage_recording() -> Result<()> {
     assert_eq!(result.resource_usage[0].0, "token", "Expected token resource type");
     assert_eq!(result.resource_usage[0].1, 10, "Expected 10 tokens recorded");
     
-    // The next step would be to check our ledger, but the current core VM system doesn't 
-    // integrate with our economics module yet - that would require modifying core-vm
-    // Future enhancement: ctx.resource_ledger.read().await contains ResourceType::Token with value 10
+    // The next step would be to check our ledger with the economics API
+    // This would look like:
+    // let token_usage = ctx.economics.get_usage(&did, ResourceType::Token, &ctx.resource_ledger).await;
+    // assert_eq!(token_usage, 10, "Expected 10 tokens in the ledger for this DID");
+    
+    // But since our core VM doesn't update our ledger yet, we have to manually check
+    let ledger = ctx.resource_ledger.read().await;
+    let expected_key = LedgerKey {
+        did: did.to_string(),
+        resource_type: ResourceType::Token,
+    };
+    assert_eq!(ledger.contains_key(&expected_key), false, 
+               "Ledger shouldn't contain entries yet until core-vm is updated to use our economics API");
     
     Ok(())
 } 
