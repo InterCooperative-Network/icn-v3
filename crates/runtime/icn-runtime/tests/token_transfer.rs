@@ -44,9 +44,11 @@ async fn test_token_transfer() -> Result<()> {
     
     // Create execution context
     let vm_context = VmContext {
-        executor_did: sender_did.to_string(),
-        wasm_cid: "test_transfer_cid".to_string(),
-        ..Default::default()
+        caller_did: sender_did.to_string(),
+        scope: None,
+        epoch: None,
+        code_cid: None,
+        resource_limits: None,
     };
     
     // Execute the WASM module
@@ -105,9 +107,11 @@ async fn test_token_transfer_insufficient_funds() -> Result<()> {
     
     // Create execution context
     let vm_context = VmContext {
-        executor_did: sender_did.to_string(),
-        wasm_cid: "test_transfer_cid".to_string(),
-        ..Default::default()
+        caller_did: sender_did.to_string(),
+        scope: None,
+        epoch: None,
+        code_cid: None,
+        resource_limits: None,
     };
     
     // Execute the WASM module

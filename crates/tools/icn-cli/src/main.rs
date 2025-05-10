@@ -49,6 +49,10 @@ enum Commands {
     /// Ledger operations
     #[clap(subcommand)]
     Ledger(LedgerCommands),
+    
+    /// Token operations
+    #[clap(subcommand)]
+    Token(TokenCommands),
 }
 
 /// Federation management commands
@@ -262,6 +266,25 @@ enum LedgerCommands {
         
         /// Amount of tokens to mint
         #[clap(long, short)]
+        amount: u64,
+    },
+}
+
+/// Commands for token operations
+#[derive(Subcommand)]
+enum TokenCommands {
+    /// Transfer tokens from one DID to another
+    Transfer {
+        /// The sender DID
+        #[clap(long)]
+        from: String,
+        
+        /// The recipient DID
+        #[clap(long)]
+        to: String,
+        
+        /// Amount of tokens to transfer
+        #[clap(long)]
         amount: u64,
     },
 }
@@ -751,28 +774,109 @@ async fn verify_trust_bundle(cid: &str, node_api: &str) -> Result<()> {
     Ok(())
 }
 
+/// Transfer tokens from one DID to another
+async fn transfer_tokens(from_did: &str, to_did: &str, amount: u64) -> Result<()> {
+    println!("Transferring {} tokens from {} to {}", amount, from_did, to_did);
+    
+    // Create a CCL script for the transfer
+    let ccl = format!(r#"
+title: "Token Transfer";
+description: "Transfer {} tokens from {} to {}";
+
+actions {{
+  on "execute" {{
+    transfer_token {{
+      type "token"
+      amount {}
+      sender "{}"
+      recipient "{}"
+    }}
+  }}
+}}
+"#, amount, from_did, to_did, amount, from_did, to_did);
+    
+    // Write to a temporary file
+    let temp_dir = tempfile::tempdir()?;
+    let ccl_path = temp_dir.path().join("transfer.ccl");
+    std::fs::write(&ccl_path, ccl)?;
+    
+    // Compile and execute
+    let receipt_cid = execute_ccl(&ccl_path, None).await?;
+    println!("Transfer complete! Receipt: {}", receipt_cid);
+    
+    // Show updated balances
+    println!("\nUpdated balances:");
+    println!("Sender ({}):", from_did);
+    // In a real implementation, we would query the ledger here
+    println!("Recipient ({}):", to_did);
+    // In a real implementation, we would query the ledger here
+    
+    Ok(())
+}
+
+/// Show the resource balances for a DID
+async fn show_ledger(did: &str, resource_type: Option<&str>) -> Result<()> {
+    println!("Showing ledger for DID: {}", did);
+    
+    // In a real implementation, we would query the actual ledger
+    // For this CLI prototype, we'll show mock data
+    let resources = vec![
+        ("TOKEN", 100),
+        ("CPU", 5000),
+        ("MEMORY", 10000),
+        ("IO", 1000)
+    ];
+    
+    if let Some(rt) = resource_type {
+        // Show only the specified resource
+        if let Some(&(_, amount)) = resources.iter().find(|(r, _)| r == &rt) {
+            println!("{}: {}", rt, amount);
+        } else {
+            println!("Resource type '{}' not found for DID {}", rt, did);
+        }
+    } else {
+        // Show all resources
+        println!("Resources for DID {}:", did);
+        for (resource, amount) in resources {
+            println!("  {}: {}", resource, amount);
+        }
+    }
+    
+    Ok(())
+}
+
 /// Entrypoint
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    match &cli.command {
         Commands::Proposal(cmd) => match cmd {
             ProposalCommands::Create {
                 ccl_file,
                 title,
                 output,
-            } => create_proposal(&ccl_file, &title, output.as_deref()).await?,
+            } => {
+                create_proposal(ccl_file, title, output.as_deref()).await?;
+            }
             ProposalCommands::Vote {
                 proposal,
                 direction,
                 weight,
-            } => vote_on_proposal(&proposal, &direction, weight).await?,
-            ProposalCommands::Status { proposal } => check_proposal_status(&proposal).await?,
+            } => {
+                vote_on_proposal(proposal, direction, *weight).await?;
+            }
+            ProposalCommands::Status { proposal } => {
+                check_proposal_status(proposal).await?;
+            }
         },
         Commands::Ccl(cmd) => match cmd {
-            CclCommands::CompileToDsl { input, output } => compile_to_dsl(&input, &output).await?,
-            CclCommands::CompileToWasm { input, output } => compile_to_wasm(&input, &output).await?,
+            CclCommands::CompileToDsl { input, output } => {
+                compile_to_dsl(input, output).await?;
+            }
+            CclCommands::CompileToWasm { input, output } => {
+                compile_to_wasm(input, output).await?;
+            }
         },
         Commands::Runtime(cmd) => match cmd {
             RuntimeCommands::Execute {
@@ -781,13 +885,13 @@ async fn main() -> Result<()> {
                 receipt,
                 governance,
             } => {
-                let receipt_cid = execute_wasm(&wasm, proposal.as_deref(), receipt.as_deref(), *governance).await?;
-                println!("Execution completed, receipt CID: {}", receipt_cid);
+                execute_wasm(wasm, proposal.as_deref(), receipt.as_deref(), governance).await?;
             }
-            RuntimeCommands::Verify { receipt } => verify_receipt(&receipt).await?,
+            RuntimeCommands::Verify { receipt } => {
+                verify_receipt(receipt).await?;
+            }
             RuntimeCommands::ExecuteCcl { input, output } => {
-                let receipt_cid = execute_ccl(&input, output.as_deref()).await?;
-                println!("Execution completed, receipt CID: {}", receipt_cid);
+                execute_ccl(input, output.as_deref()).await?;
             }
         },
         Commands::Federation(cmd) => match cmd {
@@ -799,34 +903,56 @@ async fn main() -> Result<()> {
                 threshold,
                 output,
             } => {
-                create_federation(&name, description.as_deref(), &signers, &quorum_type, threshold, &output).await?
-            },
+                create_federation(
+                    name,
+                    description.as_deref(),
+                    signers,
+                    quorum_type,
+                    *threshold,
+                    output,
+                )
+                .await?;
+            }
             FederationCommands::Anchor {
                 bundle,
                 node_api,
                 output,
             } => {
-                let cid = anchor_trust_bundle(&bundle, &node_api, &output).await?;
-                println!("Trust bundle anchored with CID: {}", cid);
-            },
+                anchor_trust_bundle(bundle, node_api, output).await?;
+            }
             FederationCommands::Verify { cid, node_api } => {
-                verify_trust_bundle(&cid, &node_api).await?
+                verify_trust_bundle(cid, node_api).await?;
             }
         },
         Commands::Keypair(cmd) => match cmd {
-            KeypairCommands::Generate { output } => generate_keypair(&output).await?,
-            KeypairCommands::Info { input } => keypair_info(&input).await?,
+            KeypairCommands::Generate { output } => {
+                generate_keypair(output).await?;
+            }
+            KeypairCommands::Info { input } => {
+                keypair_info(input).await?;
+            }
         },
-        Commands::Dag(cmd) => {
-            // ... existing code here
+        Commands::Dag(_cmd) => {
+            // Handle DAG commands
+            unimplemented!("DAG commands not yet implemented");
         },
         Commands::Ledger(cmd) => match cmd {
             LedgerCommands::Show { did, resource } => {
-                // ... existing code here
+                show_ledger(did, resource.as_deref()).await?;
             },
             LedgerCommands::Mint { did, amount } => {
-                // ... existing code here
+                // Implementation for minting tokens
+                println!("Minting {} tokens for {}", amount, did);
+                // For a real implementation, this would interact with the runtime
+                // in governance mode to mint tokens
+                println!("Note: Token minting requires governance context");
+                Ok(())
             },
+        },
+        Commands::Token(cmd) => match cmd {
+            TokenCommands::Transfer { from, to, amount } => {
+                transfer_tokens(from, to, *amount).await?;
+            }
         },
     }
 

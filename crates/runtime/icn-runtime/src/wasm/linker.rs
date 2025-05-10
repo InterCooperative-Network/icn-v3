@@ -2,10 +2,11 @@ use anyhow::Result;
 use host_abi::*;
 use icn_economics::ResourceType;
 use wasmtime::{Caller, Linker};
+use std::cell::RefCell;
 
 /// Store data for the WASM engine, contains the host environment
 pub struct StoreData {
-    host_env: Option<crate::host_environment::ConcreteHostEnvironment>,
+    host_env: Option<RefCell<crate::host_environment::ConcreteHostEnvironment>>,
 }
 
 impl StoreData {
@@ -16,12 +17,17 @@ impl StoreData {
 
     /// Set the host environment
     pub fn set_host(&mut self, host_env: crate::host_environment::ConcreteHostEnvironment) {
-        self.host_env = Some(host_env);
+        self.host_env = Some(RefCell::new(host_env));
     }
 
     /// Get a reference to the host environment
-    pub fn host(&self) -> &crate::host_environment::ConcreteHostEnvironment {
-        self.host_env.as_ref().expect("Host environment not set")
+    pub fn host(&self) -> std::cell::Ref<crate::host_environment::ConcreteHostEnvironment> {
+        self.host_env.as_ref().expect("Host environment not set").borrow()
+    }
+    
+    /// Get a mutable reference to the host environment
+    pub fn host_mut(&self) -> std::cell::RefMut<crate::host_environment::ConcreteHostEnvironment> {
+        self.host_env.as_ref().expect("Host environment not set").borrow_mut()
     }
 }
 
@@ -31,7 +37,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
     linker.func_wrap(
         "icn_host", 
         "host_check_resource_authorization",
-        |mut caller: Caller<'_, StoreData>, resource_type: u32, amount: u64| -> i32 {
+        |caller: Caller<'_, StoreData>, resource_type: u32, amount: u64| -> i32 {
             let rt: ResourceType = resource_type.into();
             caller.data().host().check_resource_authorization(rt, amount)
         },
@@ -41,7 +47,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
     linker.func_wrap(
         "icn_host", 
         "host_record_resource_usage",
-        |mut caller: Caller<'_, StoreData>, resource_type: u32, amount: u64| -> i32 {
+        |caller: Caller<'_, StoreData>, resource_type: u32, amount: u64| -> i32 {
             let rt: ResourceType = resource_type.into();
             caller.data().host().record_resource_usage(rt, amount)
         },
@@ -51,7 +57,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
     linker.func_wrap(
         "icn_host",
         "host_is_governance_context",
-        |mut caller: Caller<'_, StoreData>| -> i32 {
+        |caller: Caller<'_, StoreData>| -> i32 {
             caller.data().host().is_governance_context()
         },
     )?;
@@ -61,11 +67,11 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
         "icn_host",
         "host_mint_token",
         |mut caller: Caller<'_, StoreData>, recipient_ptr: i32, recipient_len: i32, amount: u64| -> i32 {
-            // Get the host environment
-            let host = caller.data().host();
-            
             // Read the recipient DID string from WASM memory
-            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).expect("WASM module must export memory");
+            let memory = caller.get_export("memory")
+                .and_then(|e| e.into_memory())
+                .expect("WASM module must export memory");
+            
             let mut buffer = vec![0u8; recipient_len as usize];
             if memory.read(&mut caller, recipient_ptr as usize, &mut buffer).is_err() {
                 return -2; // Memory read error
@@ -73,7 +79,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
             
             // Convert to UTF-8 string
             match String::from_utf8(buffer) {
-                Ok(recipient_did) => host.mint_token(&recipient_did, amount),
+                Ok(recipient_did) => caller.data().host_mut().mint_token(&recipient_did, amount),
                 Err(_) => -2, // Invalid UTF-8
             }
         },
@@ -84,18 +90,19 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
         "icn_host",
         "host_transfer_token",
         |mut caller: Caller<'_, StoreData>, sender_ptr: i32, sender_len: i32, 
-                                           recipient_ptr: i32, recipient_len: i32, amount: u64| -> i32 {
-            // Get the host environment
-            let host = caller.data().host();
+                                       recipient_ptr: i32, recipient_len: i32, amount: u64| -> i32 {
+            // Get the memory
+            let memory = caller.get_export("memory")
+                .and_then(|e| e.into_memory())
+                .expect("WASM module must export memory");
             
-            // Read the sender DID string from WASM memory
-            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).expect("WASM module must export memory");
+            // Read the sender DID string
             let mut sender_buffer = vec![0u8; sender_len as usize];
             if memory.read(&mut caller, sender_ptr as usize, &mut sender_buffer).is_err() {
                 return -2; // Memory read error
             }
             
-            // Read the recipient DID string from WASM memory
+            // Read the recipient DID string
             let mut recipient_buffer = vec![0u8; recipient_len as usize];
             if memory.read(&mut caller, recipient_ptr as usize, &mut recipient_buffer).is_err() {
                 return -2; // Memory read error
@@ -104,7 +111,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
             // Convert to UTF-8 strings
             match (String::from_utf8(sender_buffer), String::from_utf8(recipient_buffer)) {
                 (Ok(sender_did), Ok(recipient_did)) => 
-                    host.transfer_token(&sender_did, &recipient_did, amount),
+                    caller.data().host_mut().transfer_token(&sender_did, &recipient_did, amount),
                 _ => -2, // Invalid UTF-8
             }
         },
