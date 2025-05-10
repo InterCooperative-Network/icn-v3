@@ -58,12 +58,48 @@ cd crates/wallet/icn-wallet-pwa
 ./run-podman.sh
 ```
 
+The Podman script supports several options:
+
+```bash
+# Run in production mode
+./run-podman.sh --mode prod
+
+# Enable access from other devices on your network
+./run-podman.sh --bind 0.0.0.0
+
+# Run with HTTPS (generates self-signed certificates)
+./run-podman.sh --https
+
+# Run with custom port
+./run-podman.sh --port 8443
+
+# Generate systemd service file for persistent operation
+./run-podman.sh --systemd
+
+# Show all options
+./run-podman.sh --help
+```
+
 This will build a container with Node.js 18 and start the development server.
 
 ### Building for Production
 
 ```bash
+# Locally
 npm run build
+
+# With Podman
+./run-podman.sh --mode prod
+```
+
+### Persistent Data Storage
+
+When running with Podman, a persistent volume named `icn-wallet-pwa-data` is created to store application data. This ensures your identities and settings are preserved across container restarts.
+
+You can specify a custom volume name:
+
+```bash
+./run-podman.sh --volume my-custom-volume
 ```
 
 ## Integration with ICN
@@ -108,6 +144,7 @@ window.addEventListener('message', (event) => {
 - Private keys never leave the browser
 - Cross-origin communication is restricted to trusted origins
 - All cryptographic operations are performed client-side
+- When using HTTPS, secure communication is ensured
 
 ## License
 

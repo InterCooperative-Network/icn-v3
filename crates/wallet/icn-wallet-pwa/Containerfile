@@ -2,11 +2,22 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Install needed packages
+RUN apk add --no-cache bash openssl
+
+# Set default environment variables
+ENV PORT=3001
+ENV BIND_ADDRESS="0.0.0.0"
+ENV NODE_ENV=development
+
 # Copy package files
 COPY package*.json ./
 
 # Install dependencies
 RUN npm install
+
+# Create data directory with correct permissions
+RUN mkdir -p /app/data && chmod 777 /app/data
 
 # Copy the rest of the application
 COPY . .
@@ -14,5 +25,8 @@ COPY . .
 # Expose port for the development server
 EXPOSE 3001
 
-# Start development server
-CMD ["npm", "run", "dev"] 
+# Default entrypoint to support custom command execution
+ENTRYPOINT ["/bin/bash", "-c"]
+
+# Start the application based on NODE_ENV
+CMD ["if [ \"$NODE_ENV\" = \"production\" ]; then npm run build && npm run start; elif [ \"$NODE_ENV\" = \"test\" ]; then npm run test; else npm run dev; fi"] 
