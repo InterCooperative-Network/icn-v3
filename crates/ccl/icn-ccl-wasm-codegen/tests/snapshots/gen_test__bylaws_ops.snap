@@ -11,13 +11,22 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: min_members_for_quorum = Number(10.0)"
+      "SetProperty": {
+        "key": "min_members_for_quorum",
+        "value_json": "10.0"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: max_voting_period_days = Number(14.0)"
+      "SetProperty": {
+        "key": "max_voting_period_days",
+        "value_json": "14.0"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: default_proposal_duration = String(\"7d\")"
+      "SetProperty": {
+        "key": "default_proposal_duration",
+        "value_json": "\"7d\""
+      }
     },
     {
       "If": {
@@ -25,10 +34,16 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: quorum = Number(0.6)"
+      "SetProperty": {
+        "key": "quorum",
+        "value_json": "0.6"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: voting_period = String(\"14d\")"
+      "SetProperty": {
+        "key": "voting_period",
+        "value_json": "\"14d\""
+      }
     },
     "EndIf",
     {
@@ -37,14 +52,23 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: fast_track = Boolean(true)"
+      "SetProperty": {
+        "key": "fast_track",
+        "value_json": "true"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: notification_period = String(\"1d\")"
+      "SetProperty": {
+        "key": "notification_period",
+        "value_json": "\"1d\""
+      }
     },
     "Else",
     {
-      "Todo": "Unhandled DslRule in walk_rules: standard_review_period = String(\"7d\")"
+      "SetProperty": {
+        "key": "standard_review_period",
+        "value_json": "\"7d\""
+      }
     },
     "EndIf",
     {
@@ -54,35 +78,65 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: status = String(\"eligible\")"
+      "SetProperty": {
+        "key": "status",
+        "value_json": "\"eligible\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: requires_guardian_approval = Boolean(false)"
+      "SetProperty": {
+        "key": "requires_guardian_approval",
+        "value_json": "false"
+      }
     },
     "EndSection",
     {
-      "Todo": "Unhandled DslRule in walk_rules: min_duration = String(\"7d\")"
+      "SetProperty": {
+        "key": "min_duration",
+        "value_json": "\"7d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: max_duration = String(\"21d\")"
+      "SetProperty": {
+        "key": "max_duration",
+        "value_json": "\"21d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: default_duration = String(\"14d\")"
+      "SetProperty": {
+        "key": "default_duration",
+        "value_json": "\"14d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: pass_threshold_percentage = Number(0.66)"
+      "SetProperty": {
+        "key": "pass_threshold_percentage",
+        "value_json": "0.66"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: quorum_percentage = Number(0.1)"
+      "SetProperty": {
+        "key": "quorum_percentage",
+        "value_json": "0.1"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: can_be_emergency = Boolean(true)"
+      "SetProperty": {
+        "key": "can_be_emergency",
+        "value_json": "true"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: emergency_pass_threshold_percentage = Number(0.75)"
+      "SetProperty": {
+        "key": "emergency_pass_threshold_percentage",
+        "value_json": "0.75"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: emergency_quorum_percentage = Number(0.2)"
+      "SetProperty": {
+        "key": "emergency_quorum_percentage",
+        "value_json": "0.2"
+      }
     },
     {
       "CallHost": {

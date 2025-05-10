@@ -11,17 +11,104 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: version = String(\"1.0.0\")"
+      "SetProperty": {
+        "key": "version",
+        "value_json": "\"1.0.0\""
+      }
     },
     {
-      "Todo": "Role definition: steward"
+      "BeginSection": {
+        "kind": "role",
+        "title": "steward"
+      }
     },
     {
-      "Todo": "Role definition: finance_committee"
+      "SetProperty": {
+        "key": "description",
+        "value_json": "\"Governance steward with administrative capabilities\""
+      }
     },
     {
-      "Todo": "Role definition: community_coordinator"
+      "SetProperty": {
+        "key": "term_length",
+        "value_json": "\"365d\""
+      }
     },
+    {
+      "SetProperty": {
+        "key": "membership_duration",
+        "value_json": "\"180d\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "standing",
+        "value_json": "\"good\""
+      }
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "role",
+        "title": "finance_committee"
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "description",
+        "value_json": "\"Committee overseeing financial decisions\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "term_length",
+        "value_json": "\"365d\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "membership_duration",
+        "value_json": "\"365d\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "standing",
+        "value_json": "\"good\""
+      }
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "role",
+        "title": "community_coordinator"
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "description",
+        "value_json": "\"Facilitates community engagement and outreach\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "term_length",
+        "value_json": "\"180d\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "membership_duration",
+        "value_json": "\"90d\""
+      }
+    },
+    {
+      "SetProperty": {
+        "key": "standing",
+        "value_json": "\"good\""
+      }
+    },
+    "EndSection",
     {
       "BeginSection": {
         "kind": "process",
@@ -29,46 +116,88 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: duration = String(\"14d\")"
+      "SetProperty": {
+        "key": "duration",
+        "value_json": "\"14d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: self_nomination = String(\"allowed\")"
+      "SetProperty": {
+        "key": "self_nomination",
+        "value_json": "\"allowed\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: allowed = Boolean(true)"
+      "SetProperty": {
+        "key": "allowed",
+        "value_json": "true"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: seconds_required = Number(2.0)"
+      "SetProperty": {
+        "key": "seconds_required",
+        "value_json": "2.0"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: confirmation_required = Boolean(true)"
+      "SetProperty": {
+        "key": "confirmation_required",
+        "value_json": "true"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: duration = String(\"14d\")"
+      "SetProperty": {
+        "key": "duration",
+        "value_json": "\"14d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: statement_allowed = Boolean(true)"
+      "SetProperty": {
+        "key": "statement_allowed",
+        "value_json": "true"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: q_and_a_session = String(\"required\")"
+      "SetProperty": {
+        "key": "q_and_a_session",
+        "value_json": "\"required\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: duration = String(\"7d\")"
+      "SetProperty": {
+        "key": "duration",
+        "value_json": "\"7d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: method = String(\"single_transferable_vote\")"
+      "SetProperty": {
+        "key": "method",
+        "value_json": "\"single_transferable_vote\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: membership_duration = String(\"30d\")"
+      "SetProperty": {
+        "key": "membership_duration",
+        "value_json": "\"30d\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: standing = String(\"good\")"
+      "SetProperty": {
+        "key": "standing",
+        "value_json": "\"good\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: quorum = Number(0.4)"
+      "SetProperty": {
+        "key": "quorum",
+        "value_json": "0.4"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: publication_delay = String(\"1d\")"
+      "SetProperty": {
+        "key": "publication_delay",
+        "value_json": "\"1d\""
+      }
     },
     "EndSection",
     {
@@ -78,13 +207,22 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: scenario = String(\"resignation\")"
+      "SetProperty": {
+        "key": "scenario",
+        "value_json": "\"resignation\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: scenario = String(\"removal\")"
+      "SetProperty": {
+        "key": "scenario",
+        "value_json": "\"removal\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: scenario = String(\"insufficient_candidates\")"
+      "SetProperty": {
+        "key": "scenario",
+        "value_json": "\"insufficient_candidates\""
+      }
     },
     "EndSection",
     {

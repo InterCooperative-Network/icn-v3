@@ -4,6 +4,7 @@ use icn_ccl_dsl::{
     ActionStep, DslModule, IfExpr, Rule, RuleValue,
 };
 use crate::opcodes::{Opcode, Program};
+use serde_json;
 
 pub mod opcodes;
 
@@ -47,7 +48,19 @@ impl WasmGenerator {
                 self.ops.push(Opcode::EndSection);
             }
             DslModule::Role(r) => {
-                self.ops.push(Opcode::Todo(format!("Role definition: {}", r.name)));
+                self.ops.push(Opcode::BeginSection {
+                    kind: "role".to_string(), // Fixed kind for roles
+                    title: Some(r.name.clone()),
+                });
+                if let Some(desc) = &r.description {
+                    let json_desc = serde_json::to_string(desc).unwrap_or_else(|_|"\"<serialization error>\"".to_string());
+                    self.ops.push(Opcode::SetProperty {
+                        key: "description".to_string(),
+                        value_json: json_desc,
+                    });
+                }
+                self.walk_rules(&r.attributes); // Process attributes as a list of rules
+                self.ops.push(Opcode::EndSection);
             }
             other => self.ops.push(Opcode::Todo(format!("Unhandled DslModule: {:?}", other))),
         }
@@ -86,7 +99,7 @@ impl WasmGenerator {
                     self.ops.push(Opcode::EndSection);
                 }
 
-                RuleValue::Map(kv) => { // General handling for RuleValue::Map
+                RuleValue::Map(kv) => {
                     if is_function_call(kv) {
                         let fn_name = &r.key; 
                         let default_args = RuleValue::List(vec![]);
@@ -97,15 +110,20 @@ impl WasmGenerator {
                             .unwrap_or(&default_args);
                         self.walk_function_call(fn_name, args_val);
                     } else {
-                        // It's a generic map (like 'thresholds'), walk its inner rules.
-                        // This allows inner named ranges to pick up their correct titles.
                         self.walk_rules(kv); 
                     }
                 }
-                
-                _ => self
-                    .ops
-                    .push(Opcode::Todo(format!("Unhandled DslRule in walk_rules: {} = {:?}", r.key, r.value))),
+
+                RuleValue::String(_) 
+                | RuleValue::Number(_) 
+                | RuleValue::Boolean(_) 
+                | RuleValue::List(_) => {
+                    let json_value = serde_json::to_string(&r.value).unwrap_or_else(|_|"\"<serialization error>\"".to_string());
+                    self.ops.push(Opcode::SetProperty {
+                        key: r.key.clone(),
+                        value_json: json_value,
+                    });
+                }
             }
         }
     }

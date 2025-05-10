@@ -26,6 +26,9 @@ pub enum Opcode {
     BeginSection { kind: String, title: Option<String> },
     EndSection,
 
+    /// Simple key/value pair that doesn't warrant its own opcode.
+    /// `value_json` is always valid JSON (even for strings – we quote them).
+    SetProperty { key: String, value_json: String },
     Todo(String),
 }
 

@@ -11,13 +11,22 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: version = String(\"1.0.0\")"
+      "SetProperty": {
+        "key": "version",
+        "value_json": "\"1.0.0\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: currency = String(\"USD\")"
+      "SetProperty": {
+        "key": "currency",
+        "value_json": "\"USD\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: period = String(\"annual\")"
+      "SetProperty": {
+        "key": "period",
+        "value_json": "\"annual\""
+      }
     },
     {
       "BeginSection": {
@@ -26,16 +35,28 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: category = String(\"operations\")"
+      "SetProperty": {
+        "key": "category",
+        "value_json": "\"operations\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: category = String(\"projects\")"
+      "SetProperty": {
+        "key": "category",
+        "value_json": "\"projects\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: category = String(\"reserve\")"
+      "SetProperty": {
+        "key": "category",
+        "value_json": "\"reserve\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: category = String(\"community\")"
+      "SetProperty": {
+        "key": "category",
+        "value_json": "\"community\""
+      }
     },
     "EndSection",
     {
@@ -51,10 +72,16 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: approvers = Number(1.0)"
+      "SetProperty": {
+        "key": "approvers",
+        "value_json": "1.0"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: required_role = String(\"steward\")"
+      "SetProperty": {
+        "key": "required_role",
+        "value_json": "\"steward\""
+      }
     },
     "EndSection",
     {
@@ -64,10 +91,16 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: approvers = Number(2.0)"
+      "SetProperty": {
+        "key": "approvers",
+        "value_json": "2.0"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: required_role = String(\"finance_committee\")"
+      "SetProperty": {
+        "key": "required_role",
+        "value_json": "\"finance_committee\""
+      }
     },
     "EndSection",
     {
@@ -77,10 +110,16 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: approval_threshold = Number(0.6)"
+      "SetProperty": {
+        "key": "approval_threshold",
+        "value_json": "0.6"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: quorum = Number(0.5)"
+      "SetProperty": {
+        "key": "quorum",
+        "value_json": "0.5"
+      }
     },
     "EndSection",
     "EndSection",
@@ -91,13 +130,22 @@ expression: program_ops
       }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: frequency = String(\"monthly\")"
+      "SetProperty": {
+        "key": "frequency",
+        "value_json": "\"monthly\""
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: fields = List([String(\"category\"), String(\"subcategory\"), String(\"amount\"), String(\"remaining_budget\"), String(\"percentage_used\")])"
+      "SetProperty": {
+        "key": "fields",
+        "value_json": "[\"category\",\"subcategory\",\"amount\",\"remaining_budget\",\"percentage_used\"]"
+      }
     },
     {
-      "Todo": "Unhandled DslRule in walk_rules: fields = List([String(\"date\"), String(\"amount\"), String(\"category\"), String(\"description\"), String(\"authorized_by\")])"
+      "SetProperty": {
+        "key": "fields",
+        "value_json": "[\"date\",\"amount\",\"category\",\"description\",\"authorized_by\"]"
+      }
     },
     "EndSection",
     {
