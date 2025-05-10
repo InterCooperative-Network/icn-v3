@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use ed25519_dalek::Verifier;
-use hex;
 
 /// Generic W3C-style Verifiable Credential.
 #[derive(Debug, Clone, Serialize, Deserialize)]

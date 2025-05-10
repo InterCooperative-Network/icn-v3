@@ -30,4 +30,10 @@ impl KeyPair {
     pub fn verify(&self, msg: &[u8], sig: &Signature) -> bool {
         self.pk.verify(msg, sig).is_ok()
     }
+    
+    /// Return the bytes of the signing key
+    /// This is used for serialization purposes
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.sk.to_bytes()
+    }
 } 

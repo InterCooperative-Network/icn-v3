@@ -1,0 +1,8 @@
+{
+  "root_dag_cid": "bundle-357d7a9f-acd3-4eb8-b7e9-131590a92d97",
+  "federation_metadata": {
+    "name": "Demo Federation",
+    "description": "A demo federation created by script",
+    "version": "1.0"
+  }
+}

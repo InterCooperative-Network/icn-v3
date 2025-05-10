@@ -72,4 +72,10 @@ impl TrustValidator {
         let keys = self.trusted_keys.read().map_err(|_| TrustValidationError::BundleAccessError)?;
         Ok(keys.contains_key(did))
     }
+}
+
+impl Default for TrustValidator {
+    fn default() -> Self {
+        Self::new()
+    }
 } 

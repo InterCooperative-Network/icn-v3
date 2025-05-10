@@ -41,10 +41,10 @@ fn malformed_did_rejected() {
 }
 
 trait ErrOrNone<T, E> {
-    fn is_err_or_none(self) -> bool;
+    fn is_err_or_none(&self) -> bool;
 }
 impl<T, E> ErrOrNone<T, E> for Result<T, E> {
-    fn is_err_or_none(self) -> bool { self.is_err() }
+    fn is_err_or_none(&self) -> bool { self.is_err() }
 }
 
 // VC Tests
@@ -241,18 +241,14 @@ fn quorum_proof_duplicate_signer() {
 // TrustBundle Tests
 #[test]
 fn trust_bundle_verify() {
-    // Create 5 keypairs as guardians
+    // Create 5 keypairs as trusted signers
     let keypairs: Vec<KeyPair> = (0..5).map(|_| KeyPair::generate()).collect();
-    
-    // Extract the DIDs for federation metadata
-    let guardian_dids: Vec<Did> = keypairs.iter().map(|kp| kp.did.clone()).collect();
     
     // Create federation metadata
     let metadata = FederationMetadata {
         name: "Test Federation".to_string(),
         description: Some("A test federation for unit tests".to_string()),
         version: "1.0".to_string(),
-        guardians: guardian_dids,
         additional: HashMap::new(),
     };
     
@@ -265,7 +261,7 @@ fn trust_bundle_verify() {
     // Calculate the hash for signing
     let bundle_hash = bundle.calculate_hash().unwrap();
     
-    // Create signatures from 3 guardians
+    // Create signatures from 3 signers
     let signatures = vec![
         (keypairs[0].did.clone(), keypairs[0].sign(&bundle_hash)),
         (keypairs[1].did.clone(), keypairs[1].sign(&bundle_hash)),
@@ -278,19 +274,19 @@ fn trust_bundle_verify() {
     // Add the proof to the bundle
     bundle.add_quorum_proof(proof);
     
-    // Create a map of guardian verifying keys
-    let mut guardian_keys = HashMap::new();
+    // Create a map of trusted signer verifying keys
+    let mut signer_keys = HashMap::new();
     for kp in &keypairs {
-        guardian_keys.insert(kp.did.clone(), kp.pk);
+        signer_keys.insert(kp.did.clone(), kp.pk);
     }
     
     // Verify the trust bundle
-    assert!(bundle.verify(&guardian_keys).is_ok());
+    assert!(bundle.verify(&signer_keys).is_ok());
     
     // Test with a tampered bundle
     let mut tampered_bundle = bundle.clone();
     tampered_bundle.root_dag_cid = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354".to_string();
     
     // Verification should fail for the tampered bundle
-    assert!(tampered_bundle.verify(&guardian_keys).is_err());
+    assert!(tampered_bundle.verify(&signer_keys).is_err());
 } 

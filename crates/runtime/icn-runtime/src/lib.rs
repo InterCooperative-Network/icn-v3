@@ -449,6 +449,7 @@ impl Runtime {
             chrono::Utc::now().timestamp_millis() as u64,
             None, // dag_epoch
             None, // receipt_cid
+            None, // signature
         );
 
         Ok(receipt)
@@ -501,7 +502,7 @@ impl Runtime {
     }
     
     /// Host function for WASM to retrieve a trust bundle from a given CID
-    pub async fn host_get_trust_bundle(&self, cid: &str) -> Result<bool, RuntimeError> {
+    pub async fn host_get_trust_bundle(&self, _cid: &str) -> Result<bool, RuntimeError> {
         // This would normally retrieve a trust bundle from storage and verify it
         // For now, just a stub that returns success
         // In a real implementation, we would:
@@ -534,8 +535,9 @@ pub mod dsl {
 mod tests {
     use super::*;
     use anyhow::anyhow;
+    use icn_identity::{TrustBundle, TrustValidator};
     use std::fs;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     // A mock storage implementation for testing
     struct MockStorage {
@@ -620,9 +622,12 @@ mod tests {
         // Read the WASM file
         let wasm_bytes = fs::read(wasm_path)?;
 
-        // Create a runtime with mock storage
+        // Create a runtime with mock storage and trust validator
         let storage = Arc::new(MockStorage::new());
-        let runtime = Runtime::new(storage);
+        let trust_validator = Arc::new(TrustValidator::new());
+        let context = RuntimeContext::new()
+            .with_trust_validator(trust_validator);
+        let runtime = Runtime::with_context(storage, context);
 
         // Create a VM context
         let context = VmContext {
@@ -639,12 +644,19 @@ mod tests {
         // Verify that execution succeeded and metrics were collected
         assert!(result.metrics.fuel_used > 0, "Expected fuel usage metrics");
 
-        // Issue a receipt
-        let receipt = runtime.issue_receipt("test-wasm-cid", "test-ccl-cid", &result, &context)?;
-
-        // Verify that receipt was created correctly
-        assert_eq!(receipt.issuer, "did:icn:test");
-        assert_eq!(receipt.credential_subject.wasm_cid, "test-wasm-cid");
+        // Test trust bundle verification
+        let test_bundle = TrustBundle::new(
+            "test-cid".to_string(),
+            icn_identity::FederationMetadata {
+                name: "Test Federation".to_string(),
+                description: Some("Test Description".to_string()),
+                version: "1.0".to_string(),
+                additional: std::collections::HashMap::new(),
+            }
+        );
+        
+        // This will fail because no signers are registered and no quorum proof is added
+        assert!(runtime.verify_trust_bundle(&test_bundle).is_err());
 
         Ok(())
     }

@@ -42,14 +42,38 @@ pub struct ExecutionReceiptCredential {
     /// Unique identifier for this credential
     pub id: String,
     
-    /// DID of the issuer
+    /// Issuer DID
     pub issuer: String,
     
-    /// Issuance date
-    pub issuance_date: chrono::DateTime<chrono::Utc>,
+    /// Associated proposal ID
+    pub proposal_id: String,
     
-    /// Credential subject containing execution data
-    pub credential_subject: ExecutionReceiptSubject,
+    /// WASM CID
+    pub wasm_cid: String,
+    
+    /// CCL CID
+    pub ccl_cid: String,
+    
+    /// Execution metrics
+    pub metrics: ExecutionMetrics,
+    
+    /// Anchored CIDs during execution
+    pub anchored_cids: Vec<String>,
+    
+    /// Resource usage during execution
+    pub resource_usage: Vec<(String, u64)>,
+    
+    /// Timestamp of execution
+    pub timestamp: u64,
+    
+    /// DAG epoch of execution
+    pub dag_epoch: Option<u64>,
+    
+    /// Receipt CID (filled after anchoring)
+    pub receipt_cid: Option<String>,
+    
+    /// Signature from the executing federation
+    pub signature: Option<String>,
 }
 
 /// Subject of an execution receipt
@@ -84,7 +108,7 @@ pub struct ExecutionReceiptSubject {
 }
 
 impl ExecutionReceiptCredential {
-    /// Create a new execution receipt credential
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         issuer: String,
@@ -97,22 +121,21 @@ impl ExecutionReceiptCredential {
         timestamp: u64,
         dag_epoch: Option<u64>,
         receipt_cid: Option<String>,
+        signature: Option<String>,
     ) -> Self {
         Self {
             id,
             issuer,
-            issuance_date: chrono::Utc::now(),
-            credential_subject: ExecutionReceiptSubject {
-                proposal_id,
-                wasm_cid,
-                ccl_cid,
-                metrics,
-                anchored_cids,
-                resource_usage,
-                timestamp,
-                dag_epoch,
-                receipt_cid,
-            },
+            proposal_id,
+            wasm_cid,
+            ccl_cid,
+            metrics,
+            anchored_cids,
+            resource_usage,
+            timestamp,
+            dag_epoch,
+            receipt_cid,
+            signature,
         }
     }
 }

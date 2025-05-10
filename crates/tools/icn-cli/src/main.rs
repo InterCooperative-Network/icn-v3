@@ -2,9 +2,8 @@ use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use icn_ccl_compiler::CclCompiler;
-use icn_identity_core::vc::ExecutionReceiptCredential;
 use icn_identity::{KeyPair, FederationMetadata, TrustBundle, QuorumProof, QuorumType, Did};
-use icn_runtime::{Proposal, ProposalState, QuorumStatus};
+use icn_runtime::{Proposal, ProposalState, QuorumStatus, ExecutionReceipt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -465,20 +464,23 @@ async fn execute_wasm(
         .execute_wasm(&wasm_bytes, context.clone())
         .map_err(|e| anyhow!("Execution failed: {}", e))?;
 
-    // Generate a mock CID for the CCL
-    let ccl_cid = format!("ccl-{}", uuid::Uuid::new_v4());
-
-    // Create the execution receipt
+    // Create a mock execution receipt
     println!("Generating execution receipt...");
-    let receipt = runtime.issue_receipt(
-        &format!("wasm-{}", uuid::Uuid::new_v4()),
-        &ccl_cid,
-        &result,
-        &context,
-    )?;
+    let execution_receipt = ExecutionReceipt {
+        proposal_id: format!("cli-proposal-{}", Uuid::new_v4()),
+        wasm_cid: format!("wasm-{}", Uuid::new_v4()),
+        ccl_cid: format!("ccl-{}", Uuid::new_v4()),
+        metrics: result.metrics.clone(),
+        anchored_cids: result.anchored_cids.clone(),
+        resource_usage: result.resource_usage.clone(),
+        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+        dag_epoch: None,
+        receipt_cid: None,
+        federation_signature: None,
+    };
 
     // Convert to JSON for saving
-    let receipt_json = serde_json::to_string_pretty(&receipt)?;
+    let receipt_json = serde_json::to_string_pretty(&execution_receipt)?;
 
     // Save to file if requested
     if let Some(path) = receipt_path {
@@ -513,30 +515,18 @@ async fn verify_receipt(receipt_path: &Path) -> Result<()> {
 
     // Load the receipt
     let receipt_json = std::fs::read_to_string(receipt_path)?;
-    let receipt: ExecutionReceiptCredential = serde_json::from_str(&receipt_json)?;
+    let receipt: ExecutionReceipt = serde_json::from_str(&receipt_json)?;
 
     // In a real implementation, we would verify the signature
     // For now, just display the receipt information
-    println!("Receipt ID: {}", receipt.id);
-    println!("Issuer: {}", receipt.issuer);
-    println!("Proposal ID: {}", receipt.credential_subject.proposal_id);
-    println!("WASM CID: {}", receipt.credential_subject.wasm_cid);
-    println!("CCL CID: {}", receipt.credential_subject.ccl_cid);
-    println!("Timestamp: {}", receipt.credential_subject.timestamp);
+    println!("Receipt for proposal: {}", receipt.proposal_id);
+    println!("WASM CID: {}", receipt.wasm_cid);
+    println!("CCL CID: {}", receipt.ccl_cid);
+    println!("Timestamp: {}", receipt.timestamp);
 
     println!("Metrics:");
-    println!(
-        "  Fuel used: {}",
-        receipt.credential_subject.metrics.fuel_used
-    );
-    println!(
-        "  Host calls: {}",
-        receipt.credential_subject.metrics.host_calls
-    );
-    println!(
-        "  IO bytes: {}",
-        receipt.credential_subject.metrics.io_bytes
-    );
+    println!("  Fuel used: {}", receipt.metrics.fuel_used);
+    println!("  Host calls: {}", receipt.metrics.host_calls);
 
     println!("Receipt verification successful!");
 
@@ -637,7 +627,7 @@ async fn generate_keypair(output: &Path) -> Result<()> {
     let keypair_info = serde_json::json!({
         "did": keypair.did.as_str(),
         "public_key": hex::encode(keypair.pk.to_bytes()),
-        "private_key": hex::encode(keypair.sk.to_bytes()),
+        "secret_key": hex::encode(keypair.to_bytes()),
         "generated_at": chrono::Utc::now().to_rfc3339(),
     });
     

@@ -105,6 +105,6 @@ impl TrustBundle {
         
         // Verify the quorum proof against the hash
         proof.verify(&hash, allowed_signers)
-            .map_err(|e| TrustBundleError::QuorumError(e))
+            .map_err(TrustBundleError::QuorumError)
     }
 } 
