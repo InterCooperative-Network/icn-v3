@@ -885,7 +885,7 @@ async fn main() -> Result<()> {
                 receipt,
                 governance,
             } => {
-                execute_wasm(wasm, proposal.as_deref(), receipt.as_deref(), governance).await?;
+                execute_wasm(wasm, proposal.as_deref(), receipt.as_deref(), *governance).await?;
             }
             RuntimeCommands::Verify { receipt } => {
                 verify_receipt(receipt).await?;
@@ -946,7 +946,6 @@ async fn main() -> Result<()> {
                 // For a real implementation, this would interact with the runtime
                 // in governance mode to mint tokens
                 println!("Note: Token minting requires governance context");
-                Ok(())
             },
         },
         Commands::Token(cmd) => match cmd {
