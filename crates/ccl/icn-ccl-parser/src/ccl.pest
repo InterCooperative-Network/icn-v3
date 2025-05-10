@@ -11,15 +11,29 @@ number = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIG
 boolean = { "true" | "false" }
 duration = @{ ASCII_DIGIT+ ~ ("d" | "h" | "m" | "s") }
 
+path_identifier = @{ identifier ~ ("." ~ identifier)+ } // For a.b.c
+general_identifier = { path_identifier | identifier }
+
+function_call_args = { (value ~ ("," ~ value)*)? }
+function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
+
 // Value types
-value = { string_literal | number | boolean | duration | array | object }
+value = { function_call | general_identifier | string_literal | number | boolean | duration | array | object }
 array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
 object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
 object_pair = { (string_literal | identifier) ~ ":" ~ value }
 
 // Common structures
 block = { "{" ~ statement* ~ "}" }
-statement = { 
+
+comparison_operand = { general_identifier | value }
+comparison_operator = { "==" | "!=" | ">" | "<" | ">=" | "<=" }
+comparison_expression = { comparison_operand ~ comparison_operator ~ comparison_operand }
+if_statement = { "if" ~ comparison_expression ~ block ~ ("else" ~ block)? }
+
+// specific_id_num_statement = { identifier ~ number } // Diagnostic for id ~ num issue
+
+statement = {
     organization_def |
     roles_def |
     governance_def |
@@ -32,11 +46,13 @@ statement = {
     election_def |
     process_def |
     vacancies_def |
+    if_statement |
     range_statement |
+    // specific_id_num_statement | // Diagnostic
     any_statement
 }
 
-any_statement = { (identifier | string_literal) ~ (value | block | identifier)? ~ ((";" | block) | NEWLINE+)? }
+any_statement = { (identifier | string_literal) ~ (value | block | general_identifier)? ~ (";" | block)? }
 
 // Organization definition
 organization_def = { "organization" ~ string_literal ~ block }

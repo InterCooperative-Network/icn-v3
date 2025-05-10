@@ -227,7 +227,7 @@ pub fn parse_ccl(_input: &str) -> CclParserResult<CclDocument> {
 
 // Define the CCL parser using Pest
 #[derive(Parser)]
-#[grammar = "ccl.pest"]
+#[grammar = "src/ccl.pest"]
 pub struct CclParser;
 
 /// Represents a CCL statement
