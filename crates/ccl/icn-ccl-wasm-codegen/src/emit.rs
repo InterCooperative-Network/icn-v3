@@ -175,7 +175,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 entry_function: _, // Not directly used in MeshJobParams, info for executor
                 required_resources_json, 
                 qos_profile_json, 
-                max_acceptable_bid_tokens: _, // Not directly used in MeshJobParams, for bidding phase
+                max_acceptable_bid_tokens, // Destructure this field
                 deadline_utc_ms, 
                 metadata_json: _, // Not directly used in MeshJobParams currently
             } => {
@@ -225,6 +225,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                     qos_profile: qos_profile_val,
                     deadline: deadline_utc_ms.clone(),
                     input_data_cid: input_data_cid.clone(),
+                    max_acceptable_bid_tokens: max_acceptable_bid_tokens.clone(), // Populate the new field
                 };
 
                 // 2. Serialize MeshJobParams to CBOR

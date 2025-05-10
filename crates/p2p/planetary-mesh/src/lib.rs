@@ -19,6 +19,9 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+pub mod protocol;
+pub use protocol::{MeshProtocolMessage, NodeCapability, JobId};
+
 /// Error types specific to the planetary mesh
 #[derive(Error, Debug)]
 pub enum MeshError {

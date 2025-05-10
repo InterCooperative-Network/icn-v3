@@ -12,6 +12,10 @@ use std::{fs, str::FromStr};
 use uuid::Uuid;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile};
+use icn_types::did::Did;
+use icn_economics::{Economics, LedgerKey, ResourceAuthorizationPolicy};
+use std::sync::RwLock;
 
 /// Test mesh job submission and execution flow
 #[tokio::test]
@@ -122,20 +126,74 @@ async fn test_mesh_compute_flow() -> Result<()> {
     Ok(())
 }
 
+// Helper function for setting up Runtime for mesh compute tests
+fn setup_runtime_for_mesh_test(
+    caller_did_str: &str,
+    initial_token_balance: Option<u64>,
+) -> (Runtime, Arc<Mutex<VecDeque<MeshJob>>>, Did) {
+    let caller_did = Did::parse(caller_did_str).expect("Failed to parse caller_DID");
+    let pending_mesh_jobs = Arc::new(Mutex::new(VecDeque::new()));
+
+    // Setup Economics and initial ledger state
+    let policy = ResourceAuthorizationPolicy::default(); // Or some specific test policy
+    let economics = Arc::new(Economics::new(policy));
+    
+    if let Some(balance) = initial_token_balance {
+        // Initialize token balance for the caller DID
+        // This assumes Economics has a method like `set_balance` or `credit_balance`.
+        // For simplicity, let's assume direct ledger manipulation if possible, or use an appropriate Economics API.
+        // The `test_resource_economics` test implies interactions via `record_usage` and `get_usage`.
+        // A direct balance setting method might be needed for tests or provided by `Economics` test utils.
+        // Let's simulate this by setting an initial record that implies a balance.
+        // This part is tricky without knowing the exact Economics API for setting initial balances.
+        // For now, we'll assume `check_resource_authorization` in ConcreteHostEnvironment can be made to work
+        // with a pre-populated ledger if Economics uses one, or a policy.
+        // Alternative: If Economics is policy-based for authorization, we set a policy.
+        // Given the linker calls `host_env.check_resource_authorization`, we need that method to reflect this balance.
+        // The `Economics` struct holds a `resource_ledger: SharedResourceLedger` which is `Arc<RwLock<HashMap<LedgerKey, u64>>>`.
+        
+        // We need to populate this ledger if check_resource_authorization reads from it.
+        let ledger_key = LedgerKey {
+            actor_did: caller_did.to_string(), // Assuming LedgerKey uses String for DID
+            coop_id: None, // Assuming no specific org scope for this basic test
+            community_id: None,
+            resource_type: ResourceType::Token,
+        };
+        economics.resource_ledger.write().unwrap().insert(ledger_key, balance);
+    }
+
+    let runtime_context = Arc::new(
+        RuntimeContext::builder()
+            .with_pending_mesh_jobs(pending_mesh_jobs.clone())
+            .with_economics(economics.clone()) // Ensure economics is part of the context
+            .build(),
+    );
+
+    let host_env = ConcreteHostEnvironment::new(
+        caller_did.clone(),
+        Arc::new(MockStorage::new()),
+        runtime_context,
+        Arc::new(NoopTrustValidator),
+    );
+
+    let runtime = Runtime::new_with_host_env(Arc::new(Mutex::new(host_env)));
+    (runtime, pending_mesh_jobs, caller_did)
+}
+
 #[test]
-fn test_submit_job_ccl_to_runtime_queue() {
+fn test_submit_job_ccl_to_runtime_queue_sufficient_funds() {
     // 1. Define a CCL Test Script
     let ccl_script = r#"
         actions:
           - SubmitJob:
               wasm_cid: "test_wasm_cid_123"
-              description: "A test mesh job"
+              description: "A test mesh job with sufficient funds"
               input_data_cid: "test_input_cid_456"
               entry_function: "main"
               required_resources_json: "{"Cpu": 100, "Token": 10, "Memory": 256}"
               qos_profile_json: "{"type": "BestEffort"}" 
-              max_acceptable_bid_tokens: 100
-              deadline_utc_ms: 1678886400000 # Example: 2023-03-15T12:00:00Z
+              max_acceptable_bid_tokens: 50 # Requires 50 tokens
+              deadline_utc_ms: 1678886400000
               metadata_json: "{"custom_key": "custom_value"}"
     "#;
 
@@ -144,77 +202,33 @@ fn test_submit_job_ccl_to_runtime_queue() {
     let program = compile_dsl_to_program(dsl_module_list).expect("CCL compilation to program failed");
     let wasm_bytes = program_to_wasm(&program);
 
-    // 3. Set Up icn-runtime::Runtime
-    let caller_did_str = "did:example:meshjobcaller";
-    let caller_did = Did::parse(caller_did_str).expect("Failed to parse caller_did");
-
-    let pending_mesh_jobs: Arc<Mutex<VecDeque<MeshJob>>> = Arc::new(Mutex::new(VecDeque::new()));
-    
-    let runtime_context = Arc::new(RuntimeContext {
-        pending_mesh_jobs: pending_mesh_jobs.clone(),
-        // Add other RuntimeContext fields with default/mock values if necessary
-        // For example, if RuntimeContext has an economic_state or similar that needs to be set up
-        // for host_submit_mesh_job's economic pre-checks.
-        // For now, assuming default construction or that these are not strictly needed for queueing.
-        ..Default::default() 
-    });
-
-    let host_env = ConcreteHostEnvironment::new(
-        caller_did.clone(),
-        Arc::new(MockStorage::new()),
-        runtime_context.clone(),
-        Arc::new(NoopTrustValidator),
-    );
-    
-    let runtime = Runtime::new_with_host_env(Arc::new(Mutex::new(host_env)));
+    // 3. Set Up Runtime with sufficient funds
+    let caller_did_str = "did:example:meshjobcaller_rich";
+    let (runtime, pending_mesh_jobs, caller_did) = 
+        setup_runtime_for_mesh_test(caller_did_str, Some(100)); // Has 100 tokens, needs 50
 
     // 4. Execute WASM
-    // The VMContext might be implicit if ConcreteHostEnvironment already has the caller_did
-    // Or it might be an explicit argument to execute_wasm. Checking Runtime::execute_wasm signature.
-    // Assuming execute_wasm doesn't need an explicit VmContext if host_env is configured.
-    // If execute_wasm expects a VmContext, it would be created here.
-    // For now, let's assume direct execution.
-    
-    // The default function executed by the CCL->WASM output might be "_start" or "main".
-    // If our program_to_wasm generates one function per opcode, we need a way to call that specific function,
-    // or ensure the first function in the WASM module is the one containing SubmitJob.
-    // The current program_to_wasm creates a function for each opcode, but doesn't export a main entry point
-    // that calls them sequentially. This needs to be addressed in the codegen or the test setup.
-    
-    // For this test to pass, program_to_wasm should ideally produce a WASM with a known entry point
-    // (e.g. "_start") that executes the opcodes, or we need to invoke a specific function.
-    // Let's assume for now program_to_wasm creates an implicit main flow or we can call the first function.
-    // This is a simplification for now.
-    
-    // Typically, the execute_wasm would call a main/exported function.
-    // The current CCL codegen puts each opcode into its own WASM function body.
-    // A "real" CCL execution would likely have a primary function in the WASM.
-    // For this test, we might need to know which function index corresponds to SubmitJob or ensure
-    // the WASM module has a single entry point executing all compiled opcodes.
-
-    // A more robust approach would be to have `program_to_wasm` create a main `_start` function.
-    // UPDATE: program_to_wasm now creates _start, and runtime calls it.
-    let execution_result = runtime.execute_wasm(&wasm_bytes, None, vec![]); // Call _start implicitly
+    let execution_result = runtime.execute_wasm(&wasm_bytes, None, vec![]);
     
     assert!(execution_result.is_ok(), "WASM execution failed: {:?}", execution_result.err());
     let opt_return_values = execution_result.unwrap();
-    
     assert!(opt_return_values.is_some(), "_start function did not return any values");
     let return_values = opt_return_values.unwrap();
     assert_eq!(return_values.len(), 1, "_start function should return exactly one i32 value");
     
     let job_id_len_or_error = return_values[0].i32().expect("_start function return value is not an i32");
-    assert!(job_id_len_or_error > 0, "host_submit_mesh_job (via _start) returned an error or zero length: {}", job_id_len_or_error);
+    assert!(job_id_len_or_error > 0, "host_submit_mesh_job (via _start) should return positive JobId length with sufficient funds: {}", job_id_len_or_error);
 
     // 5. Verify Job in Queue
     let jobs_guard = pending_mesh_jobs.lock().unwrap();
-    assert_eq!(jobs_guard.len(), 1, "Expected 1 job in the queue");
+    assert_eq!(jobs_guard.len(), 1, "Expected 1 job in the queue with sufficient funds");
 
     let mesh_job = jobs_guard.front().expect("Job queue is empty after lock");
 
-    assert_eq!(mesh_job.originator_did, caller_did.to_string(), "Originator DID mismatch");
-    assert_eq!(mesh_job.params.wasm_cid, "test_wasm_cid_123", "WASM CID mismatch");
-    assert_eq!(mesh_job.params.description, "A test mesh job", "Description mismatch");
+    assert_eq!(mesh_job.originator_did, caller_did.to_string());
+    assert_eq!(mesh_job.params.wasm_cid, "test_wasm_cid_123");
+    assert_eq!(mesh_job.params.max_acceptable_bid_tokens, Some(50));
+    assert_eq!(mesh_job.params.description, "A test mesh job with sufficient funds", "Description mismatch");
     assert_eq!(mesh_job.params.input_data_cid, Some("test_input_cid_456".to_string()), "Input Data CID mismatch");
     
     let expected_resources: Vec<(ResourceType, u64)> = vec![
@@ -222,27 +236,57 @@ fn test_submit_job_ccl_to_runtime_queue() {
         (ResourceType::Token, 10),
         (ResourceType::Memory, 256),
     ];
-    // Sort both for comparison as HashMap iteration order is not guaranteed
     let mut sorted_actual_resources = mesh_job.params.resources_required.clone();
     sorted_actual_resources.sort_by_key(|k| format!("{:?}", k.0)); 
-    // Expected is already sorted by key due to manual definition order, but good practice:
-    // let mut sorted_expected_resources = expected_resources;
-    // sorted_expected_resources.sort_by_key(|k| format!("{:?}", k.0));
-
     assert_eq!(sorted_actual_resources.len(), expected_resources.len(), "Resource count mismatch");
     for (actual, expected) in sorted_actual_resources.iter().zip(expected_resources.iter()) {
         assert_eq!(actual.0, expected.0, "Resource type mismatch");
         assert_eq!(actual.1, expected.1, "Resource amount mismatch for type {:?}", expected.0);
     }
-
     assert_eq!(mesh_job.params.qos_profile, QoSProfile::BestEffort, "QoS Profile mismatch");
     assert_eq!(mesh_job.params.deadline, Some(1678886400000), "Deadline mismatch");
-    // metadata_json is not directly in MeshJobParams in the current icn-types/src/mesh.rs
-    // If it were added, we would assert it here. The opcode includes it.
-    // For example:
-    // assert_eq!(mesh_job.params.metadata.as_ref().unwrap().get("custom_key"), Some(&"custom_value".to_string()));
-
-    // Check JobId format (e.g., starts with "job_") - the actual UUID part is random
     assert!(mesh_job.job_id.starts_with("job_"), "JobId format is incorrect");
     assert!(mesh_job.job_id.len() > 4, "JobId seems too short"); 
+}
+
+#[test]
+fn test_submit_job_ccl_insufficient_funds() {
+    // 1. Define a CCL Test Script that requires tokens
+    let ccl_script = r#"
+        actions:
+          - SubmitJob:
+              wasm_cid: "test_wasm_cid_insufficient"
+              description: "A test mesh job with insufficient funds"
+              max_acceptable_bid_tokens: 50 # Requires 50 tokens
+              // Other fields can be minimal or None for this test
+              required_resources_json: "{"Cpu": 1}" # Minimal resources
+              qos_profile_json: "{"type": "BestEffort"}"
+    "#;
+
+    // 2. Compile CCL to WASM
+    let dsl_module_list: DslModuleList = parse_ccl(ccl_script).expect("CCL parsing failed for insufficient funds test");
+    let program = compile_dsl_to_program(dsl_module_list).expect("CCL compilation failed for insufficient funds test");
+    let wasm_bytes = program_to_wasm(&program);
+
+    // 3. Set Up Runtime with insufficient funds
+    let caller_did_str = "did:example:meshjobcaller_poor";
+    // Setup with 10 tokens, but job requires 50
+    let (runtime, pending_mesh_jobs, _caller_did) = 
+        setup_runtime_for_mesh_test(caller_did_str, Some(10)); 
+
+    // 4. Execute WASM
+    let execution_result = runtime.execute_wasm(&wasm_bytes, None, vec![]);
+    
+    assert!(execution_result.is_ok(), "WASM execution should logically succeed but return error code from host: {:?}", execution_result.err());
+    let opt_return_values = execution_result.unwrap();
+    assert!(opt_return_values.is_some(), "_start function did not return any values even on error path");
+    let return_values = opt_return_values.unwrap();
+    assert_eq!(return_values.len(), 1, "_start function should return exactly one i32 value (error code)");
+    
+    let job_id_len_or_error = return_values[0].i32().expect("_start function return value is not an i32");
+    assert_eq!(job_id_len_or_error, -41, "Expected error code -41 (InsufficientFundsForJobBid) but got {}", job_id_len_or_error);
+
+    // 5. Verify Job NOT in Queue
+    let jobs_guard = pending_mesh_jobs.lock().unwrap();
+    assert_eq!(jobs_guard.len(), 0, "Expected 0 jobs in the queue with insufficient funds");
 } 

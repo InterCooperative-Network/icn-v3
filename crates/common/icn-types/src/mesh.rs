@@ -29,6 +29,7 @@ pub struct MeshJobParams {
     pub deadline: Option<u64>,
     /// Optional CID of input data required for the job.
     pub input_data_cid: Option<String>,
+    pub max_acceptable_bid_tokens: Option<u64>,
 }
 
 /// Represents a mesh computation job within the ICN system.

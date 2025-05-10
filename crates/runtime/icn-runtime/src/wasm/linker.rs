@@ -211,6 +211,22 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), any
                 }
             };
 
+            // Economic Pre-Check for max_acceptable_bid_tokens
+            if let Some(required_tokens) = job_params.max_acceptable_bid_tokens {
+                if required_tokens > 0 { // Only check if some tokens are actually required
+                    let host_env = caller.data().host(); // Get a ref to ConcreteHostEnvironment
+                    // ResourceType::Token corresponds to u32 value 2 (as per tests/conventions)
+                    // We are calling the host environment's check_resource_authorization directly here,
+                    // not the WASM ABI `host_check_resource_authorization`.
+                    let auth_result = host_env.check_resource_authorization(ResourceType::Token, required_tokens);
+                    
+                    if auth_result != 0 { // 0 means authorized, non-zero means not authorized
+                        return Ok(-41); // Error: Insufficient funds for job bid or other auth failure
+                    }
+                    // TODO: Implement token hold/escrow mechanism upon successful job submission if required_tokens > 0
+                }
+            }
+
             let originator_did = caller.data().host().caller_did.clone();
 
             let job_id_str = format!("job_{}", Uuid::new_v4());
