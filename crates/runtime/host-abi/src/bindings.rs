@@ -10,4 +10,9 @@ extern "C" {
     pub fn host_mint_token(recipient_ptr: i32, recipient_len: i32, amount: u64) -> i32;
     /// 0 = success, -1 = insufficient funds, -2 = malformed DID
     pub fn host_transfer_token(sender_ptr: i32, sender_len: i32, recipient_ptr: i32, recipient_len: i32, amount: u64) -> i32;
-} 
+    /// Anchor a serialized ExecutionReceipt into the DAG.
+    /// ptr/len: receipt bytes; returns 0 on success.
+    pub fn host_anchor_receipt(ptr: u32, len: u32) -> i32;
+}
+
+pub const ICN_HOST_ABI_VERSION: u32 = 6; 

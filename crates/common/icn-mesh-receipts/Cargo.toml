@@ -1,0 +1,17 @@
+[package]
+name = "icn-mesh-receipts"
+version = "0.1.0"
+edition = "2021"
+authors = ["ICN Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/intercooperative/icn-v3"
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+icn-economics = { path = "../icn-economics" }
+icn-identity = { path = "../icn-identity" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+serde_cbor = "0.11" 
