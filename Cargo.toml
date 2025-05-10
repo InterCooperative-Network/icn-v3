@@ -3,6 +3,7 @@ members = [
     "crates/common/icn-types",
     "crates/common/icn-crypto",
     "crates/common/icn-identity-core",
+    "crates/common/icn-identity",
     "crates/common/icn-economics",
     "crates/ccl/icn-ccl-parser",
     "crates/ccl/icn-ccl-compiler",
