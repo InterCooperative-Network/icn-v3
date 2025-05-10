@@ -1,13 +1,70 @@
 ---
 source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
-expression: prog
+expression: program_ops
 ---
 {
   "ops": [
     {
-      "Todo": {
-        "note": "TODO: proposal \"Cooperative Bylaws\""
+      "CreateProposal": {
+        "title": "Cooperative Bylaws",
+        "version": "1.0.0"
       }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: min_members_for_quorum = Number(10.0)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: max_voting_period_days = Number(14.0)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: default_proposal_duration = String(\"7d\")"
+    },
+    {
+      "If": {
+        "condition": "proposal.type == \"bylaw_change\""
+      }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: quorum = Number(0.6)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: voting_period = String(\"14d\")"
+    },
+    "EndIf",
+    {
+      "If": {
+        "condition": "proposal.category == \"emergency\""
+      }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: fast_track = Boolean(true)"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: notification_period = String(\"1d\")"
+    },
+    "Else",
+    {
+      "Todo": "Unhandled DslRule in walk_rules: standard_review_period = String(\"7d\")"
+    },
+    "EndIf",
+    {
+      "BeginSection": {
+        "kind": "range_18_120",
+        "title": null
+      }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: status = String(\"eligible\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: requires_guardian_approval = Boolean(false)"
+    },
+    "EndSection",
+    {
+      "Todo": "Unhandled DslRule in walk_rules: proposal_processing = Map([Rule { key: \"min_duration\", value: String(\"7d\") }, Rule { key: \"max_duration\", value: String(\"21d\") }, Rule { key: \"default_duration\", value: String(\"14d\") }, Rule { key: \"pass_threshold_percentage\", value: Number(0.66) }, Rule { key: \"quorum_percentage\", value: Number(0.1) }, Rule { key: \"can_be_emergency\", value: Boolean(true) }, Rule { key: \"emergency_pass_threshold_percentage\", value: Number(0.75) }, Rule { key: \"emergency_quorum_percentage\", value: Number(0.2) }])"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: log_event = Map([Rule { key: \"function_name\", value: String(\"log_event\") }, Rule { key: \"args\", value: Map([Rule { key: \"name\", value: String(\"bylaws_loaded\") }, Rule { key: \"detail\", value: String(\"Cooperative Bylaws v1.0.0 processed\") }]) }])"
     }
   ]
 }

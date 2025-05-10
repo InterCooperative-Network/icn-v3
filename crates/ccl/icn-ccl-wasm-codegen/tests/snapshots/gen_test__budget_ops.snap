@@ -1,44 +1,93 @@
 ---
 source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
-expression: prog
+expression: program_ops
 ---
 {
   "ops": [
     {
-      "Todo": {
-        "note": "TODO: proposal \"cooperative_budget\""
+      "CreateProposal": {
+        "title": "cooperative_budget",
+        "version": "0.0.0-unknown"
       }
     },
     {
-      "Todo": {
-        "note": "TODO: section kind=allocations"
+      "Todo": "Unhandled DslRule in walk_rules: version = String(\"1.0.0\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: currency = String(\"USD\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: period = String(\"annual\")"
+    },
+    {
+      "BeginSection": {
+        "kind": "allocations",
+        "title": null
       }
     },
     {
-      "Todo": {
-        "note": "TODO: section kind=spending_rules"
+      "Todo": "Unhandled DslRule in walk_rules: category = String(\"operations\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: category = String(\"projects\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: category = String(\"reserve\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: category = String(\"community\")"
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "spending_rules",
+        "title": null
       }
     },
     {
-      "Todo": {
-        "note": "TODO: section kind=reporting"
+      "Todo": "Unhandled DslRule in walk_rules: thresholds = Map([Rule { key: \"range_0_500\", value: Range(RangeRule { start: 0.0, end: 500.0, rules: [Rule { key: \"approvers\", value: Number(1.0) }, Rule { key: \"required_role\", value: String(\"steward\") }] }) }, Rule { key: \"range_501_5000\", value: Range(RangeRule { start: 501.0, end: 5000.0, rules: [Rule { key: \"approvers\", value: Number(2.0) }, Rule { key: \"required_role\", value: String(\"finance_committee\") }] }) }, Rule { key: \"range_5001_999999999\", value: Range(RangeRule { start: 5001.0, end: 999999999.0, rules: [Rule { key: \"approval_threshold\", value: Number(0.6) }, Rule { key: \"quorum\", value: Number(0.5) }] }) }])"
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "reporting",
+        "title": null
+      }
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: frequency = String(\"monthly\")"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: reports = Map([Rule { key: \"spending_summary\", value: Map([Rule { key: \"fields\", value: List([String(\"category\"), String(\"subcategory\"), String(\"amount\"), String(\"remaining_budget\"), String(\"percentage_used\")]) }]) }, Rule { key: \"transaction_log\", value: Map([Rule { key: \"fields\", value: List([String(\"date\"), String(\"amount\"), String(\"category\"), String(\"description\"), String(\"authorized_by\")]) }]) }])"
+    },
+    "EndSection",
+    {
+      "OnEvent": {
+        "event": "expense.approved"
       }
     },
     {
       "MintToken": {
-        "resource_type": "expense_receipt",
+        "res_type": "expense_receipt",
+        "amount": 1,
         "recipient": "ctx.submitter_id"
       }
     },
     {
       "AnchorData": {
         "path": "finance/expenses",
-        "data_reference": "map_content_placeholder_[Rule { key: \"id\", value: String(\"ctx.expense_id\") }, Rule { key: \"details\", value: String(\"ctx.expense_details\") }, Rule { key: \"status\", value: String(\"approved\") }, Rule { key: \"approved_at\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+        "data_ref": "map_content_placeholder_[Rule { key: \"id\", value: String(\"ctx.expense_id\") }, Rule { key: \"details\", value: String(\"ctx.expense_details\") }, Rule { key: \"status\", value: String(\"approved\") }, Rule { key: \"approved_at\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+      }
+    },
+    {
+      "OnEvent": {
+        "event": "budget.proposed"
       }
     },
     {
       "MintToken": {
-        "resource_type": "budget_proposal",
+        "res_type": "budget_proposal",
+        "amount": 1,
         "recipient": "ctx.proposer_id"
       }
     }

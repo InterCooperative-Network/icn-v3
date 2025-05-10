@@ -1,67 +1,108 @@
 ---
 source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
-expression: prog
+expression: program_ops
 ---
 {
   "ops": [
     {
-      "Todo": {
-        "note": "TODO: proposal \"role_election\""
+      "CreateProposal": {
+        "title": "role_election",
+        "version": "0.0.0-unknown"
       }
     },
     {
-      "Todo": {
-        "note": "TODO: role \"steward\""
+      "Todo": "Unhandled DslRule in walk_rules: version = String(\"1.0.0\")"
+    },
+    {
+      "Todo": "Role definition: steward"
+    },
+    {
+      "Todo": "Role definition: finance_committee"
+    },
+    {
+      "Todo": "Role definition: community_coordinator"
+    },
+    {
+      "BeginSection": {
+        "kind": "process",
+        "title": null
       }
     },
     {
-      "Todo": {
-        "note": "TODO: role \"finance_committee\""
+      "Todo": "Unhandled DslRule in walk_rules: nomination = Map([Rule { key: \"duration\", value: String(\"14d\") }, Rule { key: \"self_nomination\", value: String(\"allowed\") }, Rule { key: \"peer_nomination\", value: Map([Rule { key: \"allowed\", value: Boolean(true) }, Rule { key: \"seconds_required\", value: Number(2.0) }]) }, Rule { key: \"confirmation_required\", value: Boolean(true) }])"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: campaign = Map([Rule { key: \"duration\", value: String(\"14d\") }, Rule { key: \"statement_allowed\", value: Boolean(true) }, Rule { key: \"q_and_a_session\", value: String(\"required\") }])"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: voting = Map([Rule { key: \"duration\", value: String(\"7d\") }, Rule { key: \"method\", value: String(\"single_transferable_vote\") }, Rule { key: \"eligibility\", value: Map([Rule { key: \"membership_duration\", value: String(\"30d\") }, Rule { key: \"standing\", value: String(\"good\") }]) }, Rule { key: \"quorum\", value: Number(0.4) }])"
+    },
+    {
+      "Todo": "Unhandled DslRule in walk_rules: results = Map([Rule { key: \"publication_delay\", value: String(\"1d\") }])"
+    },
+    "EndSection",
+    {
+      "BeginSection": {
+        "kind": "vacancies",
+        "title": null
       }
     },
     {
-      "Todo": {
-        "note": "TODO: role \"community_coordinator\""
-      }
+      "Todo": "Unhandled DslRule in walk_rules: scenario = String(\"resignation\")"
     },
     {
-      "Todo": {
-        "note": "TODO: section kind=process"
-      }
+      "Todo": "Unhandled DslRule in walk_rules: scenario = String(\"removal\")"
     },
     {
-      "Todo": {
-        "note": "TODO: section kind=vacancies"
+      "Todo": "Unhandled DslRule in walk_rules: scenario = String(\"insufficient_candidates\")"
+    },
+    "EndSection",
+    {
+      "OnEvent": {
+        "event": "nomination.confirmed"
       }
     },
     {
       "MintToken": {
-        "resource_type": "nomination_receipt",
+        "res_type": "nomination_receipt",
+        "amount": 1,
         "recipient": "ctx.nominee_id"
       }
     },
     {
       "AnchorData": {
         "path": "governance/elections/nominations",
-        "data_reference": "map_content_placeholder_[Rule { key: \"nominee\", value: String(\"ctx.nominee_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"nominators\", value: String(\"ctx.nominators\") }, Rule { key: \"confirmed\", value: Boolean(true) }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+        "data_ref": "map_content_placeholder_[Rule { key: \"nominee\", value: String(\"ctx.nominee_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"nominators\", value: String(\"ctx.nominators\") }, Rule { key: \"confirmed\", value: Boolean(true) }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+      }
+    },
+    {
+      "OnEvent": {
+        "event": "vote.cast"
       }
     },
     {
       "MintToken": {
-        "resource_type": "vote_receipt",
+        "res_type": "vote_receipt",
+        "amount": 1,
         "recipient": "ctx.voter_id"
       }
     },
     {
+      "OnEvent": {
+        "event": "election.completed"
+      }
+    },
+    {
       "MintToken": {
-        "resource_type": "role_credential",
+        "res_type": "role_credential",
+        "amount": 1,
         "recipient": "ctx.elected_members"
       }
     },
     {
       "AnchorData": {
         "path": "governance/elections/results",
-        "data_reference": "map_content_placeholder_[Rule { key: \"election_id\", value: String(\"ctx.election_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"elected_members\", value: String(\"ctx.elected_members\") }, Rule { key: \"vote_count\", value: String(\"ctx.vote_count\") }, Rule { key: \"quorum_reached\", value: String(\"ctx.quorum_reached\") }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+        "data_ref": "map_content_placeholder_[Rule { key: \"election_id\", value: String(\"ctx.election_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"elected_members\", value: String(\"ctx.elected_members\") }, Rule { key: \"vote_count\", value: String(\"ctx.vote_count\") }, Rule { key: \"quorum_reached\", value: String(\"ctx.quorum_reached\") }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
       }
     }
   ]
