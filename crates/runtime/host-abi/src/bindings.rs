@@ -8,4 +8,6 @@ extern "C" {
     pub fn host_is_governance_context() -> i32;
     /// 0 = success, negative = error (only valid in governance context)
     pub fn host_mint_token(recipient_ptr: i32, recipient_len: i32, amount: u64) -> i32;
+    /// 0 = success, -1 = insufficient funds, -2 = malformed DID
+    pub fn host_transfer_token(sender_ptr: i32, sender_len: i32, recipient_ptr: i32, recipient_len: i32, amount: u64) -> i32;
 } 
