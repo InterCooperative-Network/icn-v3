@@ -4,6 +4,7 @@ use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext,
 #[cfg(feature = "legacy-identity")]
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use icn_identity::{TrustBundle, TrustValidationError, Did};
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -417,6 +418,7 @@ impl Runtime {
     }
 
     /// Issue an execution receipt after successful execution
+    #[cfg(feature = "legacy-identity")]
     pub fn issue_receipt(
         &self,
         wasm_cid: &str,
@@ -453,6 +455,7 @@ impl Runtime {
     }
 
     /// Anchor a receipt to the DAG and return the CID
+    #[cfg(feature = "legacy-identity")]
     pub async fn anchor_receipt(&self, receipt: &ExecutionReceiptCredential) -> Result<String> {
         // Convert to JSON
         let receipt_json = serde_json::to_string(receipt).map_err(|e| {
@@ -480,7 +483,7 @@ impl Runtime {
     }
     
     /// Register a trusted signer with DID and verifying key
-    pub fn register_trusted_signer(&self, did: Did, key: ed25519_dalek::VerifyingKey) -> Result<(), RuntimeError> {
+    pub fn register_trusted_signer(&self, did: Did, key: VerifyingKey) -> Result<(), RuntimeError> {
         let validator = self.context.trust_validator()
             .ok_or(RuntimeError::NoTrustValidator)?;
         

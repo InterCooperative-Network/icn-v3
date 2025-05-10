@@ -2,6 +2,9 @@
 name = "icn-identity-core"
 version = "0.1.0"
 edition = "2021"
+description = "DID and credential primitives for ICN [DEPRECATED: use icn-identity instead]"
+license = "Apache-2.0"
+publish = false # Mark as not publishable since it's deprecated
 
 [dependencies]
 ed25519-dalek = "1.0"
@@ -13,8 +16,9 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 icn-types = { path = "../icn-types" }
 icn-crypto = { path = "../icn-crypto" }
+icn-identity = { path = "../icn-identity" }
 
 [dev-dependencies]
 assert_matches = "1.5"
-rand = "0.7"
+rand = "0.8.5"
 anyhow = "1.0.75" 
