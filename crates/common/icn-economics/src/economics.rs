@@ -52,6 +52,42 @@ impl Economics {
         0
     }
     
+    /// Mint tokens for a DID, which reduces their token usage (increases token allowance)
+    /// Only works for Token resource type
+    pub fn mint(
+        &self,
+        recipient: &Did,
+        rt: ResourceType,
+        amt: u64,
+        ledger: &RwLock<HashMap<LedgerKey, u64>>,
+    ) -> i32 {
+        // Only token type can be minted
+        if rt != ResourceType::Token {
+            debug!("Attempted to mint non-token resource type: {:?}", rt);
+            return -3;
+        }
+        
+        debug!("Minting {} tokens for {}", amt, recipient);
+        let mut l = ledger.blocking_write();
+        let key = LedgerKey {
+            did: recipient.to_string(),
+            resource_type: rt,
+        };
+        
+        // Get the current usage and subtract the amount (minting reduces usage)
+        let current = l.entry(key.clone()).or_insert(0);
+        
+        // Check for overflow
+        if *current < amt {
+            *current = 0;
+        } else {
+            *current -= amt;
+        }
+        
+        debug!("New token balance for {}: {}", recipient, *current);
+        0
+    }
+    
     /// Get the usage of a specific resource type for a specific DID
     pub async fn get_usage(&self, caller: &Did, rt: ResourceType, ledger: &RwLock<HashMap<LedgerKey, u64>>) -> u64 {
         let l = ledger.read().await;

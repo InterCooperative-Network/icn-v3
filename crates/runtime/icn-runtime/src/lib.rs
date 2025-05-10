@@ -285,57 +285,43 @@ impl Runtime {
             .map_err(|e| RuntimeError::LoadError(format!("Failed to load WASM module: {}", e)))?;
 
         // Set up the execution context
-        let context = HostContext::default();
-
-        // Execute the WASM module
-        let updated_context = self.vm.execute(&wasm_bytes, context).map_err(|e| {
-            RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e))
-        })?;
-
-        // Extract execution metrics and results
-        let final_metrics = {
-            let guard = updated_context.metrics.lock().unwrap();
-            guard.clone()
-        };
-        let final_anchored_cids = {
-            let guard = updated_context.anchored_cids.lock().unwrap();
-            guard.clone()
-        };
-        let final_resource_usage = {
-            let guard = updated_context.resource_usage.lock().unwrap();
-            guard.clone()
-        };
-        let _final_logs = {
-            let guard = updated_context.logs.lock().unwrap();
-            guard.clone()
+        let vm_context = VmContext {
+            executor_did: self.context.executor_id.clone().unwrap_or_else(|| "did:icn:system".to_string()),
+            scope: Some(format!("proposal/{}", proposal_id)),
+            epoch: None,
+            code_cid: Some(proposal.wasm_cid.clone()),
+            resource_limits: None,
         };
 
-        // Update proposal state
-        proposal.state = ProposalState::Executed;
-        self.storage.update_proposal(&proposal).await?;
+        // Execute the WASM module in governance context
+        let result = self.governance_execute_wasm(&wasm_bytes, vm_context)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM module: {}", e)))?;
 
         // Create the execution receipt
         let receipt = ExecutionReceipt {
             proposal_id: proposal_id.to_string(),
-            wasm_cid: proposal.wasm_cid,
-            ccl_cid: proposal.ccl_cid,
-            metrics: final_metrics,
-            anchored_cids: final_anchored_cids,
-            resource_usage: final_resource_usage,
+            wasm_cid: proposal.wasm_cid.clone(),
+            ccl_cid: proposal.ccl_cid.clone(),
+            metrics: result.metrics,
+            anchored_cids: result.anchored_cids,
+            resource_usage: result.resource_usage,
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
             dag_epoch: None,
             receipt_cid: None,
             federation_signature: None,
         };
 
-        // Store and anchor the receipt
+        // Store the execution receipt
         let receipt_cid = self.storage.store_receipt(&receipt).await?;
 
-        // Anchor the receipt CID to the DAG
-        let _dag_anchor = self.storage.anchor_to_dag(&receipt_cid).await?;
+        // Update the proposal state
+        proposal.state = ProposalState::Executed;
+        self.storage.update_proposal(&proposal).await?;
 
-        // Return the receipt
-        Ok(receipt)
+        // Return the receipt with updated CID
+        let mut final_receipt = receipt;
+        final_receipt.receipt_cid = Some(receipt_cid);
+        Ok(final_receipt)
     }
 
     /// Load and execute a WASM module from a file
@@ -435,39 +421,82 @@ impl Runtime {
         let entrypoint = instance.get_typed_func::<(), ()>(&mut store, "_start")
             .map_err(|e| RuntimeError::ExecutionError(format!("Failed to find entrypoint: {}", e)))?;
         
-        entrypoint.call(&mut store, ())
-            .map_err(|e| RuntimeError::ExecutionError(format!("Execution failed: {}", e)))?;
+        let execution_result = entrypoint.call(&mut store, ())
+            .map_err(|e| RuntimeError::ExecutionError(format!("WASM execution failed: {}", e)))?;
+            
+        // Get consumed fuel
+        let fuel_consumed = initial_fuel - store.get_fuel().unwrap_or(initial_fuel);
         
-        // Record resource usage
-        let fuel_remaining = store.get_fuel().unwrap_or(0);
-        let fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
+        let result = ExecutionResult {
+            metrics: CoreVmExecutionMetrics {
+                fuel_used: fuel_consumed,
+                ..Default::default()
+            },
+            anchored_cids: vec![],
+            resource_usage: vec![],
+            logs: vec![],
+        };
         
-        // Update the host context with resource usage
-        host_context.metrics.lock().unwrap().fuel_used = fuel_consumed;
+        Ok(result)
+    }
+    
+    /// Execute a WASM binary with the given context in governance mode
+    /// This allows token minting and other privileged operations
+    pub fn governance_execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
+        // Convert the VM context to a host context
+        let host_context = self.vm_context_to_host_context(context.clone());
 
-        // Extract the final metrics and other data from the host context
-        let metrics_guard = host_context.metrics.lock().unwrap();
-        let final_metrics = metrics_guard.clone();
-        drop(metrics_guard);
-
-        let anchored_cids_guard = host_context.anchored_cids.lock().unwrap();
-        let final_anchored_cids = anchored_cids_guard.clone();
-        drop(anchored_cids_guard);
-
-        let resource_usage_guard = host_context.resource_usage.lock().unwrap();
-        let final_resource_usage = resource_usage_guard.clone();
-        drop(resource_usage_guard);
-
-        let logs_guard = host_context.logs.lock().unwrap();
-        let final_logs = logs_guard.clone();
-        drop(logs_guard);
-
-        Ok(ExecutionResult {
-            metrics: final_metrics,
-            anchored_cids: final_anchored_cids,
-            resource_usage: final_resource_usage,
-            logs: final_logs,
-        })
+        // Create a wasmtime store and register the economics host functions
+        let mut linker = wasmtime::Linker::new(self.vm.engine());
+        let mut store = wasmtime::Store::new(self.vm.engine(), wasm::linker::StoreData::new());
+        
+        // Set up the host environment in the store data with governance context
+        let host_env = ConcreteHostEnvironment::new_governance(
+            Arc::new(self.context.clone()),
+            context.executor_did.parse().unwrap_or_else(|_| Did::from_str("did:icn:invalid").unwrap())
+        );
+        store.data_mut().set_host(host_env);
+        
+        // Register the economic host functions
+        wasm::linker::register_host_functions(&mut linker)?;
+        
+        // Execute the WASM module
+        let module = Module::new(self.vm.engine(), wasm_bytes)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to compile WASM: {}", e)))?;
+        
+        // Set initial fuel based on limits
+        let initial_fuel = if let Some(limits) = &context.resource_limits {
+            limits.max_fuel
+        } else {
+            10_000_000 // Default reasonable limit
+        };
+        store.set_fuel(initial_fuel)?;
+        
+        // Instantiate the module with the linker
+        let instance = linker.instantiate(&mut store, &module)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to instantiate WASM: {}", e)))?;
+            
+        // Call the entrypoint function
+        let entrypoint = instance.get_typed_func::<(), ()>(&mut store, "_start")
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to find entrypoint: {}", e)))?;
+        
+        let execution_result = entrypoint.call(&mut store, ())
+            .map_err(|e| RuntimeError::ExecutionError(format!("WASM execution failed: {}", e)))?;
+            
+        // Get consumed fuel
+        let fuel_consumed = initial_fuel - store.get_fuel().unwrap_or(initial_fuel);
+        
+        let result = ExecutionResult {
+            metrics: CoreVmExecutionMetrics {
+                fuel_used: fuel_consumed,
+                ..Default::default()
+            },
+            anchored_cids: vec![],
+            resource_usage: vec![],
+            logs: vec![],
+        };
+        
+        Ok(result)
     }
 
     /// Issue an execution receipt after successful execution

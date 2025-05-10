@@ -41,6 +41,14 @@ enum Commands {
     /// Keypair management commands
     #[clap(subcommand)]
     Keypair(KeypairCommands),
+
+    /// DAG operations
+    #[clap(subcommand)]
+    Dag(DagCommands),
+
+    /// Ledger operations
+    #[clap(subcommand)]
+    Ledger(LedgerCommands),
 }
 
 /// Federation management commands
@@ -201,6 +209,10 @@ enum RuntimeCommands {
         /// Output file for the execution receipt
         #[clap(long, short)]
         receipt: Option<PathBuf>,
+        
+        /// Execute in governance context (for token minting)
+        #[clap(long)]
+        governance: bool,
     },
 
     /// Verify an execution receipt
@@ -219,6 +231,38 @@ enum RuntimeCommands {
         /// Output file for the execution receipt
         #[clap(long, short)]
         output: Option<PathBuf>,
+    },
+}
+
+/// Commands for working with the DAG store
+#[derive(Subcommand)]
+enum DagCommands {
+    // ... existing code here
+}
+
+/// Commands for working with the economic ledger
+#[derive(Subcommand)]
+enum LedgerCommands {
+    /// Show resource balances for a DID
+    Show {
+        /// The DID to show resources for
+        #[clap(long, short)]
+        did: String,
+        
+        /// Resource type to show (CPU, MEMORY, TOKEN, IO)
+        #[clap(long, short)]
+        resource: Option<String>,
+    },
+    
+    /// Mint tokens for a DID (governance operation)
+    Mint {
+        /// The DID to mint tokens for
+        #[clap(long, short)]
+        did: String,
+        
+        /// Amount of tokens to mint
+        #[clap(long, short)]
+        amount: u64,
     },
 }
 
@@ -436,8 +480,12 @@ async fn execute_wasm(
     wasm_path: &Path,
     _proposal_path: Option<&Path>,
     receipt_path: Option<&Path>,
+    governance: bool,
 ) -> Result<String> {
     println!("Executing WASM file: {}", wasm_path.display());
+    if governance {
+        println!("Running in governance context (privileged operations enabled)");
+    }
 
     // Read the WASM file
     let wasm_bytes =
@@ -460,9 +508,15 @@ async fn execute_wasm(
 
     // Execute the WASM module
     println!("Executing WASM in CoVM...");
-    let result = runtime
-        .execute_wasm(&wasm_bytes, context.clone())
-        .map_err(|e| anyhow!("Execution failed: {}", e))?;
+    let result = if governance {
+        runtime
+            .governance_execute_wasm(&wasm_bytes, context.clone())
+            .map_err(|e| anyhow!("Execution failed: {}", e))?
+    } else {
+        runtime
+            .execute_wasm(&wasm_bytes, context.clone())
+            .map_err(|e| anyhow!("Execution failed: {}", e))?
+    };
 
     // Create a mock execution receipt
     println!("Generating execution receipt...");
@@ -553,7 +607,7 @@ async fn execute_ccl(ccl_path: &Path, receipt_path: Option<&Path>) -> Result<Str
 
     // Step 3: Execute the WASM
     println!("\n{}", "Step 3: Executing WASM".yellow());
-    let receipt_cid = execute_wasm(&wasm_path, None, receipt_path).await?;
+    let receipt_cid = execute_wasm(&wasm_path, None, receipt_path, false).await?;
 
     // Print final result
     println!("\n{}", "CCL Execution Pipeline Complete".green().bold());
@@ -725,8 +779,9 @@ async fn main() -> Result<()> {
                 wasm,
                 proposal,
                 receipt,
+                governance,
             } => {
-                let receipt_cid = execute_wasm(&wasm, proposal.as_deref(), receipt.as_deref()).await?;
+                let receipt_cid = execute_wasm(&wasm, proposal.as_deref(), receipt.as_deref(), *governance).await?;
                 println!("Execution completed, receipt CID: {}", receipt_cid);
             }
             RuntimeCommands::Verify { receipt } => verify_receipt(&receipt).await?,
@@ -761,6 +816,17 @@ async fn main() -> Result<()> {
         Commands::Keypair(cmd) => match cmd {
             KeypairCommands::Generate { output } => generate_keypair(&output).await?,
             KeypairCommands::Info { input } => keypair_info(&input).await?,
+        },
+        Commands::Dag(cmd) => {
+            // ... existing code here
+        },
+        Commands::Ledger(cmd) => match cmd {
+            LedgerCommands::Show { did, resource } => {
+                // ... existing code here
+            },
+            LedgerCommands::Mint { did, amount } => {
+                // ... existing code here
+            },
         },
     }
 

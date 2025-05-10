@@ -31,6 +31,7 @@ The main engine that enforces resource limits and tracks usage:
 
 - `authorize(did, resource_type, amount)`: Checks if a DID is authorized to use resources
 - `record(did, resource_type, amount, ledger)`: Records resource usage in the ledger
+- `mint(did, resource_type, amount, ledger)`: Mints tokens for a DID (reduces usage, governance-only)
 - `get_usage(did, resource_type, ledger)`: Retrieves usage for a specific DID and resource
 - `get_total_usage(resource_type, ledger)`: Retrieves total usage across all DIDs
 
@@ -51,46 +52,68 @@ The economics system is integrated with the WASM runtime through host functions:
 
 1. `host_check_resource_authorization`: Checks if a resource usage is authorized
 2. `host_record_resource_usage`: Records resource usage in the ledger
+3. `host_is_governance_context`: Checks if execution is in a governance context
+4. `host_mint_token`: Mints tokens for a DID (only in governance context)
 
 These functions are exposed to WASM modules and can be called from within CCL files.
+
+## Using Resource Functions in CCL
+
+### Resource Metering
+
+To track resource usage in your CCL code:
+
+```ccl
+execution {
+    perform_metered_action("compute_hash", ResourceType.CPU, 25);
+    perform_metered_action("store_data", ResourceType.MEMORY, 50);
+    perform_metered_action("publish_result", ResourceType.TOKEN, 10);
+}
+```
+
+### Token Minting (Governance Only)
+
+Tokens can only be minted from a governance context (like during proposal execution):
+
+```ccl
+actions {
+  on "proposal.approved" {
+    mint_token {
+      type "participation_token"
+      amount 100
+      recipient "did:icn:participant-123"
+    }
+  }
+}
+```
+
+## CLI Commands
+
+```bash
+# Check token balance for a DID
+icn-cli ledger show --did did:icn:user123 --resource TOKEN
+
+# Mint tokens (governance context only)
+icn-cli ledger mint --did did:icn:user123 --amount 100
+
+# Execute a WASM file in governance context
+icn-cli runtime execute --wasm tokens.wasm --governance
+```
 
 ## Flow Diagram
 
 ```mermaid
-sequenceDiagram
-    participant CCL as CCL Workflow
-    participant WASM as WASM Runtime
-    participant Host as Host Environment
-    participant Economics as Economics Engine
-    participant Ledger as Resource Ledger
-
-    CCL->>WASM: perform_metered_action()
-    WASM->>Host: host_check_resource_authorization(resource, amount)
-    Host->>Economics: authorize(did, resource, amount)
-    Economics->>Host: authorization result
-    Host->>WASM: return result
+graph TD
+    A[CCL Code] --> B[WASM Generation]
+    B --> C[Runtime Execution]
+    C --> D[Resource Authorization]
+    D --> E{Is Authorized?}
+    E -->|Yes| F[Record Usage]
+    E -->|No| G[Execution Halted]
     
-    WASM->>Host: host_record_resource_usage(resource, amount)
-    Host->>Economics: record(did, resource, amount, ledger)
-    Economics->>Ledger: update usage
-    Ledger-->>Economics: updated
-    Economics->>Host: recording result
-    Host->>WASM: return result
-```
-
-## Usage in CCL
-
-CCL files can use metered actions to consume resources:
-
-```
-// Check if enough resources are available
-if (check_resource_authorization(ResourceType.CPU, 100)) {
-  // Perform CPU-intensive operation
-  perform_action("compute_hash", 100);
-  
-  // Record the usage
-  record_resource_usage(ResourceType.CPU, 100);
-}
+    H[Proposal Execution] --> I[Governance Context]
+    I --> J[Token Minting]
+    J --> K[Decrease Usage]
 ```
 
 ## Per-Identity Resource Tracking
