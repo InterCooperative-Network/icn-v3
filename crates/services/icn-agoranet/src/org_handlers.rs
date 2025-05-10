@@ -12,6 +12,7 @@ use chrono::{DateTime, Duration};
 
 use crate::auth::{AuthenticatedRequest, AuthError};
 use crate::handlers::Db;
+use crate::models::TokenTransaction;
 
 /// Data structures for token transfers (economic operations)
 #[derive(Debug, Deserialize)]
@@ -37,21 +38,6 @@ pub struct GovernanceActionResponse {
     pub timestamp: DateTime<Utc>,
 }
 
-/// Token transaction model
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenTransaction {
-    pub id: String,
-    pub from_did: String,
-    pub to_did: String,
-    pub amount: u64,
-    pub operation: String,
-    pub timestamp: DateTime<Utc>,
-    pub from_coop_id: Option<String>,
-    pub from_community_id: Option<String>,
-    pub to_coop_id: Option<String>,
-    pub to_community_id: Option<String>,
-}
-
 /// Endpoint for processing token transfer operations (economic action)
 pub async fn process_token_transfer(
     auth: AuthenticatedRequest,
@@ -65,8 +51,8 @@ pub async fn process_token_transfer(
     // Process the token transfer between accounts within the cooperative
     let transaction = TokenTransaction {
         id: format!("tx-{}", Uuid::new_v4()),
-        from_did: payload.from_did,
-        to_did: payload.to_did,
+        from_did: payload.from_did.clone(),
+        to_did: payload.to_did.clone(),
         amount: payload.amount,
         operation: "transfer".to_string(),
         timestamp: Utc::now(),
@@ -76,15 +62,16 @@ pub async fn process_token_transfer(
         to_community_id: None,
     };
     
-    // Record the transaction
-    let mut store = db.write()
-        .map_err(|_| AuthError::Internal("Failed to acquire write lock".to_string()))?;
-    
-    // Add transaction to store
-    store.token_transactions.push(transaction.clone());
-    
-    // Update balances (simplified for example)
-    // In a real application, this would involve database transactions
+    // In a real implementation, we would add this to a database
+    // For now, we'll just log the transaction
+    tracing::info!(
+        "Token transfer created: ID={}, from={}, to={}, amount={}, coop={}",
+        transaction.id,
+        transaction.from_did,
+        transaction.to_did,
+        transaction.amount,
+        coop_id
+    );
     
     // Log the economic action
     tracing::info!(

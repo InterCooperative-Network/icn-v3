@@ -128,7 +128,21 @@ pub fn create_app(store: Db) -> Router {
         .route("/proposals/:proposal_id", get(get_proposal_detail_handler))
         .route("/proposals/:proposal_id/votes", get(get_proposal_votes_handler))
         .route("/votes", post(cast_vote_handler))
-        .nest("/api/v1", api_v1_routes(app_state.clone())) // Nest API v1 routes under /api/v1
+        .route("/api/v1/health", get(health_check_handler))
+        // Organization-scoped authorized routes
+        .route("/api/v1/receipts", get(get_receipts_authorized))
+        .route("/api/v1/tokens/balances", get(get_token_balances_authorized))
+        .route("/api/v1/tokens/transactions", get(get_token_transactions_authorized))
+        .route("/api/v1/stats/receipts", get(get_receipt_stats_authorized))
+        .route("/api/v1/stats/tokens", get(get_token_stats_authorized))
+        // Federation coordination routes
+        .route("/api/v1/federation/:federation_id/tokens", post(issue_jwt_token_handler))
+        .route("/api/v1/federation/:federation_id/tokens/revoke", post(revoke_token_handler))
+        .route("/api/v1/federation/:federation_id/tokens/rotate", post(rotate_token_handler))
+        // Economic operation routes (cooperative scoped)
+        .route("/api/v1/coop/:coop_id/transfer", post(process_token_transfer))
+        // Governance routes (community scoped)
+        .route("/api/v1/community/:community_id/governance", post(process_community_governance_action))
         .merge(websocket_routes()) // Merge WebSocket routes
         .layer(
             ServiceBuilder::new()
@@ -143,25 +157,4 @@ pub fn create_app(store: Db) -> Router {
         .with_state(app_state);
     
     app
-}
-
-/// Create API v1 routes
-fn api_v1_routes(state: (Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)) -> Router {
-    Router::new()
-        .route("/health", get(health_check_handler))
-        // Organization-scoped authorized routes
-        .route("/receipts", get(get_receipts_authorized))
-        .route("/tokens/balances", get(get_token_balances_authorized))
-        .route("/tokens/transactions", get(get_token_transactions_authorized))
-        .route("/stats/receipts", get(get_receipt_stats_authorized))
-        .route("/stats/tokens", get(get_token_stats_authorized))
-        // Federation coordination routes
-        .route("/federation/:federation_id/tokens", post(issue_jwt_token_handler))
-        .route("/federation/:federation_id/tokens/revoke", post(revoke_token_handler))
-        .route("/federation/:federation_id/tokens/rotate", post(rotate_token_handler))
-        // Economic operation routes (cooperative scoped)
-        .route("/coop/:coop_id/transfer", post(process_token_transfer))
-        // Governance routes (community scoped)
-        .route("/community/:community_id/governance", post(process_community_governance_action))
-        .with_state(state)
 }
