@@ -94,6 +94,27 @@ Follow these steps to deploy a complete ICN v3 federation:
   --data-dir /var/lib/icn
 ```
 
+4. **Setup Monitoring (Optional but Recommended)**
+
+```bash
+# Set up monitoring for your federation
+cd ../monitoring
+./setup_monitoring_stack.sh
+```
+
+For production deployments, it's recommended to install monitoring as a systemd service:
+
+```bash
+# Install monitoring as a systemd service
+sudo ./monitoring/install_monitoring.sh
+```
+
+The monitoring stack provides:
+- Real-time metrics dashboard for your federation
+- Performance and health monitoring
+- Resource utilization tracking
+- Alerts and notifications
+
 ## ICN Structure Overview
 
 The ICN v3 platform uses a three-level organizational structure:
@@ -122,6 +143,8 @@ See `docs/security_and_recovery.md` for comprehensive security guidance.
 ## Monitoring and Observability
 
 This onboarding bundle is designed to work with the ICN v3 monitoring stack (Prometheus, Grafana). The bootstrap scripts configure monitoring endpoints, and the templates include the necessary settings for metrics exporters.
+
+For detailed monitoring setup instructions, see the [Monitoring README](../monitoring/README.md).
 
 ## Need Help?
 
