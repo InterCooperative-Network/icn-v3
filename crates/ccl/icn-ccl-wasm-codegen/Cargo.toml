@@ -7,8 +7,10 @@ edition     = "2021"
 icn-ccl-dsl = { path = "../icn-ccl-dsl" }
 serde       = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+wasm-encoder = "0.27"
 
 [dev-dependencies]
 insta = { version = "1.34.0", features = ["json"] }
 icn-ccl-compiler = { path = "../icn-ccl-compiler" }
-icn-ccl-parser = { path = "../icn-ccl-parser" } 
+icn-ccl-parser = { path = "../icn-ccl-parser" }
+wasmparser = "0.230.0" 

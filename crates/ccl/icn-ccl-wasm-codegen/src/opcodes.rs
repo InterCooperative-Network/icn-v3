@@ -12,7 +12,7 @@ pub enum Opcode {
     OnEvent { event: String },
 
     // actions
-    MintToken { res_type: String, amount: u64, recipient: Option<String> },
+    MintToken { res_type: String, amount: u64, recipient: Option<String>, data: Option<String> },
     AnchorData { path: Option<String>, data_ref: String },
     CallHost { fn_name: String, args: Vec<String> },
 

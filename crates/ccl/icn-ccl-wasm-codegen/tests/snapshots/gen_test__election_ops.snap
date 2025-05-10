@@ -234,7 +234,8 @@ expression: program_ops
       "MintToken": {
         "res_type": "nomination_receipt",
         "amount": 1,
-        "recipient": "ctx.nominee_id"
+        "recipient": "ctx.nominee_id",
+        "data": "[{\"key\":\"role\",\"value\":\"ctx.role\"},{\"key\":\"nominated_at\",\"value\":[{\"key\":\"function_name\",\"value\":\"timestamp\"},{\"key\":\"args\",\"value\":[]}]},{\"key\":\"election_id\",\"value\":\"ctx.election_id\"}]"
       }
     },
     {
@@ -252,7 +253,8 @@ expression: program_ops
       "MintToken": {
         "res_type": "vote_receipt",
         "amount": 1,
-        "recipient": "ctx.voter_id"
+        "recipient": "ctx.voter_id",
+        "data": "[{\"key\":\"election_id\",\"value\":\"ctx.election_id\"},{\"key\":\"voted_at\",\"value\":[{\"key\":\"function_name\",\"value\":\"timestamp\"},{\"key\":\"args\",\"value\":[]}]},{\"key\":\"vote_hash\",\"value\":\"ctx.vote_hash\"}]"
       }
     },
     {
@@ -264,7 +266,8 @@ expression: program_ops
       "MintToken": {
         "res_type": "role_credential",
         "amount": 1,
-        "recipient": "ctx.elected_members"
+        "recipient": "ctx.elected_members",
+        "data": "[{\"key\":\"role\",\"value\":\"ctx.role\"},{\"key\":\"term_start\",\"value\":\"ctx.term_start\"},{\"key\":\"term_end\",\"value\":\"ctx.term_end\"},{\"key\":\"election_id\",\"value\":\"ctx.election_id\"}]"
       }
     },
     {

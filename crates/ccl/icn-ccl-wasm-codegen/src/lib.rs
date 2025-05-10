@@ -7,6 +7,7 @@ use crate::opcodes::{Opcode, Program};
 use serde_json;
 
 pub mod opcodes;
+pub mod emit;
 
 pub struct WasmGenerator {
     ops: Vec<Opcode>,
@@ -69,10 +70,12 @@ impl WasmGenerator {
     fn walk_step(&mut self, step: &ActionStep) {
         match step {
             ActionStep::Metered(m) => {
+                let data_json = m.data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_else(|_| "[]".to_string()));
                 self.ops.push(Opcode::MintToken {
                     res_type: m.resource_type.clone(),
                     amount: m.amount,
                     recipient: m.recipient.clone(),
+                    data: data_json,
                 });
             }
             ActionStep::Anchor(a) => {
@@ -169,4 +172,19 @@ fn is_function_call(kv: &[Rule]) -> bool {
     kv.first()
         .map(|first| first.key == "function_name")
         .unwrap_or(false)
+}
+
+pub fn hash32(s: &str) -> u32 {
+    // Simple FNV-1a hash for demo purposes
+    let mut hash = 0x811c9dc5_u32;
+    for byte in s.as_bytes() {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x01000193_u32);
+    }
+    hash
+}
+
+pub fn compile_to_wasm(modules: Vec<DslModule>) -> Vec<u8> {
+    let prog = WasmGenerator::new().generate(modules);
+    emit::program_to_wasm(&prog)
 } 

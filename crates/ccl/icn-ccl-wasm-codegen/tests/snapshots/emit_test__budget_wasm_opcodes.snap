@@ -1,6 +1,6 @@
 ---
-source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
-expression: program_ops
+source: crates/ccl/icn-ccl-wasm-codegen/tests/emit_test.rs
+expression: prog
 ---
 {
   "ops": [
