@@ -11,6 +11,8 @@ pub enum ApiError {
     NotFound(String),
     InternalServerError(String),
     BadRequest(String),
+    Unauthorized(String),
+    Forbidden(String),
 }
 
 impl IntoResponse for ApiError {
@@ -19,6 +21,8 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
         };
 
         let body = Json(json!({

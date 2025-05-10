@@ -1,115 +1,97 @@
 use axum::{
-    extract::{Path as AxumPath, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     Json,
 };
-use chrono::Utc;
-use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use chrono::{DateTime, Duration};
 
 use crate::auth::{AuthenticatedRequest, AuthError};
+use crate::error::ApiError;
 use crate::handlers::Db;
-use crate::models::TokenTransaction;
+use crate::models::{EntityType, EntityRef, Transfer};
+use crate::websocket::WebSocketState;
 
-/// Data structures for token transfers (economic operations)
+/// Request for transferring tokens within a cooperative
 #[derive(Debug, Deserialize)]
-pub struct TokenTransferRequest {
-    pub from_did: String,
+pub struct CoopTransferRequest {
+    /// Destination DID
     pub to_did: String,
+    /// Amount to transfer
     pub amount: u64,
+    /// Optional memo
     pub memo: Option<String>,
 }
 
-/// Data structures for governance actions
-#[derive(Debug, Deserialize)]
-pub struct GovernanceActionRequest {
-    pub action_type: String,
-    pub parameters: HashMap<String, Value>,
-    pub justification: Option<String>,
-}
-
+/// Response for a cooperative transfer
 #[derive(Debug, Serialize)]
-pub struct GovernanceActionResponse {
-    pub id: String,
-    pub status: String,
-    pub timestamp: DateTime<Utc>,
+pub struct CoopTransferResponse {
+    /// Transaction ID
+    pub tx_id: Uuid,
+    /// New balance of the source
+    pub new_balance: u64,
 }
 
-/// Endpoint for processing token transfer operations (economic action)
+/// Process a token transfer within a cooperative
 pub async fn process_token_transfer(
+    State((db, ws_state)): State<(Db, WebSocketState)>,
     auth: AuthenticatedRequest,
-    AxumPath(coop_id): AxumPath<String>,
-    Json(payload): Json<TokenTransferRequest>,
-    State(db): State<Db>,
-) -> Result<Json<TokenTransaction>, AuthError> {
-    // Ensure the user has cooperative operator role for economic operations
-    crate::auth::ensure_coop_operator(auth.clone(), &coop_id).await?;
+    Path(coop_id): Path<String>,
+    Json(request): Json<CoopTransferRequest>,
+) -> Result<Json<CoopTransferResponse>, ApiError> {
+    // Validate that the user has cooperative operator role
+    if !auth.claims.has_coop_operator_role(&coop_id) {
+        return Err(ApiError::Forbidden("Cooperative operator role required".to_string()));
+    }
     
-    // Process the token transfer between accounts within the cooperative
-    let transaction = TokenTransaction {
-        id: format!("tx-{}", Uuid::new_v4()),
-        from_did: payload.from_did.clone(),
-        to_did: payload.to_did.clone(),
-        amount: payload.amount,
-        operation: "transfer".to_string(),
-        timestamp: Utc::now(),
-        from_coop_id: Some(coop_id.clone()),
-        from_community_id: None,
-        to_coop_id: Some(coop_id.clone()),
-        to_community_id: None,
+    // For now, return a placeholder response
+    // In a real implementation, this would update balances and record the transfer
+    let response = CoopTransferResponse {
+        tx_id: Uuid::new_v4(),
+        new_balance: 1000, // Mock value
     };
     
-    // In a real implementation, we would add this to a database
-    // For now, we'll just log the transaction
-    tracing::info!(
-        "Token transfer created: ID={}, from={}, to={}, amount={}, coop={}",
-        transaction.id,
-        transaction.from_did,
-        transaction.to_did,
-        transaction.amount,
-        coop_id
-    );
-    
-    // Log the economic action
-    tracing::info!(
-        "Token transfer of {} processed by operator {} in cooperative {}",
-        payload.amount,
-        auth.claims.sub,
-        coop_id
-    );
-    
-    Ok(Json(transaction))
+    Ok(Json(response))
 }
 
-/// Endpoint for processing community governance actions
+/// Request for a community governance action
+#[derive(Debug, Deserialize)]
+pub struct GovernanceActionRequest {
+    /// Type of governance action
+    pub action_type: String,
+    /// Target of the action
+    pub target: String,
+    /// Parameters for the action
+    pub parameters: serde_json::Value,
+}
+
+/// Response for a governance action
+#[derive(Debug, Serialize)]
+pub struct GovernanceActionResponse {
+    /// Action ID
+    pub action_id: Uuid,
+    /// Status of the action
+    pub status: String,
+}
+
+/// Process a community governance action
 pub async fn process_community_governance_action(
+    State((db, ws_state)): State<(Db, WebSocketState)>,
     auth: AuthenticatedRequest,
-    AxumPath(community_id): AxumPath<String>,
-    Json(payload): Json<GovernanceActionRequest>,
-    State(db): State<Db>,
-) -> Result<Json<GovernanceActionResponse>, AuthError> {
-    // Ensure the user has community official role for governance operations
-    crate::auth::ensure_community_official(auth.clone(), &community_id).await?;
+    Path(community_id): Path<String>,
+    Json(request): Json<GovernanceActionRequest>,
+) -> Result<Json<GovernanceActionResponse>, ApiError> {
+    // Validate that the user has community official role
+    if !auth.claims.has_community_official_role(&community_id) {
+        return Err(ApiError::Forbidden("Community official role required".to_string()));
+    }
     
-    // Process the governance action
-    let action_id = format!("gov-action-{}", Uuid::new_v4());
-    
-    // Log the governance action
-    tracing::info!(
-        "Governance action {} processed by official {} in community {}",
-        payload.action_type,
-        auth.claims.sub,
-        community_id
-    );
-    
-    // Return response
+    // For now, return a placeholder response
+    // In a real implementation, this would execute the governance action
     let response = GovernanceActionResponse {
-        id: action_id,
-        status: "approved".to_string(),
-        timestamp: Utc::now(),
+        action_id: Uuid::new_v4(),
+        status: "pending".to_string(),
     };
     
     Ok(Json(response))

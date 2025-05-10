@@ -32,6 +32,8 @@ pub enum WebSocketEvent {
     TokenMinted(TokenTransaction),
     /// Token burned from an account
     TokenBurned(TokenTransaction),
+    /// Custom JSON event
+    Custom(serde_json::Value),
 }
 
 /// WebSocket channel name builder
@@ -294,6 +296,35 @@ impl WebSocketState {
                 (Some(fed_id), Some(coop_id), Some(comm_id)) // Community scope
             }
         }
+    }
+
+    /// Broadcast a message to all connected clients on a channel
+    pub fn broadcast(&self, channel: &str, message: serde_json::Value) {
+        // Convert the message to a string
+        if let Ok(message_string) = serde_json::to_string(&message) {
+            // Get or create a channel for the given name
+            let tx = self.get_or_create_channel(channel);
+            
+            // Create a WebSocket Message from the string
+            let ws_message = Message::Text(message_string);
+            
+            // Send the message (WebSocketEvent::Custom would be ideal here, but we'll use the existing system)
+            let custom_event = WebSocketEvent::Custom(message);
+            let _ = tx.send(custom_event); // Ignore errors if no subscribers
+            
+            tracing::debug!("Broadcast message to channel: {}", channel);
+        } else {
+            tracing::error!("Failed to serialize message for broadcast");
+        }
+    }
+    
+    /// Send an event with a specific type directly to a named channel
+    pub fn send_event_to_channel(&self, channel: &str, event_type: &str, data: &serde_json::Value) {
+        let message = serde_json::json!({
+            "event": event_type,
+            "data": data
+        });
+        self.broadcast(channel, message);
     }
 }
 

@@ -16,6 +16,15 @@ use utoipa_swagger_ui::SwaggerUi;
 // Import models and handlers from the crate
 // use icn_agoranet::models::*; // No longer needed directly here
 use icn_agoranet::handlers::InMemoryStore;
+mod auth;
+mod auth_handlers;
+mod error;
+mod app;
+mod handlers;
+mod models;
+mod org_handlers;
+mod websocket;
+mod transfers;
 
 #[derive(OpenApi)]
 #[openapi(

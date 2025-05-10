@@ -13,6 +13,7 @@ use thiserror::Error;
 use uuid;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
+use crate::models::{EntityRef, EntityType};
 
 // Add the revocation module
 pub mod revocation;
@@ -215,6 +216,9 @@ pub enum AuthError {
     
     #[error("operation only available to community officials")]
     NotCommunityOfficial,
+    
+    #[error("operation only available to federation administrators")]
+    NotFederationAdmin,
     
     #[error("operation only available to federation coordinators")]
     NotFederationCoordinator,
@@ -498,6 +502,103 @@ pub async fn ensure_community_official(
     }
     
     Ok(auth)
+}
+
+/// Check if a user has permission to transfer from an entity
+pub async fn check_transfer_from_permission(
+    auth: &AuthenticatedRequest,
+    from: &crate::models::EntityRef
+) -> Result<(), AuthError> {
+    use crate::models::EntityType;
+    
+    match from.entity_type {
+        EntityType::Federation => {
+            // For federation transfers, require federation_admin role
+            if !auth.claims.has_federation_admin_role(&from.id) {
+                return Err(AuthError::NotFederationAdmin);
+            }
+        },
+        EntityType::Cooperative => {
+            // For cooperative transfers, require coop_operator role
+            if !auth.claims.has_coop_operator_role(&from.id) {
+                return Err(AuthError::NotCoopOperator);
+            }
+        },
+        EntityType::Community => {
+            // For community transfers, require community_official role
+            if !auth.claims.has_community_official_role(&from.id) {
+                return Err(AuthError::NotCommunityOfficial);
+            }
+        },
+        EntityType::User => {
+            // For user transfers, the user must be transferring their own funds
+            if auth.claims.sub != from.id {
+                return Err(AuthError::UnauthorizedOrgAccess);
+            }
+        },
+    }
+    
+    Ok(())
+}
+
+impl Claims {
+    // Helper to check access to a federation
+    pub fn has_federation_access(&self, federation_id: &str) -> bool {
+        self.federation_ids.contains(&federation_id.to_string())
+    }
+    
+    // Helper to check federation admin role
+    pub fn has_federation_admin_role(&self, federation_id: &str) -> bool {
+        if !self.has_federation_access(federation_id) {
+            return false;
+        }
+        
+        self.roles.get(federation_id)
+            .map_or(false, |entity_roles| entity_roles.contains(&"federation_admin".to_string()))
+    }
+    
+    // Helper to check cooperative operator role
+    pub fn has_coop_operator_role(&self, coop_id: &str) -> bool {
+        self.roles.get(coop_id)
+            .map_or(false, |entity_roles| entity_roles.contains(&"coop_operator".to_string()))
+    }
+    
+    // Helper to check community official role
+    pub fn has_community_official_role(&self, community_id: &str) -> bool {
+        self.roles.get(community_id)
+            .map_or(false, |entity_roles| entity_roles.contains(&"community_official".to_string()))
+    }
+    
+    // Helper to check if a claim has organizational scope access
+    pub fn has_org_scope_access(
+        &self,
+        federation_id: Option<&str>,
+        coop_id: Option<&str>,
+        community_id: Option<&str>,
+    ) -> bool {
+        // If federation access is required, verify it
+        if let Some(fed_id) = federation_id {
+            if !self.has_federation_access(fed_id) {
+                return false;
+            }
+        }
+        
+        // If coop access is required, verify it
+        if let Some(coop) = coop_id {
+            if !self.coop_ids.contains(&coop.to_string()) {
+                return false;
+            }
+        }
+        
+        // If community access is required, verify it
+        if let Some(comm) = community_id {
+            if !self.community_ids.contains(&comm.to_string()) {
+                return false;
+            }
+        }
+        
+        true
+    }
 }
 
 #[cfg(test)]

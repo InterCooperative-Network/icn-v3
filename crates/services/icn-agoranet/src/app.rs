@@ -29,6 +29,11 @@ use crate::handlers::{
     // Add authorized route handlers
     get_receipts_authorized, get_token_balances_authorized, get_token_transactions_authorized,
     get_receipt_stats_authorized, get_token_stats_authorized,
+    // Add the entity transfer handler
+    process_entity_transfer,
+    process_batch_transfers,
+    query_transfers,
+    get_federation_ledger_stats,
 };
 use crate::auth_handlers::{
     issue_jwt_token_handler, revoke_token_handler, rotate_token_handler,
@@ -55,6 +60,11 @@ use crate::models::{
     Vote,
     VoteCounts,
     VoteType,
+    EntityType,
+    EntityRef,
+    Transfer,
+    TransferRequest,
+    TransferResponse,
 };
 use crate::websocket::websocket_routes;
 use crate::auth::{JwtConfig, revocation::InMemoryRevocationStore};
@@ -62,33 +72,44 @@ use crate::auth::{JwtConfig, revocation::InMemoryRevocationStore};
 /// API documentation
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        crate::handlers::health_check_handler,
-        crate::handlers::create_thread_handler,
-        crate::handlers::get_threads_handler,
-        crate::handlers::get_thread_detail_handler,
-        crate::handlers::create_proposal_handler,
-        crate::handlers::get_proposals_handler,
-        crate::handlers::get_proposal_detail_handler,
-        crate::handlers::cast_vote_handler,
-        crate::handlers::get_proposal_votes_handler,
-    ),
     components(
         schemas(
+            crate::error::ApiError,
+            crate::models::Message,
             crate::models::NewThreadRequest,
             crate::models::ThreadSummary,
             crate::models::ThreadDetail,
-            crate::models::NewProposalRequest,
             crate::models::ProposalSummary,
             crate::models::ProposalDetail,
-            crate::models::NewVoteRequest,
+            crate::models::NewProposalRequest,
+            crate::models::ProposalStatus,
             crate::models::Vote,
+            crate::models::VoteCounts,
             crate::models::VoteType,
-        )
+            crate::models::NewVoteRequest,
+            crate::models::ProposalVotesResponse,
+            crate::models::GetThreadsQuery,
+            crate::models::GetProposalsQuery,
+            // Entity and transfer models
+            crate::models::EntityType,
+            crate::models::EntityRef,
+            crate::models::Transfer,
+            crate::models::TransferRequest,
+            crate::models::TransferResponse,
+            crate::handlers::BatchTransferResponse,
+            crate::handlers::TransferQuery,
+            crate::handlers::LedgerStats,
+            crate::handlers::TransferError,
+        ),
     ),
     tags(
-        (name = "ICN AgoraNet API", description = "ICN Governance API")
-    )
+        (name = "AgoraNet", description = "ICN AgoraNet API"),
+    ),
+    info(
+        title = "ICN AgoraNet API",
+        version = "1.0.0",
+        description = "ICN AgoraNet API for federation, cooperative, and community operations",
+    ),
 )]
 struct ApiDoc;
 
@@ -139,6 +160,11 @@ pub fn create_app(store: Db) -> Router {
         .route("/api/v1/federation/:federation_id/tokens", post(issue_jwt_token_handler))
         .route("/api/v1/federation/:federation_id/tokens/revoke", post(revoke_token_handler))
         .route("/api/v1/federation/:federation_id/tokens/rotate", post(rotate_token_handler))
+        // Add cross-entity transfer endpoints with state
+        .route("/api/v1/federation/:federation_id/transfers", post(process_entity_transfer))
+        .route("/api/v1/federation/:federation_id/transfers/batch", post(process_batch_transfers))
+        .route("/api/v1/federation/:federation_id/transfers/query", get(query_transfers))
+        .route("/api/v1/federation/:federation_id/ledger/stats", get(get_federation_ledger_stats))
         // Economic operation routes (cooperative scoped)
         .route("/api/v1/coop/:coop_id/transfer", post(process_token_transfer))
         // Governance routes (community scoped)

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path as AxumPath, Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -10,6 +10,7 @@ use uuid::Uuid;
 use chrono::{DateTime, Duration};
 use serde_json::Value;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::error::ApiError;
 use crate::models::*; // Added ApiError import
@@ -17,8 +18,121 @@ use crate::auth::{
     AuthenticatedRequest, AuthError, 
     TokenIssueRequest, TokenResponse,
     issue_token, ensure_federation_admin,
-    JwtConfig
+    JwtConfig,
+    check_transfer_from_permission,
+    revocation::TokenRevocationStore
 };
+use crate::models::{
+    EntityRef, 
+    EntityType, 
+    Transfer, 
+    TransferRequest, 
+    TransferResponse,
+};
+use crate::websocket::WebSocketState;
+
+// Define the errors locally using similar structure
+#[derive(Debug, Error)]
+pub enum TransferError {
+    #[error("insufficient balance")]
+    InsufficientBalance,
+    
+    #[error("invalid amount")]
+    InvalidAmount,
+    
+    #[error("entity not found: {0}")]
+    EntityNotFound(String),
+    
+    #[error("transfer not found: {0}")]
+    TransferNotFound(Uuid),
+    
+    #[error("federation mismatch")]
+    FederationMismatch,
+    
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+// Define the query parameters locally
+#[derive(Debug, Deserialize)]
+pub struct TransferQuery {
+    /// Federation ID to filter by
+    pub federation_id: Option<String>,
+    /// Entity ID to filter by (from or to)
+    pub entity_id: Option<String>,
+    /// Entity type to filter by
+    pub entity_type: Option<EntityType>,
+    /// Only include transfers where the entity is the source
+    pub from_only: Option<bool>,
+    /// Only include transfers where the entity is the destination
+    pub to_only: Option<bool>,
+    /// Start date for filtering
+    pub start_date: Option<DateTime<Utc>>,
+    /// End date for filtering
+    pub end_date: Option<DateTime<Utc>>,
+    /// Minimum amount to include
+    pub min_amount: Option<u64>,
+    /// Maximum amount to include
+    pub max_amount: Option<u64>,
+    /// Limit the number of results
+    pub limit: Option<u32>,
+    /// Offset for pagination
+    pub offset: Option<u32>,
+}
+
+// Define the batch response locally
+#[derive(Debug, Serialize)]
+pub struct BatchTransferResponse {
+    /// Number of successful transfers
+    pub successful: usize,
+    /// Number of failed transfers
+    pub failed: usize,
+    /// IDs of successful transfers
+    pub successful_ids: Vec<Uuid>,
+    /// Failed transfers with error messages
+    pub failed_transfers: Vec<(usize, String)>,
+    /// Total amount transferred successfully
+    pub total_transferred: u64,
+    /// Total fees collected
+    pub total_fees: u64,
+}
+
+// Define ledger statistics locally
+#[derive(Debug, Serialize)]
+pub struct LedgerStats {
+    /// Total number of transfers
+    pub total_transfers: usize,
+    /// Total volume transferred
+    pub total_volume: u64,
+    /// Total fees collected
+    pub total_fees: u64,
+    /// Total number of entities in the ledger
+    pub total_entities: usize,
+    /// Number of active entities (with non-zero balance)
+    pub active_entities: usize,
+    /// Entity with highest balance
+    pub highest_balance_entity: Option<EntityRef>,
+    /// Highest balance amount
+    pub highest_balance: u64,
+    /// Total transfers in the last 24 hours
+    pub transfers_last_24h: usize,
+    /// Volume in the last 24 hours
+    pub volume_last_24h: u64,
+}
+
+// Define the ledger and ledger store types
+#[derive(Debug)]
+pub struct Ledger {
+    /// Entity balances by ID and entity type
+    balances: HashMap<String, u64>, // Simplified to just use the entity ID as key
+    /// Historical transfers
+    transfers: Vec<Transfer>,
+    /// Federation balances (federation_id -> total balance)
+    federation_stats: HashMap<String, u64>,
+}
+
+// Thread-safe ledger with read-write locking
+pub type LedgerStore = Arc<RwLock<Ledger>>;
 
 // For now, we'll use in-memory storage.
 // In a real application, this would be a database connection pool.
@@ -33,6 +147,8 @@ pub struct InMemoryStore {
     receipts: Vec<ExecutionReceiptDetail>,
     token_balances: Vec<TokenBalance>,
     token_transactions: Vec<TokenTransaction>,
+    // Add the ledger for persistent balance tracking
+    ledger: Option<LedgerStore>,
 }
 
 impl InMemoryStore {
@@ -178,6 +294,7 @@ impl InMemoryStore {
             },
         ];
 
+        // Create the store with all initialized data
         Self {
             threads: vec![ThreadDetail {
                 summary: ThreadSummary {
@@ -239,6 +356,7 @@ impl InMemoryStore {
             receipts,
             token_balances,
             token_transactions,
+            ledger: Some(create_example_ledger()),
         }
     }
 
@@ -557,7 +675,7 @@ pub async fn get_threads_handler(
     )
 )]
 pub async fn get_thread_detail_handler(
-    AxumPath(id): AxumPath<String>,
+    Path(id): Path<String>,
     State(db): State<Db>,
 ) -> Result<Json<ThreadDetail>, ApiError> {
     let store = db
@@ -659,7 +777,7 @@ pub async fn get_proposals_handler(
     )
 )]
 pub async fn get_proposal_detail_handler(
-    AxumPath(id): AxumPath<String>,
+    Path(id): Path<String>,
     State(db): State<Db>,
 ) -> Result<Json<ProposalDetail>, ApiError> {
     let store = db
@@ -798,7 +916,7 @@ pub async fn cast_vote_handler(
     )
 )]
 pub async fn get_proposal_votes_handler(
-    AxumPath(proposal_id): AxumPath<String>,
+    Path(proposal_id): Path<String>,
     State(db): State<Db>,
 ) -> Result<Json<ProposalVotesResponse>, ApiError> {
     let store = db
@@ -876,7 +994,7 @@ pub async fn get_receipts_handler(
     )
 )]
 pub async fn get_receipt_detail_handler(
-    AxumPath(cid): AxumPath<String>,
+    Path(cid): Path<String>,
     State(db): State<Db>,
 ) -> Result<Json<ExecutionReceiptDetail>, ApiError> {
     let store = db
@@ -1222,7 +1340,7 @@ pub async fn get_token_stats_authorized(
 pub async fn issue_jwt_token_handler(
     State((db, _, jwt_config)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>)>,
     auth: AuthenticatedRequest,
-    AxumPath(federation_id): AxumPath<String>,
+    Path(federation_id): Path<String>,
     Json(payload): Json<crate::auth::TokenIssueRequest>,
 ) -> Result<Json<crate::auth::TokenResponse>, AuthError> {
     // Ensure the requesting user has federation admin role
@@ -1258,7 +1376,7 @@ pub async fn issue_jwt_token_handler(
 pub async fn revoke_token_handler(
     State((db, _, jwt_config, revocation_store)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)>,
     auth: AuthenticatedRequest,
-    AxumPath(federation_id): AxumPath<String>,
+    Path(federation_id): Path<String>,
     Json(payload): Json<crate::auth::revocation::RevokeTokenRequest>,
 ) -> Result<Json<crate::auth::revocation::RevokeTokenResponse>, AuthError> {
     // Ensure the requesting user has federation admin role
@@ -1322,6 +1440,7 @@ pub async fn revoke_token_handler(
         revoked_at: now,
         jti: revoked_jti,
         subject: revoked_subject,
+        issuer: Some(format!("federation:{}", federation_id)),
     };
     
     Ok(Json(response))
@@ -1332,7 +1451,7 @@ pub async fn revoke_token_handler(
 pub async fn rotate_token_handler(
     State((db, _, jwt_config, revocation_store)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)>,
     auth: AuthenticatedRequest,
-    AxumPath(federation_id): AxumPath<String>,
+    Path(federation_id): Path<String>,
     Json(payload): Json<crate::auth::revocation::RotateTokenRequest>,
 ) -> Result<Json<crate::auth::TokenResponse>, AuthError> {
     // Ensure the requesting user has federation admin role
@@ -1414,4 +1533,785 @@ pub fn start_revocation_cleanup(revocation_store: Arc<dyn crate::auth::revocatio
             }
         }
     });
+}
+
+/// Process a transfer between entities
+pub async fn process_entity_transfer(
+    State((db, ws_state, jwt_config, revocation_store)): State<(Db, WebSocketState, Arc<JwtConfig>, Arc<dyn TokenRevocationStore>)>,
+    auth: AuthenticatedRequest,
+    Path(federation_id): Path<String>,
+    Json(request): Json<TransferRequest>,
+) -> Result<Json<TransferResponse>, ApiError> {
+    // Validate that the user has federation access
+    if !auth.claims.has_federation_access(&federation_id) {
+        return Err(ApiError::Unauthorized("No access to this federation".to_string()));
+    }
+    
+    // Check if the user has permission to transfer from the source entity
+    check_transfer_from_permission(&auth, &request.from)
+        .await
+        .map_err(|e| ApiError::Forbidden(e.to_string()))?;
+    
+    // Ensure amount is greater than zero
+    if request.amount == 0 {
+        return Err(ApiError::BadRequest("Transfer amount must be greater than zero".to_string()));
+    }
+    
+    // Create a mock entity registry for this example
+    // In a real implementation, this would be fetched from a database or service
+    let entity_registry = get_mock_entity_registry();
+    
+    // Verify both entities belong to this federation
+    if !verify_entity_in_federation(&request.from, &federation_id, &entity_registry) {
+        return Err(ApiError::BadRequest(format!("Source entity does not belong to federation {}", federation_id)));
+    }
+    
+    if !verify_entity_in_federation(&request.to, &federation_id, &entity_registry) {
+        return Err(ApiError::BadRequest(format!("Destination entity does not belong to federation {}", federation_id)));
+    }
+    
+    // Calculate the fee
+    let fee = calculate_fee(request.amount, &request.from, &request.to);
+    
+    // Create the transfer record
+    let transfer = create_transfer(
+        &request,
+        federation_id.clone(),
+        auth.claims.sub.clone(),
+        fee,
+    );
+
+    // Access the store and get a read lock to access the ledger
+    let store_read_guard = db.read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    // Get a reference to the ledger
+    let ledger_opt = match &store_read_guard.ledger {
+        Some(ledger) => ledger.clone(),
+        None => return Err(ApiError::InternalServerError("Ledger not initialized".to_string())),
+    };
+
+    // Release the read lock on the store
+    drop(store_read_guard);
+    
+    // Get a write lock on the ledger to update balances
+    let mut ledger_write_guard = ledger_opt.write()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire ledger write lock".to_string()))?;
+    
+    // Process the transfer in the ledger
+    let processed_transfer = ledger_write_guard.process_transfer(transfer.clone())
+        .map_err(|e| match e {
+            TransferError::InsufficientBalance => 
+                ApiError::BadRequest("Insufficient balance for transfer".to_string()),
+            TransferError::InvalidAmount => 
+                ApiError::BadRequest("Invalid transfer amount".to_string()),
+            TransferError::EntityNotFound(id) => 
+                ApiError::NotFound(format!("Entity not found: {}", id)),
+            TransferError::FederationMismatch => 
+                ApiError::BadRequest("Federation mismatch between entities".to_string()),
+            _ => ApiError::InternalServerError(format!("Transfer error: {}", e)),
+        })?;
+    
+    // Get updated balances
+    let new_from_balance = ledger_write_guard.get_balance(&transfer.from);
+    let new_to_balance = ledger_write_guard.get_balance(&transfer.to);
+    
+    // Release the ledger write lock
+    drop(ledger_write_guard);
+    
+    // Broadcast the transfer event to appropriate WebSocket channels
+    let channels = get_transfer_notification_channels(&transfer);
+    for channel in channels {
+        ws_state.send_event_to_channel(
+            &channel,
+            "transfer",
+            &serde_json::json!({
+                "transfer": transfer,
+                "from_balance": new_from_balance,
+                "to_balance": new_to_balance
+            }),
+        );
+    }
+    
+    // Create and return the response
+    let response = TransferResponse {
+        tx_id: transfer.tx_id,
+        transfer,
+        from_balance: new_from_balance,
+        to_balance: new_to_balance,
+    };
+    
+    Ok(Json(response))
+}
+
+// Fee rates in parts per million (ppm)
+const DEFAULT_TRANSFER_FEE_PPM: u64 = 2_000; // 0.2%
+const USER_TO_USER_FEE_PPM: u64 = 1_000; // 0.1%
+const COOP_OUTBOUND_FEE_PPM: u64 = 3_000; // 0.3%
+const COMMUNITY_RECEIVE_FEE_PPM: u64 = 1_500; // 0.15%
+const FEDERATION_OUTBOUND_FEE_PPM: u64 = 500; // 0.05%
+
+/// Calculate the fee for a transfer between entities
+fn calculate_fee(amount: u64, from: &EntityRef, to: &EntityRef) -> u64 {
+    let rate_ppm = match (&from.entity_type, &to.entity_type) {
+        (EntityType::User, EntityType::User) => USER_TO_USER_FEE_PPM,
+        (EntityType::Cooperative, _) => COOP_OUTBOUND_FEE_PPM,
+        (EntityType::Federation, _) => FEDERATION_OUTBOUND_FEE_PPM,
+        (_, EntityType::Community) => COMMUNITY_RECEIVE_FEE_PPM,
+        _ => DEFAULT_TRANSFER_FEE_PPM,
+    };
+    
+    // Calculate fee with proper handling of potential overflow
+    (amount as u128 * rate_ppm as u128 / 1_000_000u128) as u64
+}
+
+/// Verify that an entity belongs to a federation
+fn verify_entity_in_federation(
+    entity: &EntityRef, 
+    federation_id: &str,
+    entity_registry: &HashMap<String, String>, // id -> federation_id
+) -> bool {
+    // For users, we trust they belong to the federation if specified in the JWT
+    if entity.entity_type == EntityType::User {
+        return true;
+    }
+    
+    // For organizations, verify against the entity registry
+    entity_registry.get(&entity.id)
+        .map_or(false, |fed_id| fed_id == federation_id)
+}
+
+/// Create a new transfer object from a request
+fn create_transfer(
+    request: &TransferRequest,
+    federation_id: String,
+    initiator: String,
+    fee: u64,
+) -> Transfer {
+    Transfer {
+        tx_id: Uuid::new_v4(),
+        federation_id,
+        from: request.from.clone(),
+        to: request.to.clone(),
+        amount: request.amount,
+        fee,
+        initiator,
+        timestamp: Utc::now(),
+        memo: request.memo.clone(),
+        metadata: request.metadata.clone(),
+    }
+}
+
+/// Format a WebSocket event channel ID for an entity
+fn get_entity_channel(entity: &EntityRef) -> String {
+    match entity.entity_type {
+        EntityType::Federation => format!("federation:{}", entity.id),
+        EntityType::Cooperative => format!("coop:{}", entity.id),
+        EntityType::Community => format!("community:{}", entity.id),
+        EntityType::User => format!("user:{}", entity.id),
+    }
+}
+
+/// Get all channels that should receive notifications about a transfer
+fn get_transfer_notification_channels(transfer: &Transfer) -> Vec<String> {
+    let mut channels = vec![
+        format!("federation:{}", transfer.federation_id)
+    ];
+    
+    // Add from entity channel
+    channels.push(get_entity_channel(&transfer.from));
+    
+    // Add to entity channel if different
+    let to_channel = get_entity_channel(&transfer.to);
+    if !channels.contains(&to_channel) {
+        channels.push(to_channel);
+    }
+    
+    channels
+}
+
+/// Helper function to get a mock entity registry
+/// In a real implementation, this would be fetched from a database
+fn get_mock_entity_registry() -> HashMap<String, String> {
+    let mut registry = HashMap::new();
+    
+    // Federation entities
+    registry.insert("federation1".to_string(), "federation1".to_string());
+    registry.insert("federation2".to_string(), "federation2".to_string());
+    
+    // Cooperatives
+    registry.insert("coop-econA".to_string(), "federation1".to_string());
+    registry.insert("coop-econB".to_string(), "federation1".to_string());
+    registry.insert("coop-econC".to_string(), "federation2".to_string());
+    
+    // Communities
+    registry.insert("comm-govX".to_string(), "federation1".to_string());
+    registry.insert("comm-govY".to_string(), "federation1".to_string());
+    registry.insert("comm-govZ".to_string(), "federation2".to_string());
+    
+    registry
+}
+
+/// Helper function to get a mock balance for an entity
+/// In a real implementation, this would be fetched from a database
+fn get_mock_entity_balance(entity_id: &str) -> u64 {
+    match entity_id {
+        "federation1" => 1_000_000,
+        "federation2" => 500_000,
+        "coop-econA" => 250_000,
+        "coop-econB" => 150_000,
+        "coop-econC" => 100_000,
+        "comm-govX" => 50_000,
+        "comm-govY" => 25_000,
+        "comm-govZ" => 10_000,
+        // Default for users or unknown entities
+        _ => 5_000,
+    }
+}
+
+// Add a new endpoint for querying transfers with filters
+pub async fn query_transfers(
+    State((db, _, _, _)): State<(Db, WebSocketState, Arc<JwtConfig>, Arc<dyn TokenRevocationStore>)>,
+    auth: AuthenticatedRequest,
+    Path(federation_id): Path<String>,
+    Query(query): Query<TransferQuery>,
+) -> Result<Json<Vec<Transfer>>, ApiError> {
+    // Validate that the user has federation access
+    if !auth.claims.has_federation_access(&federation_id) {
+        return Err(ApiError::Unauthorized("No access to this federation".to_string()));
+    }
+    
+    // Force the federation_id from the path parameter
+    let mut filtered_query = query;
+    filtered_query.federation_id = Some(federation_id);
+    
+    // Access the store and get the ledger
+    let store = db.read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    // Get the ledger
+    let ledger_opt = match &store.ledger {
+        Some(ledger) => ledger.clone(),
+        None => return Err(ApiError::InternalServerError("Ledger not initialized".to_string())),
+    };
+    
+    drop(store);
+    
+    // Get a read lock on the ledger
+    let ledger_guard = ledger_opt.read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire ledger read lock".to_string()))?;
+    
+    // Query transfers
+    let transfers = ledger_guard.query_transfers(&filtered_query);
+    
+    // Convert references to owned values
+    let owned_transfers: Vec<Transfer> = transfers.into_iter()
+        .cloned()
+        .collect();
+    
+    Ok(Json(owned_transfers))
+}
+
+// Add an endpoint for batch transfers
+pub async fn process_batch_transfers(
+    State((db, ws_state, jwt_config, revocation_store)): State<(Db, WebSocketState, Arc<JwtConfig>, Arc<dyn TokenRevocationStore>)>,
+    auth: AuthenticatedRequest,
+    Path(federation_id): Path<String>,
+    Json(requests): Json<Vec<TransferRequest>>,
+) -> Result<Json<BatchTransferResponse>, ApiError> {
+    // Validate that the user has federation access
+    if !auth.claims.has_federation_access(&federation_id) {
+        return Err(ApiError::Unauthorized("No access to this federation".to_string()));
+    }
+    
+    // Create a mock entity registry for this example
+    let entity_registry = get_mock_entity_registry();
+    
+    // Prepare the transfers
+    let mut transfers = Vec::new();
+    
+    for request in requests {
+        // Check if the user has permission to transfer from the source entity
+        if let Err(e) = check_transfer_from_permission(&auth, &request.from).await {
+            // Skip this transfer and log the error
+            continue;
+        }
+        
+        // Skip transfers with invalid amounts
+        if request.amount == 0 {
+            continue;
+        }
+        
+        // Skip if entities don't belong to the federation
+        if !verify_entity_in_federation(&request.from, &federation_id, &entity_registry) ||
+           !verify_entity_in_federation(&request.to, &federation_id, &entity_registry) {
+            continue;
+        }
+        
+        // Calculate the fee
+        let fee = calculate_fee(request.amount, &request.from, &request.to);
+        
+        // Create the transfer
+        let transfer = create_transfer(
+            &request,
+            federation_id.clone(),
+            auth.claims.sub.clone(),
+            fee,
+        );
+        
+        transfers.push(transfer);
+    }
+    
+    // Access the store and get the ledger
+    let store = db.read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    // Get the ledger
+    let ledger_opt = match &store.ledger {
+        Some(ledger) => ledger.clone(),
+        None => return Err(ApiError::InternalServerError("Ledger not initialized".to_string())),
+    };
+    
+    drop(store);
+    
+    // Get a write lock on the ledger
+    let mut ledger = ledger_opt.write()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire ledger write lock".to_string()))?;
+    
+    // Process the batch transfer
+    let batch_result = ledger.process_batch_transfer(transfers);
+    
+    // Broadcast events for successful transfers
+    for tx_id in &batch_result.successful_ids {
+        if let Some(transfer) = ledger.find_transfer(tx_id) {
+            let channels = get_transfer_notification_channels(transfer);
+            for channel in channels {
+                ws_state.send_event_to_channel(
+                    &channel,
+                    "transfer",
+                    &serde_json::json!({
+                        "transfer": transfer,
+                        "from_balance": ledger.get_balance(&transfer.from),
+                        "to_balance": ledger.get_balance(&transfer.to)
+                    }),
+                );
+            }
+        }
+    }
+    
+    Ok(Json(batch_result))
+}
+
+// Add an endpoint to get ledger statistics for a federation
+pub async fn get_federation_ledger_stats(
+    State((db, _, _, _)): State<(Db, WebSocketState, Arc<JwtConfig>, Arc<dyn TokenRevocationStore>)>,
+    auth: AuthenticatedRequest,
+    Path(federation_id): Path<String>,
+) -> Result<Json<LedgerStats>, ApiError> {
+    // Validate that the user has federation access
+    if !auth.claims.has_federation_access(&federation_id) {
+        return Err(ApiError::Unauthorized("No access to this federation".to_string()));
+    }
+    
+    // Access the store and get the ledger
+    let store = db.read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
+    
+    // Get the ledger
+    let ledger_opt = match &store.ledger {
+        Some(ledger) => ledger.clone(),
+        None => return Err(ApiError::InternalServerError("Ledger not initialized".to_string())),
+    };
+    
+    drop(store);
+    
+    // Get a read lock on the ledger
+    let ledger = ledger_opt.read()
+        .map_err(|_| ApiError::InternalServerError("Failed to acquire ledger read lock".to_string()))?;
+    
+    // Get federation-specific statistics
+    let stats = ledger.get_federation_stats(&federation_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Federation not found in ledger: {}", federation_id)))?;
+    
+    Ok(Json(stats))
+}
+
+// Implement the Ledger methods
+
+impl Ledger {
+    /// Create a new empty ledger
+    pub fn new() -> Self {
+        Self {
+            balances: HashMap::new(),
+            transfers: Vec::new(),
+            federation_stats: HashMap::new(),
+        }
+    }
+    
+    /// Initialize with some example data
+    pub fn with_example_data() -> Self {
+        let mut ledger = Self::new();
+        
+        // Add some initial balances
+        let entities = vec![
+            (EntityRef { entity_type: EntityType::Federation, id: "federation1".to_string() }, 1_000_000),
+            (EntityRef { entity_type: EntityType::Cooperative, id: "coop-econA".to_string() }, 250_000),
+            (EntityRef { entity_type: EntityType::Cooperative, id: "coop-econB".to_string() }, 150_000),
+            (EntityRef { entity_type: EntityType::Community, id: "comm-govX".to_string() }, 50_000),
+            (EntityRef { entity_type: EntityType::Community, id: "comm-govY".to_string() }, 25_000),
+            (EntityRef { entity_type: EntityType::User, id: "did:icn:user1".to_string() }, 5_000),
+            (EntityRef { entity_type: EntityType::User, id: "did:icn:user2".to_string() }, 3_000),
+        ];
+        
+        for (entity, balance) in entities {
+            ledger.set_balance(&entity, balance);
+            
+            // Update federation stats
+            if entity.entity_type == EntityType::Federation {
+                ledger.federation_stats.insert(entity.id.clone(), balance);
+            } else {
+                // Assume all entities belong to federation1 for this example
+                let fed_entry = ledger.federation_stats.entry("federation1".to_string()).or_insert(0);
+                *fed_entry += balance;
+            }
+        }
+        
+        ledger
+    }
+    
+    /// Get an entity's balance
+    pub fn get_balance(&self, entity: &EntityRef) -> u64 {
+        // Create a composite key from entity type and ID
+        let key = format!("{}:{}", entity.entity_type.to_string(), entity.id);
+        self.balances.get(&key).copied().unwrap_or(0)
+    }
+    
+    /// Set an entity's balance directly
+    pub fn set_balance(&mut self, entity: &EntityRef, balance: u64) {
+        // Create a composite key from entity type and ID
+        let key = format!("{}:{}", entity.entity_type.to_string(), entity.id);
+        self.balances.insert(key, balance);
+    }
+    
+    /// Process a transfer between entities
+    pub fn process_transfer(&mut self, transfer: Transfer) -> Result<Transfer, TransferError> {
+        // Validate the transfer
+        if transfer.amount == 0 {
+            return Err(TransferError::InvalidAmount);
+        }
+        
+        // Check if source has sufficient balance
+        let from_balance = self.get_balance(&transfer.from);
+        if from_balance < transfer.amount + transfer.fee {
+            return Err(TransferError::InsufficientBalance);
+        }
+        
+        // Update balances
+        let new_from_balance = from_balance - transfer.amount - transfer.fee;
+        self.set_balance(&transfer.from, new_from_balance);
+        
+        let to_balance = self.get_balance(&transfer.to);
+        let new_to_balance = to_balance + transfer.amount;
+        self.set_balance(&transfer.to, new_to_balance);
+        
+        // Record the transfer
+        self.transfers.push(transfer.clone());
+        
+        // Update federation stats
+        if let Some(stats) = self.federation_stats.get_mut(&transfer.federation_id) {
+            // Fees remain in the federation as a whole
+            *stats += transfer.fee;
+        }
+        
+        Ok(transfer)
+    }
+    
+    /// Process multiple transfers in one operation
+    pub fn process_batch_transfer(
+        &mut self, 
+        transfers: Vec<Transfer>
+    ) -> BatchTransferResponse {
+        let mut response = BatchTransferResponse {
+            successful: 0,
+            failed: 0,
+            successful_ids: Vec::new(),
+            failed_transfers: Vec::new(),
+            total_transferred: 0,
+            total_fees: 0,
+        };
+        
+        for (index, transfer) in transfers.into_iter().enumerate() {
+            match self.process_transfer(transfer) {
+                Ok(processed) => {
+                    response.successful += 1;
+                    response.successful_ids.push(processed.tx_id);
+                    response.total_transferred += processed.amount;
+                    response.total_fees += processed.fee;
+                },
+                Err(err) => {
+                    response.failed += 1;
+                    response.failed_transfers.push((index, err.to_string()));
+                }
+            }
+        }
+        
+        response
+    }
+    
+    /// Find a transfer by ID
+    pub fn find_transfer(&self, tx_id: &Uuid) -> Option<&Transfer> {
+        self.transfers.iter().find(|t| &t.tx_id == tx_id)
+    }
+    
+    /// Query transfers based on filters
+    pub fn query_transfers(&self, query: &TransferQuery) -> Vec<&Transfer> {
+        let mut results: Vec<&Transfer> = self.transfers.iter()
+            .filter(|t| {
+                // Filter by federation
+                if let Some(fed_id) = &query.federation_id {
+                    if t.federation_id != *fed_id {
+                        return false;
+                    }
+                }
+                
+                // Filter by entity
+                if let Some(entity_id) = &query.entity_id {
+                    let from_match = t.from.id == *entity_id;
+                    let to_match = t.to.id == *entity_id;
+                    
+                    match (query.from_only, query.to_only) {
+                        (Some(true), _) => if !from_match { return false; },
+                        (_, Some(true)) => if !to_match { return false; },
+                        _ => if !from_match && !to_match { return false; }
+                    }
+                    
+                    // Filter by entity type if both ID and type provided
+                    if let Some(entity_type) = &query.entity_type {
+                        if (from_match && t.from.entity_type != *entity_type) ||
+                           (to_match && t.to.entity_type != *entity_type) {
+                            return false;
+                        }
+                    }
+                } 
+                // If only entity type provided without ID
+                else if let Some(entity_type) = &query.entity_type {
+                    if t.from.entity_type != *entity_type && t.to.entity_type != *entity_type {
+                        return false;
+                    }
+                }
+                
+                // Filter by date range
+                if let Some(start) = query.start_date {
+                    if t.timestamp < start {
+                        return false;
+                    }
+                }
+                
+                if let Some(end) = query.end_date {
+                    if t.timestamp > end {
+                        return false;
+                    }
+                }
+                
+                // Filter by amount
+                if let Some(min) = query.min_amount {
+                    if t.amount < min {
+                        return false;
+                    }
+                }
+                
+                if let Some(max) = query.max_amount {
+                    if t.amount > max {
+                        return false;
+                    }
+                }
+                
+                true
+            })
+            .collect();
+        
+        // Apply sorting - newest first
+        results.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        
+        // Apply pagination
+        if let Some(offset) = query.offset {
+            let offset = offset as usize;
+            if offset < results.len() {
+                results = results.into_iter().skip(offset).collect();
+            } else {
+                results = Vec::new();
+            }
+        }
+        
+        if let Some(limit) = query.limit {
+            let limit = limit as usize;
+            if results.len() > limit {
+                results.truncate(limit);
+            }
+        }
+        
+        results
+    }
+    
+    /// Get ledger statistics
+    pub fn get_stats(&self) -> LedgerStats {
+        // Calculate total volume and fees
+        let (total_volume, total_fees) = self.transfers.iter()
+            .fold((0, 0), |(vol, fees), t| (vol + t.amount, fees + t.fee));
+        
+        // Find active entities
+        let active_entities = self.balances.values().filter(|&b| *b > 0).count();
+        
+        // Find entity with highest balance
+        let highest_balance_entry = self.balances.iter()
+            .max_by_key(|(_, balance)| *balance);
+        
+        let (highest_balance_entity, highest_balance) = match highest_balance_entry {
+            Some(((id, entity_type), balance)) => {
+                let entity = EntityRef {
+                    entity_type: entity_type.clone(),
+                    id: id.clone(),
+                };
+                (Some(entity), *balance)
+            },
+            None => (None, 0),
+        };
+        
+        // Calculate activity in the last 24 hours
+        let day_ago = Utc::now() - chrono::Duration::days(1);
+        let recent_transfers: Vec<_> = self.transfers.iter()
+            .filter(|t| t.timestamp > day_ago)
+            .collect();
+        
+        let transfers_last_24h = recent_transfers.len();
+        let volume_last_24h = recent_transfers.iter()
+            .fold(0, |sum, t| sum + t.amount);
+        
+        LedgerStats {
+            total_transfers: self.transfers.len(),
+            total_volume,
+            total_fees,
+            total_entities: self.balances.len(),
+            active_entities,
+            highest_balance_entity,
+            highest_balance,
+            transfers_last_24h,
+            volume_last_24h,
+        }
+    }
+    
+    /// Get federation-specific statistics
+    pub fn get_federation_stats(&self, federation_id: &str) -> Option<LedgerStats> {
+        // Check if federation exists
+        if !self.federation_stats.contains_key(federation_id) {
+            return None;
+        }
+        
+        // Filter transfers for this federation
+        let fed_transfers: Vec<_> = self.transfers.iter()
+            .filter(|t| t.federation_id == federation_id)
+            .collect();
+        
+        // Calculate total volume and fees
+        let (total_volume, total_fees) = fed_transfers.iter()
+            .fold((0, 0), |(vol, fees), t| (vol + t.amount, fees + t.fee));
+        
+        // Filter active entities in this federation
+        let fed_entities: Vec<_> = self.balances.iter()
+            .filter(|((id, _), balance)| {
+                // For simplicity, we're assuming entities with balance belong to the federation
+                // In a real implementation, we'd have explicit federation membership
+                **balance > 0
+            })
+            .collect();
+        
+        let active_entities = fed_entities.len();
+        
+        // Find entity with highest balance
+        let highest_balance_entry = fed_entities.into_iter()
+            .max_by_key(|(_, balance)| *balance);
+        
+        let (highest_balance_entity, highest_balance) = match highest_balance_entry {
+            Some(((id, entity_type), balance)) => {
+                let entity = EntityRef {
+                    entity_type: entity_type.clone(),
+                    id: id.clone(),
+                };
+                (Some(entity), *balance)
+            },
+            None => (None, 0),
+        };
+        
+        // Calculate activity in the last 24 hours
+        let day_ago = Utc::now() - chrono::Duration::days(1);
+        let recent_transfers: Vec<_> = fed_transfers.iter()
+            .filter(|t| t.timestamp > day_ago)
+            .collect();
+        
+        let transfers_last_24h = recent_transfers.len();
+        let volume_last_24h = recent_transfers.iter()
+            .fold(0, |sum, t| sum + t.amount);
+        
+        Some(LedgerStats {
+            total_transfers: fed_transfers.len(),
+            total_volume,
+            total_fees,
+            total_entities: self.balances.len(), // Simplifying for now
+            active_entities,
+            highest_balance_entity,
+            highest_balance,
+            transfers_last_24h,
+            volume_last_24h,
+        })
+    }
+}
+
+/// Create a new ledger store with example data
+pub fn create_example_ledger() -> LedgerStore {
+    Arc::new(RwLock::new(Ledger::with_example_data()))
+}
+
+/// Get the notification channels for a transfer
+fn get_transfer_notification_channels(transfer: &Transfer) -> Vec<String> {
+    let mut channels = Vec::new();
+    
+    // Add federation channel
+    channels.push(format!("federation:{}", transfer.federation_id));
+    
+    // Add from entity channel
+    match transfer.from.entity_type {
+        EntityType::Federation => {
+            // Already added above
+        },
+        EntityType::Cooperative => {
+            channels.push(format!("coop:{}", transfer.from.id));
+        },
+        EntityType::Community => {
+            channels.push(format!("community:{}", transfer.from.id));
+        },
+        EntityType::User => {
+            channels.push(format!("user:{}", transfer.from.id));
+        },
+    }
+    
+    // Add to entity channel
+    match transfer.to.entity_type {
+        EntityType::Federation => {
+            // Already added above
+        },
+        EntityType::Cooperative => {
+            channels.push(format!("coop:{}", transfer.to.id));
+        },
+        EntityType::Community => {
+            channels.push(format!("community:{}", transfer.to.id));
+        },
+        EntityType::User => {
+            channels.push(format!("user:{}", transfer.to.id));
+        },
+    }
+    
+    // Add a general transfers channel
+    channels.push("transfers".to_string());
+    
+    channels
 }

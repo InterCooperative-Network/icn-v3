@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 // Timestamp alias for clarity
 pub type Timestamp = DateTime<Utc>;
@@ -327,4 +328,79 @@ pub struct TokenStatsResponse {
     pub coop_id: Option<String>,
     #[schema(example = "community-456")]
     pub community_id: Option<String>,
+}
+
+/// The type of entity holding tokens.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, ToSchema)]
+pub enum EntityType {
+    /// Federation (organization that coordinates coops and communities)
+    Federation,
+    /// Cooperative (economic entity)
+    Cooperative,
+    /// Community (governance entity)
+    Community,
+    /// Individual user
+    User,
+}
+
+/// Reference to any token-holding entity.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct EntityRef {
+    /// Type of the entity (federation, coop, community, user)
+    pub entity_type: EntityType,
+    /// Identifier (DID or org ID)
+    pub id: String,
+}
+
+/// A token transfer between any two entities.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct Transfer {
+    /// Unique transaction ID
+    pub tx_id: Uuid,
+    /// Governing federation ID
+    pub federation_id: String,
+    /// Source entity
+    pub from: EntityRef,
+    /// Destination entity
+    pub to: EntityRef,
+    /// Amount of tokens to transfer
+    pub amount: u64,
+    /// Fee charged for the transfer
+    pub fee: u64,
+    /// DID of the user initiating the transfer
+    pub initiator: String,
+    /// Timestamp of the transfer
+    pub timestamp: DateTime<Utc>,
+    /// Optional memo/description
+    pub memo: Option<String>,
+    /// Optional metadata
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Request to initiate a transfer between entities
+#[derive(Serialize, Deserialize, Debug, ToSchema)]
+pub struct TransferRequest {
+    /// Source entity
+    pub from: EntityRef,
+    /// Destination entity
+    pub to: EntityRef,
+    /// Amount to transfer
+    pub amount: u64,
+    /// Optional memo/description
+    pub memo: Option<String>,
+    /// Optional metadata
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Response to a transfer request
+#[derive(Serialize, Deserialize, Debug, ToSchema)]
+pub struct TransferResponse {
+    /// Unique transaction ID
+    pub tx_id: Uuid,
+    /// Completed transfer details
+    pub transfer: Transfer,
+    /// New balance of the source entity after transfer
+    pub from_balance: u64,
+    /// New balance of the destination entity after transfer
+    pub to_balance: u64,
 }
