@@ -3,8 +3,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import * as storage from '../lib/storage';
+import { useSigningContext } from '../components/SigningProvider';
 
 export default function Home() {
+  const { activeDid } = useSigningContext();
   const [isInstalled, setIsInstalled] = useState(false);
   const [identityCount, setIdentityCount] = useState<number | null>(null);
   
@@ -38,6 +40,14 @@ export default function Home() {
             Secure identity and credential management for the Internet of Cooperation Network
           </p>
           
+          {activeDid && (
+            <div className="mt-4 rounded-md bg-green-50 p-3 dark:bg-green-900/30">
+              <p className="text-sm">
+                Active DID: <span className="font-mono text-xs">{activeDid.slice(0, 15)}...{activeDid.slice(-4)}</span>
+              </p>
+            </div>
+          )}
+          
           {!isInstalled && (
             <div className="mt-4 rounded-md bg-blue-50 p-3 dark:bg-blue-900/30">
               <p className="text-sm">
@@ -65,6 +75,13 @@ export default function Home() {
               className="block w-full rounded border border-icn-primary px-4 py-3 text-center font-medium text-icn-primary hover:bg-icn-primary/10 focus:outline-none focus:ring-2 focus:ring-icn-accent"
             >
               View Credentials
+            </Link>
+            
+            <Link 
+              href="/demo"
+              className="block w-full rounded border border-icn-accent px-4 py-3 text-center font-medium text-icn-accent hover:bg-icn-accent/10 focus:outline-none focus:ring-2 focus:ring-icn-accent"
+            >
+              Try Signing API Demo
             </Link>
             
             <Link 
