@@ -1,0 +1,383 @@
+# Membership Policy Template
+# ------------------------
+# This policy template governs membership criteria and processes
+
+proposal "Membership Policy" {
+  # Define the scope of this policy
+  scope "community/federation/governance/membership"
+  
+  # Define membership types
+  membership_types {
+    type "full_member" {
+      description "Full voting member with all privileges"
+      voting_rights true
+      economic_rights true
+      service_access true
+      
+      # Requirements for full membership
+      requirements {
+        requirement "identity_verification" {
+          description "Member's identity must be verified"
+          verification_type "${IDENTITY_VERIFICATION_TYPE}"  # Options: "kyc", "vouching", "reputation"
+          min_vouches ${MIN_VOUCHES}  # Only used for vouching verification
+        }
+        
+        requirement "contribution" {
+          description "Member must make initial contribution"
+          contribution_type "${CONTRIBUTION_TYPE}"  # Options: "token", "labor", "resources"
+          minimum_amount ${MIN_CONTRIBUTION_AMOUNT}
+        }
+      }
+    }
+    
+    type "associate_member" {
+      description "Associate member with limited privileges"
+      voting_rights false
+      economic_rights true
+      service_access true
+      
+      # Requirements for associate membership
+      requirements {
+        requirement "identity_verification" {
+          description "Member's identity must be verified"
+          verification_type "basic"
+        }
+      }
+    }
+    
+    type "service_user" {
+      description "Service user with access to community services only"
+      voting_rights false
+      economic_rights false
+      service_access true
+      
+      # Requirements for service user membership
+      requirements {
+        requirement "identity_verification" {
+          description "Basic identity verification"
+          verification_type "basic"
+        }
+      }
+    }
+  }
+  
+  # Define membership processes
+  processes {
+    # Application process
+    process "application" {
+      # Step 1: Application submission
+      step "submit_application" {
+        description "Prospective member submits membership application"
+        
+        # Required fields for application
+        required_fields {
+          field "name" { type "string" }
+          field "did" { type "did" }
+          field "email" { type "string" }
+          field "membership_type" { 
+            type "enum"
+            values ["full_member", "associate_member", "service_user"]
+          }
+          field "statement" { type "string" }
+          field "contribution_pledge" { type "string" }
+        }
+        
+        # Anyone can submit an application
+        access {
+          role "public" {
+            permission "submit" { grant true }
+          }
+        }
+      }
+      
+      # Step 2: Application review
+      step "review_application" {
+        description "Community officials review the membership application"
+        
+        # Required fields for review
+        required_fields {
+          field "reviewer_did" { type "did" }
+          field "is_approved" { type "boolean" }
+          field "review_notes" { type "string" }
+          field "verification_method" { type "string" }
+          field "verification_complete" { type "boolean" }
+        }
+        
+        # Only community officials can review applications
+        access {
+          role "community_official" {
+            permission "review" { grant true }
+          }
+        }
+        
+        # Transition rules
+        transitions {
+          transition "approve" {
+            condition "is_approved == true && verification_complete == true"
+            next_step "onboarding"
+          }
+          transition "reject" {
+            condition "is_approved == false"
+            next_step "closed"
+          }
+        }
+      }
+      
+      # Step 3: Member onboarding
+      step "onboarding" {
+        description "Approved applicant is onboarded as a new member"
+        
+        # Required fields for onboarding
+        required_fields {
+          field "onboarding_official" { type "did" }
+          field "credential_issued" { type "boolean" }
+          field "membership_cid" { type "cid" }  # Content ID of the membership credential
+          field "onboarding_notes" { type "string" }
+        }
+        
+        # Only community officials can onboard new members
+        access {
+          role "community_official" {
+            permission "onboard" { grant true }
+          }
+        }
+        
+        # Transition rules
+        transitions {
+          transition "complete" {
+            condition "credential_issued == true"
+            next_step "active"
+          }
+        }
+      }
+      
+      # Step 4: Active membership
+      step "active" {
+        description "Member is now active in the community"
+        
+        # Required fields for active membership
+        required_fields {
+          field "activation_date" { type "timestamp" }
+          field "membership_expiry" { type "timestamp" }
+          field "membership_token_id" { type "string" }
+        }
+        
+        # Only community officials can manage active members
+        access {
+          role "community_official" {
+            permission "manage" { grant true }
+          }
+        }
+        
+        # Transition rules
+        transitions {
+          transition "expire" {
+            condition "current_time > membership_expiry"
+            next_step "renewal"
+          }
+          transition "violate" {
+            condition "policy_violation == true"
+            next_step "review"
+          }
+        }
+      }
+      
+      # Step 5a: Membership renewal
+      step "renewal" {
+        description "Member renews their membership"
+        
+        # Required fields for renewal
+        required_fields {
+          field "renewal_request" { type "boolean" }
+          field "renewal_contribution" { type "string" }
+          field "new_expiry" { type "timestamp" }
+        }
+        
+        # Members can request renewal, officials can approve
+        access {
+          role "cooperative_member" {
+            permission "request" { grant true }
+          }
+          role "community_official" {
+            permission "approve" { grant true }
+          }
+        }
+        
+        # Transition rules
+        transitions {
+          transition "renew" {
+            condition "renewal_request == true && new_expiry > current_time"
+            next_step "active"
+          }
+          transition "lapse" {
+            condition "renewal_request == false || current_time > membership_expiry + 30 days"
+            next_step "closed"
+          }
+        }
+      }
+      
+      # Step 5b: Membership review (for violations)
+      step "review" {
+        description "Review of membership due to potential violations"
+        
+        # Required fields for review
+        required_fields {
+          field "violation_description" { type "string" }
+          field "evidence_cids" { 
+            type "array"
+            items { type "cid" }
+          }
+          field "member_response" { type "string" }
+          field "review_decision" { 
+            type "enum"
+            values ["warning", "probation", "suspension", "termination", "cleared"]
+          }
+          field "decision_rationale" { type "string" }
+        }
+        
+        # Member can respond, officials can review
+        access {
+          role "cooperative_member" {
+            permission "respond" { grant true }
+          }
+          role "community_official" {
+            permission "review" { grant true }
+          }
+        }
+        
+        # Transition rules
+        transitions {
+          transition "cleared" {
+            condition "review_decision == 'cleared'"
+            next_step "active"
+          }
+          transition "probation" {
+            condition "review_decision == 'probation' || review_decision == 'warning'"
+            next_step "active"
+          }
+          transition "terminate" {
+            condition "review_decision == 'termination'"
+            next_step "closed"
+          }
+          transition "suspend" {
+            condition "review_decision == 'suspension'"
+            next_step "suspended"
+          }
+        }
+      }
+      
+      # Step: Suspended membership
+      step "suspended" {
+        description "Membership is temporarily suspended"
+        
+        # Required fields for suspension
+        required_fields {
+          field "suspension_reason" { type "string" }
+          field "suspension_start" { type "timestamp" }
+          field "suspension_end" { type "timestamp" }
+          field "reinstatement_conditions" { type "string" }
+        }
+        
+        # Only officials can manage suspensions
+        access {
+          role "community_official" {
+            permission "manage" { grant true }
+          }
+        }
+        
+        # Transition rules
+        transitions {
+          transition "reinstate" {
+            condition "current_time > suspension_end && reinstatement_conditions_met == true"
+            next_step "active"
+          }
+          transition "extend" {
+            condition "reinstatement_conditions_met == false && current_time > suspension_end"
+            next_step "review"
+          }
+          transition "terminate" {
+            condition "severe_violation == true"
+            next_step "closed"
+          }
+        }
+      }
+      
+      # Final step: Closed membership
+      step "closed" {
+        description "Membership is closed (rejected, terminated, or lapsed)"
+        
+        # Required fields for closure
+        required_fields {
+          field "closure_reason" { 
+            type "enum"
+            values ["rejected", "terminated", "lapsed", "voluntary_exit"]
+          }
+          field "closure_notes" { type "string" }
+          field "closed_date" { type "timestamp" }
+          field "reapplication_allowed" { type "boolean" }
+          field "reapplication_wait_days" { type "integer" }
+        }
+        
+        # Only officials can close memberships
+        access {
+          role "community_official" {
+            permission "close" { grant true }
+          }
+        }
+      }
+    }
+  }
+  
+  # Define membership metrics
+  metrics {
+    metric "active_members" {
+      description "Number of active members by type"
+      unit "count"
+      aggregation "count"
+      dimension "membership_type"
+    }
+    
+    metric "application_approval_rate" {
+      description "Percentage of applications approved"
+      unit "percentage"
+      aggregation "ratio"
+      measurement "step_transition" {
+        from_step "review_application"
+        to_step "onboarding"
+      }
+    }
+    
+    metric "average_membership_duration" {
+      description "Average duration of active memberships"
+      unit "days"
+      aggregation "average"
+      measurement "time_between_steps" {
+        from_step "active"
+        to_step "closed"
+      }
+    }
+  }
+  
+  # Access control for modifying this policy
+  access_control {
+    # Only federation admins and community officials can modify membership policy
+    role "federation_admin" {
+      permission "modify_policy" {
+        grant true
+      }
+    }
+    
+    role "community_official" {
+      permission "modify_policy" {
+        grant true
+      }
+    }
+    
+    # Read access for all
+    role "public" {
+      permission "view_policy" {
+        grant true
+      }
+    }
+  }
+} 

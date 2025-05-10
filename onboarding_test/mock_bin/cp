@@ -1,0 +1,14 @@
+#!/bin/bash
+# Mock cp command that doesn't fail on monitoring templates
+
+# If copying monitoring templates that don't exist, just skip
+if [[ "$*" == *"monitoring"* && "$*" == *"*"* ]]; then
+    # Create minimal monitoring files instead
+    mkdir -p "$3"
+    echo "# Mock Prometheus config" > "$3/prometheus.yml"
+    echo "# Mock Grafana dashboard" > "$3/grafana-dashboard-federation.json"
+    exit 0
+fi
+
+# Otherwise, call the real cp command
+/bin/cp "$@"

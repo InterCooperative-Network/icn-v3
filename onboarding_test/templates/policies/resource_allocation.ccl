@@ -1,0 +1,104 @@
+# Resource Allocation Policy Template
+# ---------------------------------
+# This policy template governs the allocation of community resources
+
+proposal "Resource Allocation Policy" {
+  # Define the scope of this policy
+  scope "community/${COMMUNITY_ID}/resources"
+  
+  # Define the allocation of community resources by percentage
+  allocate {
+    # Education allocation (schools, scholarships, training)
+    service "education" {
+      percentage ${EDUCATION_PCT}  # Default: 30
+      category "public_service"
+      
+      # Specific program allocations within education
+      program "schools" { 
+        percentage 50
+      }
+      program "scholarships" {
+        percentage 30
+      }
+      program "training" {
+        percentage 20
+      }
+    }
+    
+    # Healthcare allocation (clinics, medicine, emergency)
+    service "healthcare" {
+      percentage ${HEALTHCARE_PCT}  # Default: 40
+      category "public_service"
+      
+      # Specific program allocations within healthcare
+      program "clinics" {
+        percentage 40
+      }
+      program "medicine" {
+        percentage 30
+      }
+      program "emergency" {
+        percentage 30
+      }
+    }
+    
+    # Infrastructure allocation (roads, utilities, maintenance)
+    service "infrastructure" {
+      percentage ${INFRASTRUCTURE_PCT}  # Default: 30
+      category "public_service"
+      
+      # Specific program allocations within infrastructure
+      program "roads" {
+        percentage 40
+      }
+      program "utilities" {
+        percentage 40
+      }
+      program "maintenance" {
+        percentage 20
+      }
+    }
+  }
+  
+  # Rules for changing allocations
+  rules {
+    # Ensure percentages always add up to 100%
+    rule "total_percentage" {
+      condition "sum(allocation.*.percentage) == 100"
+      error "Total percentage must equal 100%"
+    }
+    
+    # Minimum allocations per service
+    rule "minimum_education" {
+      condition "allocation.education.percentage >= 20"
+      error "Education allocation cannot be less than 20%"
+    }
+    
+    rule "minimum_healthcare" {
+      condition "allocation.healthcare.percentage >= 30"
+      error "Healthcare allocation cannot be less than 30%"
+    }
+    
+    rule "minimum_infrastructure" {
+      condition "allocation.infrastructure.percentage >= 20" 
+      error "Infrastructure allocation cannot be less than 20%"
+    }
+  }
+  
+  # Access control for modifying this policy
+  access_control {
+    # Only community officials can modify resource allocations
+    role "community_official" {
+      permission "modify_allocation" {
+        grant true
+      }
+    }
+    
+    # Read-only access for all cooperative members
+    role "cooperative_member" {
+      permission "view_allocation" {
+        grant true
+      }
+    }
+  }
+} 

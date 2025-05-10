@@ -1,0 +1,91 @@
+# Community Configuration Template
+# -----------------------------
+# This template provides the necessary configuration for an ICN v3 Community.
+# Communities are governance and public-service bodies, responsible for policy-making,
+# dispute resolution, and public goods.
+
+community:
+  # Basic Community Information
+  id: "comm-test-community"  # Required: Unique identifier for this community
+  name: "Test Community"  # Required: Human-readable community name
+  description: "A test community for testing"  # Optional: Community description
+  
+  # Cooperative Membership
+  cooperative:
+    id: "coop-test-cooperative"  # Required: Cooperative this community belongs to
+  
+  # Federation Reference (derived from cooperative)
+  federation:
+    id: "fed-test-federation"
+    
+  # Community Governance Parameters
+  governance:
+    quorum_type: "MAJORITY"  # Options: MAJORITY, THRESHOLD, WEIGHTED
+    threshold: 3  # Only used when quorum_type is THRESHOLD
+    weights: {}  # Only used when quorum_type is WEIGHTED
+    voting_period_seconds: 86400  # Default: 1 day (24 hours)
+    
+    # Default policies for the community
+    policies:
+      # Policy seed templates to be deployed on community bootstrap
+      seeds:
+        - name: "resource_allocation_policy"
+          path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/policies/resource_allocation.ccl"
+        - name: "dispute_resolution_policy"
+          path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/policies/dispute_resolution.ccl"
+        - name: "membership_policy"
+          path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/policies/membership.ccl"
+      
+      # Policy validation rules
+      validation:
+        require_quorum: true
+        require_community_official: true
+    
+  # Community Administration
+  admins:
+    # List of DIDs authorized as community officials
+    official_dids:
+      - "did:key:did:icn:mock:fedadmin5281"
+      - "did:key:did:icn:mock:fedadmin467"
+      - "did:key:did:icn:mock:fedadmin23770"
+  
+  # Public Services Configuration
+  services:
+    # List of public services offered by this community
+    enabled:
+      - name: "education"
+        config_path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/services/education.yaml"
+      - name: "healthcare"
+        config_path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/services/healthcare.yaml"
+      - name: "infrastructure"
+        config_path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/services/infrastructure.yaml"
+    
+    # Service authorization parameters
+    authorization:
+      required_roles: ["community_official"]
+      permit_cooperative_operators: true
+  
+  # Resource Allocation
+  resources:
+    token_allocation:
+      education_pct: 30
+      healthcare_pct: 40
+      infrastructure_pct: 30
+    
+    # Maximum resource limits
+    max_policy_size_bytes: 1048576  # 1MB
+    max_proposals_per_day: 100
+    
+  # Community Storage Configuration
+  storage:
+    data_path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community"
+    policy_store:
+      type: "filesystem"  # Options: filesystem, rocksdb, postgres
+      path: "/home/matt/dev/icn-v3/onboarding_test/data/community/test-community/policies"
+      
+  # Community Monitoring Configuration
+  monitoring:
+    metrics_prefix: "comm_test-community"
+    logging:
+      level: "info"  # Options: debug, info, warn, error
+      file_path: "/home/matt/dev/icn-v3/onboarding_test/logs/community_test-community.log" 

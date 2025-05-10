@@ -1,0 +1,45 @@
+# Token Issuance Policy
+proposal "Token Issuance Policy" {
+  scope "cooperative/test-cooperative/economic/token"
+  
+  token_policy "issuance" {
+    symbol "TCOOP"
+    name "Test Cooperative Token"
+    decimals 6
+    
+    minting {
+      requires_quorum true
+      
+      authorized_minters [
+        "did:icn:mock:fedadmin30125"
+,
+        "did:icn:mock:fedadmin5664"
+,
+        "did:icn:mock:fedadmin21810"
+      ]
+      
+      limits {
+        max_per_transaction 1000000
+        max_per_day 10000000
+      }
+    }
+    
+    transfers {
+      permit_external true
+      requires_approval false
+      
+      limits {
+        max_per_transaction 1000000
+        max_per_day 5000000
+      }
+    }
+  }
+  
+  access_control {
+    role "coop_operator" {
+      permission "modify_policy" {
+        grant true
+      }
+    }
+  }
+}

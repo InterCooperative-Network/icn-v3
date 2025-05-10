@@ -1,0 +1,96 @@
+# Federation Configuration Template
+# -------------------------------
+# This template provides the necessary configuration for an ICN v3 Federation.
+# Replace placeholders with actual values before deploying.
+
+federation:
+  # Basic Federation Information
+  id: "fed-test-federation"  # Required: Unique identifier for this federation
+  name: "Test Federation"  # Required: Human-readable federation name
+  description: "A test federation for ICN v3 testing"  # Optional: Federation description
+  
+  # Federation Governance Parameters
+  governance:
+    quorum_type: "MAJORITY"  # Options: MAJORITY, THRESHOLD, WEIGHTED
+    threshold: 3  # Only used when quorum_type is THRESHOLD
+    weights: {}  # Only used when quorum_type is WEIGHTED, format: {"did:key:z123": 3, "did:key:z456": 2}
+    voting_period_seconds: 86400  # Default: 1 day (24 hours)
+    
+  # Federation Trust Configuration
+  trust:
+    # List of DIDs authorized as federation administrators
+    admin_dids:
+      - "did:key:did:icn:mock:fedadmin1047"
+      - "did:key:did:icn:mock:fedadmin25982"
+      - "did:key:did:icn:mock:fedadmin13222"
+    
+    # Token issuance parameters
+    token:
+      default_expiry_seconds: 86400  # Default token lifetime (24 hours)
+      max_expiry_seconds: 604800  # Maximum token lifetime (7 days)
+    
+    # Trust anchoring configuration
+    anchoring:
+      dag_store_path: "/home/matt/dev/icn-v3/onboarding_test/data/federation/test-federation/dag_store"
+      trust_bundle_renewal_hours: 168  # Renew trust bundle weekly
+  
+  # Federation API and Network Configuration
+  network:
+    listen_address: "0.0.0.0"
+    listen_port: 9000
+    public_endpoint: "https://${FEDERATION_DOMAIN}"
+    tls:
+      enabled: true
+      cert_path: "${TLS_CERT_PATH}"
+      key_path: "${TLS_KEY_PATH}"
+    
+    # Cross-federation communication
+    peer_federations:
+      - id: "fed-${PEER_FEDERATION_ID}"
+        endpoint: "https://${PEER_FEDERATION_DOMAIN}"
+        trust_bundle_cid: "${PEER_TRUST_BUNDLE_CID}"  # Get from peer federation's bootstrap output
+  
+  # Federation Storage Configuration
+  storage:
+    dag_store:
+      path: "/home/matt/dev/icn-v3/onboarding_test/data/federation/test-federation/dag_store"
+      max_size_gb: 50
+    
+    state_db:
+      engine: "rocksdb"  # Options: rocksdb, sqlite, postgres
+      path: "/home/matt/dev/icn-v3/onboarding_test/data/federation/test-federation/state_db"
+      
+      # Only used when engine is postgres
+      postgres:
+        host: "${POSTGRES_HOST}"
+        port: 5432
+        user: "${POSTGRES_USER}"
+        password: "${POSTGRES_PASSWORD}"
+        database: "${POSTGRES_DATABASE}"
+  
+  # Federation Monitoring Configuration
+  monitoring:
+    metrics:
+      enabled: true
+      listen_address: "0.0.0.0"
+      listen_port: 9090
+    
+    logging:
+      level: "info"  # Options: debug, info, warn, error
+      format: "json"  # Options: json, text
+      file_path: "/home/matt/dev/icn-v3/onboarding_test/logs/federation.log"
+      max_size_mb: 100
+      max_backups: 5
+      max_age_days: 30
+      
+  # Federation Resource Limits
+  resources:
+    max_cooperatives: 100
+    max_communities_per_cooperative: 50
+    max_proposal_size_bytes: 1048576  # 1MB
+    max_execution_fuel: 10000000
+    
+  # Default Cooperative/Community Templates
+  templates:
+    cooperative: "/home/matt/dev/icn-v3/onboarding_test/data/federation/test-federation/templates/cooperative_template.yaml"
+    community: "/home/matt/dev/icn-v3/onboarding_test/data/federation/test-federation/templates/community_template.yaml" 

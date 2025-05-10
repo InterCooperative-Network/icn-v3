@@ -1,0 +1,29 @@
+# Infrastructure Service Configuration
+service:
+  name: infrastructure
+  description: "Infrastructure services for the community"
+  allocation_percentage: 30
+  
+  programs:
+    - name: roads
+      description: "Community road network and transportation infrastructure"
+      allocation_percentage: 40
+      token_budget: 0  # Will be filled during runtime based on total allocation
+      
+    - name: utilities
+      description: "Utilities including water, power, and communications"
+      allocation_percentage: 40
+      token_budget: 0  # Will be filled during runtime based on total allocation
+      
+    - name: maintenance
+      description: "Maintenance of community facilities"
+      allocation_percentage: 20
+      token_budget: 0  # Will be filled during runtime based on total allocation
+      
+  access_control:
+    administrators:
+      - did:icn:mock:fedadmin5281
+      - did:icn:mock:fedadmin467
+      - did:icn:mock:fedadmin23770
+    
+    beneficiaries: []  # Will be populated based on membership policy
