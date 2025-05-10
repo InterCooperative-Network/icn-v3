@@ -1,0 +1,84 @@
+# Cooperative Configuration Template
+# ---------------------------------
+# This template provides the necessary configuration for an ICN v3 Cooperative.
+# Cooperatives are economic engines within the ICN, managing production, trade, 
+# and token issuance.
+
+cooperative:
+  # Basic Cooperative Information
+  id: "coop-${COOPERATIVE_ID}"  # Required: Unique identifier for this cooperative
+  name: "${COOPERATIVE_NAME}"  # Required: Human-readable cooperative name
+  description: "${COOPERATIVE_DESCRIPTION}"  # Optional: Cooperative description
+  
+  # Federation Membership
+  federation:
+    id: "fed-${FEDERATION_ID}"  # Required: Federation this cooperative belongs to
+    
+  # Cooperative Governance Parameters
+  governance:
+    quorum_type: "MAJORITY"  # Options: MAJORITY, THRESHOLD, WEIGHTED
+    threshold: 3  # Only used when quorum_type is THRESHOLD
+    weights: {}  # Only used when quorum_type is WEIGHTED
+    voting_period_seconds: 86400  # Default: 1 day (24 hours)
+    
+  # Cooperative Administration
+  admins:
+    # List of DIDs authorized as cooperative operators
+    operator_dids:
+      - "did:key:${OPERATOR1_DID}"
+      - "did:key:${OPERATOR2_DID}"
+      - "did:key:${OPERATOR3_DID}"
+  
+  # Cooperative Economic Parameters
+  economic:
+    # Token configuration
+    token:
+      symbol: "${TOKEN_SYMBOL}"
+      name: "${TOKEN_NAME}"
+      decimals: 6
+      initial_supply: 1000000  # Initial token supply (if applicable)
+      transferable: true
+      
+    # Minting policy
+    minting:
+      authorized_minters:
+        - "did:key:${MINTER1_DID}"
+        - "did:key:${MINTER2_DID}"
+      max_mint_per_tx: 1000000
+      requires_quorum: true  # Whether minting requires quorum approval
+    
+    # Transfer policy
+    transfers:
+      permit_external: true  # Allow transfers to other cooperatives
+      external_federations:  # List of federations where transfers are allowed
+        - "fed-${EXTERNAL_FEDERATION_ID}"
+  
+  # Cooperative Storage Configuration
+  storage:
+    data_path: "${DATA_DIR}/cooperative/${COOPERATIVE_ID}"
+    token_ledger:
+      type: "inmemory"  # Options: inmemory, rocksdb, postgres
+      # Only used when type is postgres
+      postgres:
+        host: "${POSTGRES_HOST}"
+        port: 5432
+        user: "${POSTGRES_USER}"
+        password: "${POSTGRES_PASSWORD}"
+        database: "${POSTGRES_DATABASE}"
+        table_prefix: "coop_${COOPERATIVE_ID}_"
+  
+  # Cooperative Monitoring Configuration
+  monitoring:
+    metrics_prefix: "coop_${COOPERATIVE_ID}"
+    logging:
+      level: "info"  # Options: debug, info, warn, error
+      file_path: "${LOG_DIR}/cooperative_${COOPERATIVE_ID}.log"
+      
+  # Resource Limits
+  resources:
+    max_communities: 50
+    max_token_transactions_per_day: 100000
+    
+  # Default Community Template
+  templates:
+    community: "${DATA_DIR}/cooperative/${COOPERATIVE_ID}/templates/community_template.yaml" 
