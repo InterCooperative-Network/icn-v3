@@ -111,10 +111,13 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    // A fixed UUID for reproducible tests
+    const TEST_UUID: &str = "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8";
+
     #[test]
     fn roundtrip_proposal() {
         let p = Proposal {
-            id: Uuid::new_v4(),
+            id: Uuid::parse_str(TEST_UUID).unwrap(), // Use fixed UUID
             title: "Test".into(),
             body: "hello".into(),
             author: "did:key:z6M...".into(),

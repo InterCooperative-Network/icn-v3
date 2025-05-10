@@ -1,6 +1,5 @@
 ---
 source: crates/ccl/icn-ccl-parser/tests/parser_test.rs
-assertion_line: 51
 expression: pairs_debug_string
 ---
 [
