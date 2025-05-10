@@ -6,14 +6,42 @@ use serde_cbor;
 use std::collections::HashMap;
 
 use wasm_encoder::{
-    CodeSection, EntityType, Function, FunctionSection, ImportSection, Instruction, Module,
+    CodeSection, DataSection, EntityType, Function, FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module,
     TypeSection, ValType,
 };
+
+pub const JOB_ID_BUFFER_SIZE: u32 = 128;
+pub const JOB_ID_BUFFER_OFFSET: u32 = 0; // Start data segments at offset 0
 
 pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     let mut module = Module::new();
     let mut code = CodeSection::new();
     let mut functions_section = FunctionSection::new();
+    let mut type_section = TypeSection::new();
+    let mut import_section = ImportSection::new();
+    let mut memory_section = MemorySection::new();
+    let mut data_section = DataSection::new();
+
+    // Initialize next_data_offset. It will be updated if SubmitJob adds more data.
+    let mut next_data_offset = JOB_ID_BUFFER_OFFSET + JOB_ID_BUFFER_SIZE;
+
+    // Define memory (memory 0)
+    // Initial size of 1 page (64KiB) should be enough for now.
+    memory_section.memory(MemoryType {
+        minimum: 1, // 1 page = 64KiB
+        maximum: None,
+        memory64: false,
+        shared: false,
+    });
+
+    // Define Data Segment for JobId output buffer
+    // This buffer will be written to by the host.
+    let job_id_buffer_data = vec![0u8; JOB_ID_BUFFER_SIZE as usize];
+    data_section.active(
+        0, // Memory index 0
+        &Instruction::I32Const(JOB_ID_BUFFER_OFFSET as i32),
+        job_id_buffer_data.into_iter(),
+    );
 
     // one wasm function per opcode (MVP-style demo)
     for op in prog.ops.iter() {
@@ -147,24 +175,41 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 // 1. Construct MeshJobParams
                 let mut resources_required_vec: Vec<(ResourceType, u64)> = Vec::new();
                 if let Some(json_str) = required_resources_json {
-                    if let Ok(parsed_resources) = serde_json::from_str::<HashMap<String, u64>>(json_str) {
-                        for (key, value) in parsed_resources {
-                            let res_type = match key.to_lowercase().as_str() {
-                                "cpu" => ResourceType::Cpu,
-                                "memory" => ResourceType::Memory,
-                                "io" => ResourceType::Io,
-                                "token" => ResourceType::Token,
-                                _ => continue, // Or handle as error
-                            };
-                            resources_required_vec.push((res_type, value));
+                    match serde_json::from_str::<HashMap<String, u64>>(json_str) {
+                        Ok(parsed_resources) => {
+                            for (key, value) in parsed_resources {
+                                let res_type = match key.to_lowercase().as_str() {
+                                    "cpu" | "compute" => ResourceType::Cpu,
+                                    "memory" => ResourceType::Memory,
+                                    "io" => ResourceType::Io,
+                                    "token" => ResourceType::Token,
+                                    _ => {
+                                        // eprintln!("Warning: Unrecognized resource type '{}' in SubmitJob. Skipping.", key);
+                                        // TODO: Consider emitting a trap or error log for unrecognized resource types
+                                        continue;
+                                    }
+                                };
+                                resources_required_vec.push((res_type, value));
+                            }
+                        }
+                        Err(_e) => {
+                            // eprintln!("Warning: Failed to parse required_resources_json: {:?}. Error: {}. Using empty resources.", json_str, _e);
+                            // TODO: Emit trap or error handling WASM for JSON parsing errors
                         }
                     }
-                    // TODO: Handle parsing error robustly (e.g., emit trap or error code)
                 }
 
-                let qos_profile_val = qos_profile_json.as_ref()
-                    .and_then(|json_str| serde_json::from_str::<QoSProfile>(json_str).ok())
-                    .unwrap_or(QoSProfile::BestEffort); // Default QoS
+                let qos_profile_val = match qos_profile_json.as_ref() {
+                    Some(json_str) => match serde_json::from_str::<QoSProfile>(json_str) {
+                        Ok(profile) => profile,
+                        Err(_e) => {
+                            // eprintln!("Warning: Failed to parse qos_profile_json: {:?}. Error: {}. Defaulting to BestEffort.", json_str, _e);
+                            // TODO: Emit trap or error handling WASM for JSON parsing errors
+                            QoSProfile::BestEffort // Default on parsing error
+                        }
+                    },
+                    None => QoSProfile::BestEffort, // Default if not provided
+                };
 
                 let params = MeshJobParams {
                     wasm_cid: wasm_cid.clone(),
@@ -176,29 +221,44 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 };
 
                 // 2. Serialize MeshJobParams to CBOR
-                // This CBOR data needs to be placed in WASM memory.
-                // For now, this step is conceptual. Actual WASM instructions depend on memory strategy.
-                let params_cbor = serde_cbor::to_vec(&params).unwrap_or_default();
-                // TODO: Error handling for serialization
-
-                // 3. Emit WASM instructions (Conceptual - assumes pointers are available)
-                //    Actual implementation requires defining data segments or using globals for pointers.
+                let params_cbor = match serde_cbor::to_vec(&params) {
+                    Ok(cbor) => cbor,
+                    Err(_e) => {
+                        // eprintln!("Critical Error: Failed to serialize MeshJobParams to CBOR: {}. Emitting empty CBOR.", _e);
+                        // TODO: Emit trap or error handling WASM. This is a more critical error.
+                        // For now, an empty CBOR vector will likely cause host-side errors or be rejected.
+                        Vec::new() 
+                    }
+                };
                 
-                // TODO: Get pointer and length for params_cbor (e.g., from a data segment)
-                let params_cbor_ptr_val = 0; // Placeholder
-                let params_cbor_len_val = params_cbor.len() as i32; // Placeholder
+                // 3. Add CBOR Payload as a Data Segment & Update next_data_offset
+                //    The params_cbor_ptr_val is the *current* next_data_offset *before* adding this segment.
+                let params_cbor_ptr_val = next_data_offset; 
+                let params_cbor_len_val = params_cbor.len() as i32;
 
-                // TODO: Get pointer and length for JobId output buffer (e.g., from a data segment or global)
-                let job_id_buffer_ptr_val = 0; // Placeholder, e.g., address of a global buffer
-                const JOB_ID_BUFFER_LEN: i32 = 128; // Placeholder
+                if params_cbor_len_val > 0 { // Only add data segment if CBOR is not empty
+                    data_section.active(
+                        0, // Memory index 0
+                        &Instruction::I32Const(params_cbor_ptr_val as i32), // Offset for this segment
+                        params_cbor.into_iter(), // The CBOR bytes
+                    );
+                    next_data_offset += params_cbor_len_val as u32; // Update offset for the next data segment
+                }
+                // If params_cbor_len_val is 0 (e.g., due to serialization error), we'll pass ptr=next_data_offset and len=0.
+                // The host will need to handle this (likely as an error).
+
+                // 4. Prepare JobId Output Buffer Parameters
+                let job_id_buffer_ptr_val = JOB_ID_BUFFER_OFFSET as i32;
+                let job_id_buffer_len_val = JOB_ID_BUFFER_SIZE as i32; 
                 
-                f.instruction(&Instruction::I32Const(params_cbor_ptr_val));
+                // 5. Emit WASM instructions to call host_submit_mesh_job
+                f.instruction(&Instruction::I32Const(params_cbor_ptr_val as i32));
                 f.instruction(&Instruction::I32Const(params_cbor_len_val));
                 f.instruction(&Instruction::I32Const(job_id_buffer_ptr_val));
-                f.instruction(&Instruction::I32Const(JOB_ID_BUFFER_LEN));
+                f.instruction(&Instruction::I32Const(job_id_buffer_len_val));
                 f.instruction(&Instruction::Call(16)); // host_submit_mesh_job
                 
-                // TODO: Handle the i32 result from host_submit_mesh_job (bytes written or error)
+                // TODO: Handle the i32 result from host_submit_mesh_job (bytes written or error code)
                 // For example, store it in a local, check if negative (error), etc.
                 f.instruction(&Instruction::Drop); // Drop the result for now
             }
@@ -208,7 +268,6 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     }
 
     // Types: Define types for all imported host functions
-    let mut type_section = TypeSection::new();
     type_section.function(vec![ValType::I32, ValType::I32], vec![]); // 0: begin_section(kind: ptr, title: ptr)
     type_section.function(vec![], vec![]); // 1: end_section()
     type_section.function(vec![ValType::I32, ValType::I32], vec![]); // 2: create_proposal(title: ptr, version: ptr)
@@ -232,7 +291,6 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     type_section.function(vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32], vec![ValType::I32]); 
 
     // Imports: Define all imported host functions
-    let mut import_section = ImportSection::new();
     let host_fns = [
         ("begin_section", 0u32),
         ("end_section", 1u32),
@@ -259,6 +317,8 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     module.section(&type_section);
     module.section(&import_section);
     module.section(&functions_section); // Declares type signatures for functions in the code section
+    module.section(&memory_section); // Add memory section
+    module.section(&data_section); // Add data section
     module.section(&code); // Actual function bodies
 
     module.finish()
