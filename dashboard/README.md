@@ -9,6 +9,7 @@ A modern, responsive dashboard for monitoring and managing the ICN (Inter-Crania
 - **Receipt Explorer**: Search and browse execution receipts anchored in the DAG
 - **Token Ledger**: Track token balances and economics metrics
 - **Visual Analytics**: Interactive charts for receipt and token statistics
+- **Detail Drill-Down**: Click on chart elements to explore filtered data views
 - **Governance Interface**: View and vote on governance proposals (coming soon)
 
 ## Tech Stack
@@ -63,6 +64,18 @@ NEXT_PUBLIC_API_URL=http://localhost:8080
 By default, the dashboard connects to an ICN runtime at `http://localhost:8080`. You can change this by setting the `NEXT_PUBLIC_API_URL` environment variable.
 
 If the API is not available, the dashboard will fall back to mock data for demonstration purposes.
+
+## Interactive Features
+
+The dashboard includes interactive charts that allow operators to drill down into specific data:
+
+- **Receipt Charts**: 
+  - Click on a date point to view all receipts from that day
+  - Click on an executor bar to view all receipts from that executor
+
+- **Token Charts**:
+  - Click on a date in the supply history to view token activity for that day
+  - Click on a segment in the distribution pie chart to view details for that account
 
 ## Development
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { 
   LineChart, 
   Line, 
@@ -26,6 +27,7 @@ const processReceiptsForChart = (receipts: ExecutionReceipt[]) => {
   // Calculate resource usage by executor
   const executorStats: Record<string, { 
     executor: string, 
+    executorDid: string,
     CPU: number, 
     Memory: number, 
     Storage: number,
@@ -50,6 +52,7 @@ const processReceiptsForChart = (receipts: ExecutionReceipt[]) => {
     if (!executorStats[executor]) {
       executorStats[executor] = {
         executor: executor.slice(executor.length - 10),
+        executorDid: executor,
         CPU: 0,
         Memory: 0,
         Storage: 0,
@@ -91,6 +94,7 @@ const processReceiptsForChart = (receipts: ExecutionReceipt[]) => {
 };
 
 export function ReceiptCharts() {
+  const router = useRouter();
   const [receiptData, setReceiptData] = useState<{
     executorData: any[];
     timeSeriesData: any[];
@@ -120,6 +124,21 @@ export function ReceiptCharts() {
     fetchData();
   }, []);
 
+  // Handle clicks on chart data points
+  const handleDateClick = (data: any) => {
+    if (data && data.date) {
+      // Navigate to receipts page with date filter
+      router.push(`/receipts?date=${data.date}`);
+    }
+  };
+
+  const handleExecutorClick = (data: any) => {
+    if (data && data.executorDid) {
+      // Navigate to receipts page with executor filter
+      router.push(`/receipts?executor=${data.executorDid}`);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -136,28 +155,32 @@ export function ReceiptCharts() {
           <div className="space-y-8">
             <div>
               <h3 className="text-lg font-medium mb-2">Daily Receipt Volume</h3>
+              <p className="text-sm text-slate-500 mb-2">Click on a data point to see receipts for that date</p>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
                     data={receiptData.timeSeriesData}
                     margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                    onClick={(e) => e && e.activePayload && handleDateClick(e.activePayload[0].payload)}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="date" />
                     <YAxis />
-                    <Tooltip />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                     <Legend />
                     <Line 
                       type="monotone" 
                       dataKey="count" 
                       stroke="#8884d8" 
                       name="Receipts"
+                      activeDot={{ r: 8, onClick: (e, payload) => handleDateClick(payload.payload) }}
                     />
                     <Line 
                       type="monotone" 
                       dataKey="totalCPU" 
                       stroke="#82ca9d" 
                       name="CPU Usage" 
+                      activeDot={{ r: 8, onClick: (e, payload) => handleDateClick(payload.payload) }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -166,16 +189,18 @@ export function ReceiptCharts() {
             
             <div>
               <h3 className="text-lg font-medium mb-2">Resource Usage by Executor</h3>
+              <p className="text-sm text-slate-500 mb-2">Click on a bar to see receipts for that executor</p>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
                     data={receiptData.executorData}
                     margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                    onClick={(e) => e && e.activePayload && handleExecutorClick(e.activePayload[0].payload)}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="executor" />
                     <YAxis />
-                    <Tooltip />
+                    <Tooltip cursor={{ fill: 'rgba(0, 0, 0, 0.1)' }} />
                     <Legend />
                     <Bar dataKey="CPU" fill="#8884d8" name="CPU" />
                     <Bar dataKey="Memory" fill="#82ca9d" name="Memory" />

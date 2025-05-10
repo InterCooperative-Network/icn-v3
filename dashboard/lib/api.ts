@@ -53,6 +53,22 @@ export interface Token {
   balance: number;
 }
 
+export interface TokenTransaction {
+  id: string;
+  from_did: string;
+  to_did: string;
+  amount: number;
+  operation: "mint" | "burn" | "transfer";
+  timestamp: string;
+}
+
+export interface TokenStats {
+  total_minted: number;
+  total_burnt: number;
+  active_accounts: number;
+  daily_volume?: number;
+}
+
 export interface GovernanceProposal {
   id: string;
   title: string;
@@ -62,6 +78,21 @@ export interface GovernanceProposal {
   votes_against: number;
   created_at: string;
   expires_at: string;
+}
+
+// Filter types
+export interface ReceiptFilter {
+  date?: string;
+  executor?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TokenFilter {
+  date?: string;
+  account?: string;
+  limit?: number;
+  offset?: number;
 }
 
 // API services
@@ -78,8 +109,25 @@ export const ICNApi = {
     return data;
   },
 
+  async getFilteredReceipts(filter: ReceiptFilter): Promise<ExecutionReceipt[]> {
+    const params = new URLSearchParams();
+    
+    if (filter.date) params.append('date', filter.date);
+    if (filter.executor) params.append('executor', filter.executor);
+    if (filter.limit) params.append('limit', filter.limit.toString());
+    if (filter.offset) params.append('offset', filter.offset.toString());
+    
+    const { data } = await apiClient.get(`/api/v1/receipts?${params.toString()}`);
+    return data;
+  },
+
   async getReceiptsByExecutor(executorDid: string): Promise<ExecutionReceipt[]> {
     const { data } = await apiClient.get(`/api/v1/receipts/by-executor/${executorDid}`);
+    return data;
+  },
+
+  async getReceiptsByDate(date: string): Promise<ExecutionReceipt[]> {
+    const { data } = await apiClient.get(`/api/v1/receipts/by-date/${date}`);
     return data;
   },
 
@@ -92,18 +140,53 @@ export const ICNApi = {
     }
   },
 
-  // Token ledger
-  async getTokenBalances(): Promise<Token[]> {
-    const { data } = await apiClient.get("/api/v1/tokens/balances");
+  // Receipt statistics
+  async getReceiptStats(filter?: ReceiptFilter): Promise<{
+    total_receipts: number;
+    avg_cpu_usage: number;
+    avg_memory_usage: number;
+    avg_storage_usage: number;
+    receipts_by_executor: Record<string, number>;
+  }> {
+    const params = new URLSearchParams();
+    
+    if (filter?.date) params.append('date', filter.date);
+    if (filter?.executor) params.append('executor', filter.executor);
+    
+    const { data } = await apiClient.get(`/api/v1/receipts/stats?${params.toString()}`);
     return data;
   },
 
-  async getTokenStats(): Promise<{
-    total_minted: number;
-    total_burnt: number;
-    active_accounts: number;
-  }> {
-    const { data } = await apiClient.get("/api/v1/tokens/stats");
+  // Token ledger
+  async getTokenBalances(filter?: TokenFilter): Promise<Token[]> {
+    const params = new URLSearchParams();
+    
+    if (filter?.account) params.append('account', filter.account);
+    if (filter?.limit) params.append('limit', filter.limit.toString());
+    if (filter?.offset) params.append('offset', filter.offset.toString());
+    
+    const { data } = await apiClient.get(`/api/v1/tokens/balances?${params.toString()}`);
+    return data;
+  },
+
+  async getTokenTransactions(filter?: TokenFilter): Promise<TokenTransaction[]> {
+    const params = new URLSearchParams();
+    
+    if (filter?.date) params.append('date', filter.date);
+    if (filter?.account) params.append('account', filter.account);
+    if (filter?.limit) params.append('limit', filter.limit.toString());
+    if (filter?.offset) params.append('offset', filter.offset.toString());
+    
+    const { data } = await apiClient.get(`/api/v1/tokens/transactions?${params.toString()}`);
+    return data;
+  },
+
+  async getTokenStats(filter?: TokenFilter): Promise<TokenStats> {
+    const params = new URLSearchParams();
+    
+    if (filter?.date) params.append('date', filter.date);
+    
+    const { data } = await apiClient.get(`/api/v1/tokens/stats?${params.toString()}`);
     return data;
   },
 
@@ -187,6 +270,86 @@ export const getMockData = {
     return receipts;
   },
 
+  filteredReceipts(filter: ReceiptFilter): ExecutionReceipt[] {
+    const allReceipts = this.latestReceipts();
+    
+    // Create 50 receipts spanning the last 30 days for more varied data
+    for (let i = 10; i < 50; i++) {
+      const daysAgo = Math.floor(Math.random() * 30);
+      allReceipts.push({
+        task_cid: `bafybeideputvakentvavfc${i}`,
+        executor: `did:icn:node${i % 3 + 1}`,
+        resource_usage: {
+          CPU: Math.floor(Math.random() * 1000) + 100,
+          Memory: Math.floor(Math.random() * 2048) + 256,
+          Storage: Math.floor(Math.random() * 10000) + 1000,
+        },
+        timestamp: new Date(Date.now() - daysAgo * 86400000).toISOString(),
+        signature: "0x1234567890abcdef",
+      });
+    }
+    
+    let filtered = [...allReceipts];
+    
+    // Apply date filter
+    if (filter.date) {
+      filtered = filtered.filter(receipt => {
+        const receiptDate = new Date(receipt.timestamp).toISOString().split('T')[0];
+        return receiptDate === filter.date;
+      });
+    }
+    
+    // Apply executor filter
+    if (filter.executor) {
+      filtered = filtered.filter(receipt => 
+        receipt.executor === filter.executor
+      );
+    }
+    
+    // Apply limit
+    if (filter.limit) {
+      filtered = filtered.slice(0, filter.limit);
+    }
+    
+    return filtered;
+  },
+  
+  receiptStats(filter?: ReceiptFilter): {
+    total_receipts: number;
+    avg_cpu_usage: number;
+    avg_memory_usage: number;
+    avg_storage_usage: number;
+    receipts_by_executor: Record<string, number>;
+  } {
+    // Get receipts based on filter
+    const receipts = filter ? this.filteredReceipts(filter) : this.latestReceipts();
+    
+    // Calculate stats
+    let totalCpu = 0;
+    let totalMemory = 0;
+    let totalStorage = 0;
+    const executorCounts: Record<string, number> = {};
+    
+    receipts.forEach(receipt => {
+      totalCpu += receipt.resource_usage.CPU || 0;
+      totalMemory += receipt.resource_usage.Memory || 0;
+      totalStorage += receipt.resource_usage.Storage || 0;
+      
+      if (!executorCounts[receipt.executor]) {
+        executorCounts[receipt.executor] = 0;
+      }
+      executorCounts[receipt.executor] += 1;
+    });
+    
+    return {
+      total_receipts: receipts.length,
+      avg_cpu_usage: receipts.length ? Math.round(totalCpu / receipts.length) : 0,
+      avg_memory_usage: receipts.length ? Math.round(totalMemory / receipts.length) : 0,
+      avg_storage_usage: receipts.length ? Math.round(totalStorage / receipts.length) : 0,
+      receipts_by_executor: executorCounts
+    };
+  },
+
   tokenBalances(): Token[] {
     return [
       { did: "did:icn:node1", balance: 15000 },
@@ -197,12 +360,99 @@ export const getMockData = {
     ];
   },
 
-  tokenStats() {
-    return {
+  tokenTransactions(filter?: TokenFilter): TokenTransaction[] {
+    const transactions = [];
+    const accounts = ["did:icn:node1", "did:icn:node2", "did:icn:node3", "did:icn:user1", "did:icn:user2"];
+    const operations = ["mint", "burn", "transfer"] as const;
+    
+    // Generate 30 days of transactions
+    for (let i = 0; i < 100; i++) {
+      const daysAgo = Math.floor(Math.random() * 30);
+      const operation = operations[Math.floor(Math.random() * operations.length)];
+      const fromAccount = accounts[Math.floor(Math.random() * accounts.length)];
+      let toAccount = accounts[Math.floor(Math.random() * accounts.length)];
+      
+      // Ensure from and to are different for transfers
+      while (operation === "transfer" && fromAccount === toAccount) {
+        toAccount = accounts[Math.floor(Math.random() * accounts.length)];
+      }
+      
+      transactions.push({
+        id: `tx-${i}`,
+        from_did: operation === "burn" ? fromAccount : operation === "mint" ? "did:icn:treasury" : fromAccount,
+        to_did: operation === "mint" ? toAccount : operation === "burn" ? "did:icn:treasury" : toAccount,
+        amount: Math.floor(Math.random() * 1000) + 100,
+        operation,
+        timestamp: new Date(Date.now() - daysAgo * 86400000).toISOString()
+      });
+    }
+    
+    let filtered = [...transactions];
+    
+    // Apply date filter
+    if (filter?.date) {
+      filtered = filtered.filter(tx => {
+        const txDate = new Date(tx.timestamp).toISOString().split('T')[0];
+        return txDate === filter.date;
+      });
+    }
+    
+    // Apply account filter
+    if (filter?.account) {
+      filtered = filtered.filter(tx => 
+        tx.from_did === filter.account || tx.to_did === filter.account
+      );
+    }
+    
+    // Apply limit
+    if (filter?.limit) {
+      filtered = filtered.slice(0, filter.limit);
+    }
+    
+    return filtered;
+  },
+
+  tokenStats(filter?: TokenFilter): TokenStats {
+    // Base stats
+    const baseStats = {
       total_minted: 60000,
       total_burnt: 5000,
       active_accounts: 5,
     };
+    
+    // If no filter, return base stats
+    if (!filter) {
+      return baseStats;
+    }
+    
+    // For date filter, calculate daily stats
+    if (filter.date) {
+      const transactions = this.tokenTransactions({ date: filter.date });
+      
+      let dailyMinted = 0;
+      let dailyBurnt = 0;
+      
+      transactions.forEach(tx => {
+        if (tx.operation === "mint") dailyMinted += tx.amount;
+        if (tx.operation === "burn") dailyBurnt += tx.amount;
+      });
+      
+      const activeAccounts = new Set();
+      transactions.forEach(tx => {
+        if (tx.from_did !== "did:icn:treasury") activeAccounts.add(tx.from_did);
+        if (tx.to_did !== "did:icn:treasury") activeAccounts.add(tx.to_did);
+      });
+      
+      return {
+        ...baseStats,
+        total_minted: baseStats.total_minted + dailyMinted,
+        total_burnt: baseStats.total_burnt + dailyBurnt,
+        active_accounts: activeAccounts.size,
+        daily_volume: transactions.reduce((sum, tx) => sum + tx.amount, 0)
+      };
+    }
+    
+    return baseStats;
   },
 
   governanceProposals(): GovernanceProposal[] {

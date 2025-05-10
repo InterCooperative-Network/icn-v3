@@ -1,39 +1,68 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import Layout from '../../components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import { ICNApi, getMockData, Token } from "../../lib/api";
-import { formatCID } from "../../lib/utils";
+import { ICNApi, getMockData, Token, TokenTransaction, TokenFilter } from "../../lib/api";
+import { formatCID, formatDate } from "../../lib/utils";
 import { TokenCharts } from '../../components/dashboard/token-charts';
 
 export default function TokensPage() {
+  const searchParams = useSearchParams();
+  const dateParam = searchParams.get('date');
+  const accountParam = searchParams.get('account');
+  
   const [tokens, setTokens] = useState<Token[]>([]);
+  const [transactions, setTransactions] = useState<TokenTransaction[]>([]);
   const [stats, setStats] = useState<{
     total_minted: number;
     total_burnt: number;
     active_accounts: number;
+    daily_volume?: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"table" | "chart">("table");
+  const [filterInfo, setFilterInfo] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Try to fetch token balances from API first
-        const tokenData = await ICNApi.getTokenBalances().catch(() => {
-          // If API call fails, use mock data
-          return getMockData.tokenBalances();
-        });
+        // Create filter object from URL parameters
+        const filter: TokenFilter = {};
+        if (dateParam) filter.date = dateParam;
+        if (accountParam) filter.account = accountParam;
         
-        // Try to fetch token stats from API first
-        const statsData = await ICNApi.getTokenStats().catch(() => {
-          // If API call fails, use mock data
-          return getMockData.tokenStats();
-        });
+        // Try to fetch token balances from API first
+        let tokenData;
+        let transactionData: TokenTransaction[] = [];
+        let statsData;
+        
+        try {
+          // Get balances
+          tokenData = await ICNApi.getTokenBalances(filter);
+          
+          // Get transactions if we have a date or account filter
+          if (dateParam || accountParam) {
+            transactionData = await ICNApi.getTokenTransactions(filter);
+          }
+          
+          // Get stats
+          statsData = await ICNApi.getTokenStats(filter);
+        } catch (err) {
+          // If API calls fail, use mock data
+          tokenData = getMockData.tokenBalances();
+          
+          if (dateParam || accountParam) {
+            transactionData = getMockData.tokenTransactions(filter);
+          }
+          
+          statsData = getMockData.tokenStats(filter);
+        }
         
         setTokens(tokenData);
+        setTransactions(transactionData);
         setStats(statsData);
       } catch (err) {
         setError("Failed to fetch token data");
@@ -44,7 +73,25 @@ export default function TokensPage() {
     };
 
     fetchData();
-  }, []);
+  }, [dateParam, accountParam]);
+
+  // Apply URL parameter filters
+  useEffect(() => {
+    if (dateParam) {
+      setFilterInfo(`Showing token activity on ${dateParam}`);
+    } else if (accountParam) {
+      setFilterInfo(`Showing details for account ${formatCID(accountParam)}`);
+    } else {
+      setFilterInfo(null);
+    }
+  }, [dateParam, accountParam]);
+
+  // Clear any active filters
+  const clearFilters = () => {
+    // This will trigger a page navigation without the query parameters
+    window.history.pushState({}, '', '/tokens');
+    setFilterInfo(null);
+  };
 
   return (
     <Layout>
@@ -53,6 +100,21 @@ export default function TokensPage() {
         <p className="text-slate-600">
           View token balances and economic metrics for the ICN network.
         </p>
+        
+        {/* Filter information */}
+        {filterInfo && (
+          <div className="bg-blue-50 border-l-4 border-blue-500 p-4 flex justify-between items-center">
+            <div>
+              <p className="text-blue-700">{filterInfo}</p>
+            </div>
+            <button 
+              onClick={clearFilters}
+              className="text-sm px-3 py-1 bg-white border border-blue-300 rounded-md hover:bg-blue-50 text-blue-600"
+            >
+              Clear Filter
+            </button>
+          </div>
+        )}
         
         {/* View toggle */}
         <div className="flex">
@@ -80,8 +142,38 @@ export default function TokensPage() {
           </div>
         </div>
         
-        {/* Token metrics */}
-        {stats && (
+        {/* Daily Stats - show when filtered by date */}
+        {stats && dateParam && stats.daily_volume !== undefined && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <h3 className="text-lg font-medium text-slate-700">Daily Volume</h3>
+                  <p className="text-3xl font-bold text-blue-600 mt-2">{stats.daily_volume}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <h3 className="text-lg font-medium text-slate-700">Active Accounts</h3>
+                  <p className="text-3xl font-bold text-green-600 mt-2">{stats.active_accounts}</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <h3 className="text-lg font-medium text-slate-700">Transactions</h3>
+                  <p className="text-3xl font-bold text-purple-600 mt-2">{transactions.length}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+        
+        {/* Token metrics - hide if filtered to a specific date or account */}
+        {stats && !dateParam && !accountParam && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
               <CardContent className="pt-6">
@@ -111,12 +203,16 @@ export default function TokensPage() {
         )}
         
         {/* Token chart or table view */}
-        {view === "chart" ? (
+        {view === "chart" && !accountParam ? (
           <TokenCharts />
         ) : (
           <Card>
             <CardHeader>
-              <CardTitle>Token Balances</CardTitle>
+              <CardTitle>
+                {accountParam ? `Account Details: ${formatCID(accountParam)}` : 
+                 dateParam ? `Token Activity on ${dateParam}` : 
+                 "Token Balances"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -127,10 +223,11 @@ export default function TokensPage() {
                 <div className="text-red-500">{error}</div>
               ) : tokens.length === 0 ? (
                 <div className="text-center py-8 text-slate-500">
-                  No token balances found.
+                  No token balances found matching your criteria.
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-6">
+                  {/* Balances table */}
                   <div className="overflow-x-auto">
                     <table className="w-full border-collapse">
                       <thead>
@@ -158,6 +255,55 @@ export default function TokensPage() {
                       </tbody>
                     </table>
                   </div>
+                  
+                  {/* Transaction history section */}
+                  {(dateParam || accountParam) && transactions.length > 0 && (
+                    <div className="mt-8">
+                      <h3 className="text-lg font-medium mb-4">
+                        {dateParam ? "Transactions on this date" : "Account Transactions"}
+                      </h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse">
+                          <thead>
+                            <tr className="bg-slate-100">
+                              <th className="px-4 py-2 text-left text-sm font-medium text-slate-600">Transaction ID</th>
+                              <th className="px-4 py-2 text-left text-sm font-medium text-slate-600">From</th>
+                              <th className="px-4 py-2 text-left text-sm font-medium text-slate-600">To</th>
+                              <th className="px-4 py-2 text-right text-sm font-medium text-slate-600">Amount</th>
+                              <th className="px-4 py-2 text-left text-sm font-medium text-slate-600">Type</th>
+                              <th className="px-4 py-2 text-left text-sm font-medium text-slate-600">Timestamp</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {transactions.map((tx, index) => (
+                              <tr key={index} className={index % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                                <td className="px-4 py-2 text-sm font-mono">{tx.id}</td>
+                                <td className="px-4 py-2 text-sm font-mono">
+                                  {formatCID(tx.from_did)}
+                                </td>
+                                <td className="px-4 py-2 text-sm font-mono">
+                                  {formatCID(tx.to_did)}
+                                </td>
+                                <td className="px-4 py-2 text-sm text-right">{tx.amount.toLocaleString()}</td>
+                                <td className="px-4 py-2 text-sm">
+                                  <span className={`px-2 py-1 rounded-full text-xs ${
+                                    tx.operation === "mint" 
+                                      ? "bg-green-100 text-green-800" 
+                                      : tx.operation === "burn"
+                                      ? "bg-red-100 text-red-800"
+                                      : "bg-blue-100 text-blue-800"
+                                  }`}>
+                                    {tx.operation}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2 text-sm">{formatDate(tx.timestamp)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>

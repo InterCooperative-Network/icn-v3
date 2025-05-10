@@ -1,27 +1,42 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import Layout from '../../components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import { ExecutionReceipt, ICNApi, getMockData } from "../../lib/api";
+import { ExecutionReceipt, ICNApi, getMockData, ReceiptFilter } from "../../lib/api";
 import { formatDate, formatCID } from "../../lib/utils";
 import { ReceiptCharts } from '../../components/dashboard/receipt-charts';
 
 export default function ReceiptsPage() {
+  const searchParams = useSearchParams();
+  const dateParam = searchParams.get('date');
+  const executorParam = searchParams.get('executor');
+  
   const [receipts, setReceipts] = useState<ExecutionReceipt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [view, setView] = useState<"table" | "chart">("table");
+  const [filterInfo, setFilterInfo] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Try to fetch from API first
-        const data = await ICNApi.getLatestReceipts(20).catch(() => {
+        // Create filter object from URL parameters
+        const filter: ReceiptFilter = {};
+        if (dateParam) filter.date = dateParam;
+        if (executorParam) filter.executor = executorParam;
+        filter.limit = 50;
+
+        // Try to fetch filtered data from API first
+        let data;
+        try {
+          data = await ICNApi.getFilteredReceipts(filter);
+        } catch (err) {
           // If API call fails, use mock data
-          return getMockData.latestReceipts();
-        });
+          data = getMockData.filteredReceipts(filter);
+        }
         
         setReceipts(data);
       } catch (err) {
@@ -33,13 +48,38 @@ export default function ReceiptsPage() {
     };
 
     fetchData();
-  }, []);
+  }, [dateParam, executorParam]);
 
-  // Filter receipts based on search term
-  const filteredReceipts = receipts.filter(receipt => 
-    receipt.task_cid.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    receipt.executor.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Apply URL parameter filters
+  useEffect(() => {
+    if (dateParam) {
+      setSearchTerm("");
+      setFilterInfo(`Showing receipts from ${dateParam}`);
+    } else if (executorParam) {
+      setSearchTerm(executorParam);
+      setFilterInfo(`Showing receipts from executor ${formatCID(executorParam)}`);
+    } else {
+      setFilterInfo(null);
+    }
+  }, [dateParam, executorParam]);
+
+  // Filter receipts based on search term (for non-URL parameter searches)
+  const filteredReceipts = receipts.filter(receipt => {
+    // If we're already filtering by URL params, no need for additional filtering
+    if (dateParam || executorParam) return true;
+    
+    // Otherwise filter by search term
+    return receipt.task_cid.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           receipt.executor.toLowerCase().includes(searchTerm.toLowerCase());
+  });
+
+  // Clear any active filters
+  const clearFilters = () => {
+    // This will trigger a page navigation without the query parameters
+    window.history.pushState({}, '', '/receipts');
+    setSearchTerm("");
+    setFilterInfo(null);
+  };
 
   return (
     <Layout>
@@ -48,6 +88,21 @@ export default function ReceiptsPage() {
         <p className="text-slate-600">
           View and search all execution receipts in the ICN network.
         </p>
+        
+        {/* Filter information */}
+        {filterInfo && (
+          <div className="bg-blue-50 border-l-4 border-blue-500 p-4 flex justify-between items-center">
+            <div>
+              <p className="text-blue-700">{filterInfo}</p>
+            </div>
+            <button 
+              onClick={clearFilters}
+              className="text-sm px-3 py-1 bg-white border border-blue-300 rounded-md hover:bg-blue-50 text-blue-600"
+            >
+              Clear Filter
+            </button>
+          </div>
+        )}
         
         {/* View toggle and search */}
         <div className="flex flex-col sm:flex-row justify-between gap-4">
@@ -81,6 +136,7 @@ export default function ReceiptsPage() {
               className="w-full px-4 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              disabled={!!dateParam || !!executorParam}
             />
             <div className="absolute inset-y-0 right-0 flex items-center pr-3">
               <svg 
@@ -106,7 +162,11 @@ export default function ReceiptsPage() {
         ) : (
           <Card>
             <CardHeader>
-              <CardTitle>All Receipts</CardTitle>
+              <CardTitle>
+                {dateParam ? `Receipts on ${dateParam}` : 
+                 executorParam ? `Receipts from ${formatCID(executorParam)}` : 
+                 "All Receipts"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -117,7 +177,7 @@ export default function ReceiptsPage() {
                 <div className="text-red-500">{error}</div>
               ) : filteredReceipts.length === 0 ? (
                 <div className="text-center py-8 text-slate-500">
-                  No receipts found matching your search criteria.
+                  No receipts found matching your criteria.
                 </div>
               ) : (
                 <div className="space-y-4">

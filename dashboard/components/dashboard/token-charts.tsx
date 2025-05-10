@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { 
   PieChart, 
   Pie, 
@@ -56,6 +57,7 @@ const generateMockHistoricalData = () => {
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
 
 export function TokenCharts() {
+  const router = useRouter();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [historicalData, setHistoricalData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -87,6 +89,21 @@ export function TokenCharts() {
     fetchData();
   }, []);
 
+  // Handle clicks on chart data points
+  const handleDateClick = (data: any) => {
+    if (data && data.date) {
+      // Navigate to tokens page with date filter
+      router.push(`/tokens?date=${data.date}`);
+    }
+  };
+
+  const handleHolderClick = (data: any) => {
+    if (data && data.did) {
+      // Navigate to tokens page with holder filter
+      router.push(`/tokens?account=${data.did}`);
+    }
+  };
+
   // Prepare data for pie chart - take top 4 holders and group the rest as "Others"
   const prepareDistributionData = (tokens: Token[]) => {
     // Sort tokens by balance (descending)
@@ -100,7 +117,8 @@ export function TokenCharts() {
       if (i < 4) {
         pieData.push({
           name: sortedTokens[i].did.slice(-10), // Truncate DID for display
-          value: sortedTokens[i].balance
+          value: sortedTokens[i].balance,
+          did: sortedTokens[i].did  // Store full DID for click handling
         });
       } else {
         // Group the rest as "Others"
@@ -111,7 +129,8 @@ export function TokenCharts() {
     if (othersTotal > 0) {
       pieData.push({
         name: "Others",
-        value: othersTotal
+        value: othersTotal,
+        did: null
       });
     }
     
@@ -134,16 +153,18 @@ export function TokenCharts() {
           <div className="space-y-8">
             <div>
               <h3 className="text-lg font-medium mb-2">Token Supply History</h3>
+              <p className="text-sm text-slate-500 mb-2">Click on a data point to see token activity for that date</p>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
                     data={historicalData}
                     margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                    onClick={(e) => e && e.activePayload && handleDateClick(e.activePayload[0].payload)}
                   >
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="date" />
                     <YAxis />
-                    <Tooltip />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                     <Legend />
                     <Area 
                       type="monotone" 
@@ -176,6 +197,7 @@ export function TokenCharts() {
             
             <div>
               <h3 className="text-lg font-medium mb-2">Token Distribution</h3>
+              <p className="text-sm text-slate-500 mb-2">Click on a segment to see account details</p>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -188,13 +210,23 @@ export function TokenCharts() {
                       fill="#8884d8"
                       dataKey="value"
                       label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      onClick={(data) => data.did && handleHolderClick(data)}
                     >
                       {prepareDistributionData(tokens).map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        <Cell 
+                          key={`cell-${index}`} 
+                          fill={COLORS[index % COLORS.length]} 
+                          cursor={entry.did ? "pointer" : "default"}
+                        />
                       ))}
                     </Pie>
                     <Tooltip formatter={(value) => `${value} tokens`} />
-                    <Legend />
+                    <Legend onClick={(entry) => {
+                      const matchedData = prepareDistributionData(tokens).find(item => item.name === entry.value);
+                      if (matchedData && matchedData.did) {
+                        handleHolderClick(matchedData);
+                      }
+                    }} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
