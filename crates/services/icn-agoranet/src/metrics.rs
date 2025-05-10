@@ -121,17 +121,67 @@ pub fn update_resource_gauge(
     federation_id: &str,
     labels: &[(&str, &str)]
 ) {
-    // Base labels
-    let mut all_labels = vec![(labels::FEDERATION, federation_id)];
-    // Add additional labels
-    all_labels.extend(labels);
+    // Create a metric name with the prefix
+    let full_metric_name = format!("{}_{}", METRICS_PREFIX, metric_name);
     
-    // Create a label map for the gauge
-    let label_map: std::collections::HashMap<&str, &str> = all_labels.into_iter().collect();
+    // For simplicity, we'll implement specific common patterns
+    // This avoids issues with the metrics! macro which needs static labels
     
-    // Record the gauge value with all specified dimensions
-    metrics::gauge!(
-        format!("{}_{}", METRICS_PREFIX, metric_name),
-        &label_map
-    ).set(value as f64);
+    // Just federation ID
+    if labels.is_empty() {
+        metrics::gauge!(&full_metric_name, labels::FEDERATION => federation_id).set(value as f64);
+        return;
+    }
+    
+    // Federation ID + entity type (most common case)
+    if labels.len() == 1 && labels[0].0 == labels::ENTITY_TYPE {
+        metrics::gauge!(
+            &full_metric_name, 
+            labels::FEDERATION => federation_id,
+            labels::ENTITY_TYPE => labels[0].1
+        ).set(value as f64);
+        return;
+    }
+    
+    // Federation ID + operation type
+    if labels.len() == 1 && labels[0].0 == labels::OPERATION {
+        metrics::gauge!(
+            &full_metric_name, 
+            labels::FEDERATION => federation_id,
+            labels::OPERATION => labels[0].1
+        ).set(value as f64);
+        return;
+    }
+    
+    // Federation ID + status
+    if labels.len() == 1 && labels[0].0 == labels::STATUS {
+        metrics::gauge!(
+            &full_metric_name, 
+            labels::FEDERATION => federation_id,
+            labels::STATUS => labels[0].1
+        ).set(value as f64);
+        return;
+    }
+    
+    // Federation ID + entity type + operation (common for operation counts)
+    if labels.len() == 2 && 
+       labels[0].0 == labels::ENTITY_TYPE && 
+       labels[1].0 == labels::OPERATION {
+        metrics::gauge!(
+            &full_metric_name, 
+            labels::FEDERATION => federation_id,
+            labels::ENTITY_TYPE => labels[0].1,
+            labels::OPERATION => labels[1].1
+        ).set(value as f64);
+        return;
+    }
+    
+    // If we get here, we have an unsupported label combination
+    // Log a warning and use just the federation ID
+    tracing::warn!(
+        "Unsupported label combination for gauge metric {}: {:?}. Using only federation ID.",
+        full_metric_name, 
+        labels
+    );
+    metrics::gauge!(&full_metric_name, labels::FEDERATION => federation_id).set(value as f64);
 } 
