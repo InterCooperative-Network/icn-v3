@@ -51,6 +51,7 @@ statement = {
     spending_rules_def |
     reporting_def |
     election_def |
+    proposal_def |
     process_def |
     vacancies_def |
     if_statement |

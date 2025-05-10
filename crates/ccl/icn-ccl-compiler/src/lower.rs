@@ -12,12 +12,33 @@ use uuid::Uuid;
 #[cfg(test)]
 const TEST_UUID_STR: &str = "f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff"; // Different from DSL test UUID
 
+#[derive(Debug)]
+pub struct UnhandledRuleInfo {
+    pub rule: Rule,
+    pub content: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl std::fmt::Display for UnhandledRuleInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "rule: {:?}, content: \"{}\", line: {}, column: {}",
+            self.rule,
+            self.content,
+            self.line,
+            self.column
+        )
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LowerError {
     #[error("parse error: {0}")]
     Parse(#[from] Box<pest::error::Error<Rule>>),
-    #[error("unhandled rule: {0:?}")]
-    Unhandled(Pair<'static, Rule>),
+    #[error("unhandled rule: {0}")]
+    Unhandled(UnhandledRuleInfo),
 }
 
 /// Primary entry‐point used by CLI & tests.
@@ -64,6 +85,16 @@ impl Lowerer {
         pair: Pair<'_, Rule>,
     ) -> Result<(), LowerError> {
         match pair.as_rule() {
+            Rule::statement => {
+                // If we receive a statement, we need to dispatch its inner rule.
+                // A statement should contain one actual definition.
+                for inner_pair in pair.into_inner() {
+                    // It's possible for a statement to wrap whitespace or comments
+                    // if the grammar is structured that way. We only want to dispatch
+                    // actual definition rules. For now, we assume inner_pair is the def.
+                    self.dispatch_def(modules, inner_pair)?;
+                }
+            }
             Rule::proposal_def => {
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
             }
@@ -126,11 +157,12 @@ impl Lowerer {
 
             Rule::EOI => {} // EOI will be the last item from ccl_root_pair.into_inner()
             _other => {
-                // TODO: Review this transmute for safety. It casts a non-'static Pair to 'static.
-                // This is only safe if the underlying data for 'pair' outlives its use in LowerError::Unhandled.
-                // A better fix might be to store an owned representation.
-                return Err(LowerError::Unhandled(unsafe {
-                    std::mem::transmute::<Pair<'_, Rule>, Pair<'static, Rule>>(pair)
+                let (line, column) = pair.as_span().start_pos().line_col();
+                return Err(LowerError::Unhandled(UnhandledRuleInfo {
+                    rule: pair.as_rule(),
+                    content: pair.as_str().to_string(), // Create an owned String
+                    line,
+                    column,
                 }));
             }
         }

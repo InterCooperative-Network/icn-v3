@@ -290,7 +290,7 @@ lto = true
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::lower::lower_str;
     use insta::assert_json_snapshot;
 

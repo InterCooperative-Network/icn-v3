@@ -2,7 +2,7 @@ use icn_ccl_compiler::lower::lower_str;
 use icn_ccl_wasm_codegen::compile_to_wasm;
 use icn_ccl_wasm_codegen::{emit::program_to_wasm, WasmGenerator};
 use wasmparser::Validator;
-use wasmparser::{ExternalKind, ImportSectionReader, Parser, Payload, TypeRef, WasmFeatures};
+use wasmparser::{Parser, Payload, TypeRef, WasmFeatures};
 
 #[test]
 fn emit_budget_wasm_validates() {
