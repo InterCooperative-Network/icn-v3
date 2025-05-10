@@ -1,8 +1,7 @@
 use icn_economics::{Economics, LedgerKey, ResourceAuthorizationPolicy, ResourceType};
-use icn_identity::Did;
+use icn_identity::{Did, KeyPair};
 use icn_types::org::{CooperativeId, CommunityId};
 use std::collections::HashMap;
-use std::str::FromStr;
 use tokio::sync::RwLock;
 
 #[tokio::test]
@@ -11,9 +10,10 @@ async fn test_scoped_resource_usage() {
     let economics = Economics::new(ResourceAuthorizationPolicy::default());
     let ledger = RwLock::new(HashMap::<LedgerKey, u64>::new());
     
-    // Create test DIDs and organization IDs
-    let did = Did::from_str("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
-        .expect("Failed to create test DID");
+    // Create test DIDs and organization IDs using valid keypairs
+    let keypair = KeyPair::generate();
+    let did = keypair.did.clone();
+    
     let coop_id = CooperativeId::new("coop-123");
     let community_id = CommunityId::new("community-456");
     let different_coop = CooperativeId::new("different-coop");
@@ -26,7 +26,7 @@ async fn test_scoped_resource_usage() {
         ResourceType::Cpu, 
         100,
         &ledger
-    );
+    ).await;
     
     // Get usage for the same scope - should be 100
     let usage = economics.get_usage(
@@ -66,7 +66,7 @@ async fn test_scoped_resource_usage() {
         ResourceType::Cpu, 
         50,
         &ledger
-    );
+    ).await;
     
     // Get updated usage for the same scope - should be 150
     let usage = economics.get_usage(
@@ -86,7 +86,7 @@ async fn test_scoped_resource_usage() {
         ResourceType::Cpu, 
         75,
         &ledger
-    );
+    ).await;
     
     // Get usage for coop only scope - should be 75
     let usage = economics.get_usage(
@@ -113,11 +113,13 @@ async fn test_scoped_token_operations() {
     let economics = Economics::new(ResourceAuthorizationPolicy::default());
     let ledger = RwLock::new(HashMap::<LedgerKey, u64>::new());
     
-    // Create test DIDs and organization IDs
-    let user1 = Did::from_str("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
-        .expect("Failed to create user1 DID");
-    let user2 = Did::from_str("did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH")
-        .expect("Failed to create user2 DID");
+    // Create test DIDs and organization IDs using valid keypairs
+    let user1_keypair = KeyPair::generate();
+    let user1 = user1_keypair.did.clone();
+    
+    let user2_keypair = KeyPair::generate();
+    let user2 = user2_keypair.did.clone();
+    
     let coop_id = CooperativeId::new("coop-123");
     let community_id = CommunityId::new("community-456");
     
@@ -129,7 +131,7 @@ async fn test_scoped_token_operations() {
         ResourceType::Token,
         100,
         &ledger
-    );
+    ).await;
     
     // Mint 50 tokens for user1 in community scope
     economics.mint(
@@ -139,7 +141,7 @@ async fn test_scoped_token_operations() {
         ResourceType::Token,
         50,
         &ledger
-    );
+    ).await;
     
     // Check user1's token balances (remember: lower usage means more tokens)
     // The starting balance is 0, so after minting 100, the usage should be -100
@@ -172,7 +174,7 @@ async fn test_scoped_token_operations() {
         ResourceType::Token,
         30,
         &ledger
-    );
+    ).await;
     
     // Check balances after transfer
     let user1_coop_balance = economics.get_usage(
@@ -204,7 +206,7 @@ async fn test_scoped_token_operations() {
         ResourceType::Token,
         20,
         &ledger
-    );
+    ).await;
     
     // Check community balances after transfer
     let user1_community_balance = economics.get_usage(

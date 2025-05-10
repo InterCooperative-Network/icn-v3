@@ -27,6 +27,16 @@ pub enum Opcode {
         path: Option<String>,
         data_ref: String,
     },
+    UseResource {
+        resource_type: String,
+        amount: u64,
+    },
+    TransferToken {
+        token_type: String,
+        amount: u64,
+        sender: Option<String>,
+        recipient: String,
+    },
     CallHost {
         fn_name: String,
         args: Vec<String>,

@@ -527,6 +527,8 @@ async fn execute_wasm(
         epoch: Some(chrono::Utc::now().to_rfc3339()),
         code_cid: Some(format!("file://{}", wasm_path.display())),
         resource_limits: None,
+        coop_id: None,
+        community_id: None,
     };
 
     // Execute the WASM module

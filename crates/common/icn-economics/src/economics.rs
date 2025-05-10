@@ -50,7 +50,8 @@ impl Economics {
         }
     }
 
-    pub fn record(
+    /// Record resource usage for a specific DID
+    pub async fn record(
         &self,
         caller: &Did,
         coop_id: Option<&CooperativeId>,
@@ -61,7 +62,7 @@ impl Economics {
     ) -> i32 {
         debug!("Recording {} units of {:?} for {} (coop: {:?}, community: {:?})",
               amt, rt, caller, coop_id, community_id);
-        let mut l = ledger.blocking_write();
+        let mut l = ledger.write().await;
         let key = LedgerKey {
             did: caller.to_string(),
             coop_id: coop_id.map(|c| c.to_string()),
@@ -74,7 +75,7 @@ impl Economics {
     
     /// Mint tokens for a DID, which reduces their token usage (increases token allowance)
     /// Only works for Token resource type
-    pub fn mint(
+    pub async fn mint(
         &self,
         recipient: &Did,
         coop_id: Option<&CooperativeId>,
@@ -91,7 +92,7 @@ impl Economics {
         
         debug!("Minting {} tokens for {} (coop: {:?}, community: {:?})",
               amt, recipient, coop_id, community_id);
-        let mut l = ledger.blocking_write();
+        let mut l = ledger.write().await;
         let key = LedgerKey {
             did: recipient.to_string(),
             coop_id: coop_id.map(|c| c.to_string()),
@@ -122,7 +123,7 @@ impl Economics {
     /// - 0 on success
     /// - -1 on insufficient funds
     /// - -3 on invalid resource type
-    pub fn transfer(
+    pub async fn transfer(
         &self,
         sender: &Did,
         sender_coop_id: Option<&CooperativeId>,
@@ -141,7 +142,7 @@ impl Economics {
         }
         
         debug!("Transferring {} tokens from {} to {}", amt, sender, recipient);
-        let mut l = ledger.blocking_write();
+        let mut l = ledger.write().await;
         
         // Create keys for sender and recipient
         let sender_key = LedgerKey {

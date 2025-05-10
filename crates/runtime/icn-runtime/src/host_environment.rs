@@ -3,6 +3,7 @@ use icn_economics::ResourceType;
 use icn_identity::Did;
 use icn_mesh_receipts::{ExecutionReceipt, verify_receipt};
 use icn_types::dag::ReceiptNode;
+use icn_types::dag_store::DagStore;
 use icn_types::org::{CooperativeId, CommunityId};
 use serde_cbor;
 use std::sync::Arc;
@@ -90,7 +91,7 @@ impl ConcreteHostEnvironment {
     }
 
     /// Record resource usage
-    pub fn record_resource_usage(&self, rt: ResourceType, amt: u64) -> i32 {
+    pub async fn record_resource_usage(&self, rt: ResourceType, amt: u64) -> i32 {
         self.ctx.economics.record(
             &self.caller_did,
             self.coop_id.as_ref(),
@@ -98,7 +99,7 @@ impl ConcreteHostEnvironment {
             rt,
             amt,
             &self.ctx.resource_ledger
-        )
+        ).await
     }
     
     /// Check if the current execution is in a governance context
@@ -111,7 +112,7 @@ impl ConcreteHostEnvironment {
     }
     
     /// Mint tokens for a specific DID, only allowed in governance context
-    pub fn mint_token(&self, recipient_did_str: &str, amount: u64) -> i32 {
+    pub async fn mint_token(&self, recipient_did_str: &str, amount: u64) -> i32 {
         // Only allow minting in a governance context
         if !self.is_governance {
             return -1; // Not authorized
@@ -131,7 +132,7 @@ impl ConcreteHostEnvironment {
             ResourceType::Token,
             amount,
             &self.ctx.resource_ledger
-        )
+        ).await
     }
     
     /// Transfer tokens from sender to recipient
@@ -139,7 +140,7 @@ impl ConcreteHostEnvironment {
     /// - 0 on success
     /// - -1 on insufficient funds
     /// - -2 on invalid DID
-    pub fn transfer_token(&self, sender_did_str: &str, recipient_did_str: &str, amount: u64) -> i32 {
+    pub async fn transfer_token(&self, sender_did_str: &str, recipient_did_str: &str, amount: u64) -> i32 {
         // Parse the sender DID
         let sender_did = match Did::from_str(sender_did_str) {
             Ok(did) => did,
@@ -163,7 +164,7 @@ impl ConcreteHostEnvironment {
             ResourceType::Token,
             amount,
             &self.ctx.resource_ledger
-        )
+        ).await
     }
 
     /// Anchor a serialized ExecutionReceipt into the DAG.

@@ -26,6 +26,8 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
             Opcode::Todo(_) => 10,           // Was previously part of '_'
             Opcode::OnEvent { .. } => 11,    // New
             Opcode::RangeCheck { .. } => 13, // New type index for (F64, F64) -> ()
+            Opcode::UseResource { .. } => 14, // New for resource usage tracking
+            Opcode::TransferToken { .. } => 15, // New for token transfers
         };
         functions_section.function(type_index); // Map this function body to its type index
 
@@ -112,6 +114,18 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 // TODO: Define and use the correct range_check_func_idx, assuming 13 for now as it's next.
                 f.instruction(&Instruction::Call(13));
             }
+            Opcode::UseResource { resource_type, amount } => {
+                encode_push_string(&mut f, resource_type);
+                f.instruction(&Instruction::I64Const(*amount as i64));
+                f.instruction(&Instruction::Call(14)); // host fn 14: use_resource
+            }
+            Opcode::TransferToken { token_type, amount, sender, recipient } => {
+                encode_push_string(&mut f, token_type);
+                f.instruction(&Instruction::I64Const(*amount as i64));
+                encode_push_string(&mut f, sender.as_deref().unwrap_or_default());
+                encode_push_string(&mut f, recipient);
+                f.instruction(&Instruction::Call(15)); // host fn 15: transfer_token
+            }
         }
         f.instruction(&Instruction::End);
         code.function(&f);
@@ -136,6 +150,8 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     type_section.function(vec![ValType::I32], vec![]); // 11: on_event(event_str: ptr) - New
     type_section.function(vec![ValType::I32], vec![]); // 12: log_range_check(debug_str: ptr) - New
     type_section.function(vec![ValType::F64, ValType::F64], vec![]); // 13: range_check(start: f64, end: f64)
+    type_section.function(vec![ValType::I32, ValType::I64], vec![]); // 14: use_resource(resource_type: ptr, amount: i64)
+    type_section.function(vec![ValType::I32, ValType::I64, ValType::I32, ValType::I32], vec![]); // 15: transfer_token(token_type: ptr, amount: i64, sender: ptr, recipient: ptr)
 
     // Imports: Define all imported host functions
     let mut import_section = ImportSection::new();
@@ -154,6 +170,8 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
         ("on_event", 11u32),        // New
         ("log_range_check", 12u32), // New
         ("range_check", 13u32),     // New for actual range check
+        ("use_resource", 14u32),    // New for resource usage tracking
+        ("transfer_token", 15u32),  // New for token transfers
     ];
     for (name, type_idx) in host_fns.iter() {
         import_section.import("icn", name, EntityType::Function(*type_idx));

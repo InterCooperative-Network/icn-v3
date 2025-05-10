@@ -50,7 +50,9 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
         "host_record_resource_usage",
         |caller: Caller<'_, StoreData>, resource_type: u32, amount: u64| -> i32 {
             let rt: ResourceType = resource_type.into();
-            caller.data().host().record_resource_usage(rt, amount)
+            let host_env = caller.data().host();
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(host_env.record_resource_usage(rt, amount))
         },
     )?;
     
@@ -80,7 +82,11 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
             
             // Convert to UTF-8 string
             match String::from_utf8(buffer) {
-                Ok(recipient_did) => caller.data().host_mut().mint_token(&recipient_did, amount),
+                Ok(recipient_did) => {
+                    let host_env = caller.data().host_mut();
+                    let runtime = tokio::runtime::Runtime::new().unwrap();
+                    runtime.block_on(host_env.mint_token(&recipient_did, amount))
+                },
                 Err(_) => -2, // Invalid UTF-8
             }
         },
@@ -111,8 +117,11 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
             
             // Convert to UTF-8 strings
             match (String::from_utf8(sender_buffer), String::from_utf8(recipient_buffer)) {
-                (Ok(sender_did), Ok(recipient_did)) => 
-                    caller.data().host_mut().transfer_token(&sender_did, &recipient_did, amount),
+                (Ok(sender_did), Ok(recipient_did)) => {
+                    let host_env = caller.data().host_mut();
+                    let runtime = tokio::runtime::Runtime::new().unwrap();
+                    runtime.block_on(host_env.transfer_token(&sender_did, &recipient_did, amount))
+                },
                 _ => -2, // Invalid UTF-8
             }
         },
