@@ -102,6 +102,14 @@ case "$CMD" in
         # Handle token operations
         echo '{"status":"success"}'
         ;;
+    "cooperative")
+        # Handle cooperative operations
+        echo '{"status":"success"}'
+        ;;
+    "community")
+        # Handle community operations
+        echo '{"status":"success"}'
+        ;;
     *)
         # Default response
         echo '{"status":"success"}'
@@ -115,7 +123,7 @@ EOF
     # Create mock cp command that doesn't fail on missing monitoring templates
     cat > "$MOCK_DIR/cp" << 'EOF'
 #!/bin/bash
-# Mock cp command that doesn't fail on monitoring templates
+# Mock cp command that doesn't fail on missing files
 
 # If copying monitoring templates that don't exist, just skip
 if [[ "$*" == *"monitoring"* && "$*" == *"*"* ]]; then
@@ -126,12 +134,46 @@ if [[ "$*" == *"monitoring"* && "$*" == *"*"* ]]; then
     exit 0
 fi
 
+# Handle policy templates wildcard copying
+if [[ "$*" == *"policies/*.ccl"* ]]; then
+    # Create the target directory if it doesn't exist
+    TARGET_DIR=$(dirname "$3")
+    mkdir -p "$TARGET_DIR"
+    
+    # Create sample policy files if source doesn't exist
+    if [ ! -d "$(dirname "$2")" ]; then
+        # Get the destination directory
+        DEST_DIR="$3"
+        if [[ "$DEST_DIR" == *"*"* ]]; then
+            DEST_DIR=$(dirname "$DEST_DIR")
+        fi
+        mkdir -p "$DEST_DIR"
+        
+        # Create sample policies
+        echo "# Sample resource policy" > "$DEST_DIR/resource_allocation.ccl"
+        echo "# Sample membership policy" > "$DEST_DIR/membership.ccl"
+        echo "# Sample dispute resolution policy" > "$DEST_DIR/dispute_resolution.ccl"
+        exit 0
+    fi
+fi
+
 # Otherwise, call the real cp command
 /bin/cp "$@"
 EOF
     
     # Make the mock script executable
     chmod +x "$MOCK_DIR/cp"
+    
+    # Create a modified mkdir command that always succeeds
+    cat > "$MOCK_DIR/mkdir" << 'EOF'
+#!/bin/bash
+# Always create directories, no matter what
+/bin/mkdir -p "$@"
+exit 0
+EOF
+    
+    # Make the mock script executable
+    chmod +x "$MOCK_DIR/mkdir"
     
     log "Mock commands setup complete."
 }
@@ -184,13 +226,15 @@ setup_test_env() {
         echo "name: \${COMMUNITY_NAME}" >> "$TEST_DIR/templates/community_config.yaml"
         echo "cooperative_id: \${COOPERATIVE_ID}" >> "$TEST_DIR/templates/community_config.yaml"
         
-        # Create a minimal policy file
-        echo "# Mock resource policy" > "$TEST_DIR/templates/policies/resource.ccl"
-        echo "policy {" >> "$TEST_DIR/templates/policies/resource.ccl"
-        echo "  name = \"Resource Allocation\"" >> "$TEST_DIR/templates/policies/resource.ccl"
-        echo "  version = \"1.0.0\"" >> "$TEST_DIR/templates/policies/resource.ccl"
-        echo "  community = \"\${COMMUNITY_ID}\"" >> "$TEST_DIR/templates/policies/resource.ccl"
-        echo "}" >> "$TEST_DIR/templates/policies/resource.ccl"
+        # Create minimal policy files
+        for policy in dispute_resolution membership resource_allocation; do
+            echo "# Mock ${policy} policy" > "$TEST_DIR/templates/policies/${policy}.ccl"
+            echo "policy {" >> "$TEST_DIR/templates/policies/${policy}.ccl"
+            echo "  name = \"${policy}\"" >> "$TEST_DIR/templates/policies/${policy}.ccl"
+            echo "  version = \"1.0.0\"" >> "$TEST_DIR/templates/policies/${policy}.ccl"
+            echo "  community = \"\${COMMUNITY_ID}\"" >> "$TEST_DIR/templates/policies/${policy}.ccl"
+            echo "}" >> "$TEST_DIR/templates/policies/${policy}.ccl"
+        done
         
         # Create minimal monitoring templates
         echo "# Mock Prometheus config" > "$TEST_DIR/templates/monitoring/prometheus.yml"
@@ -356,11 +400,29 @@ test_community_bootstrap() {
     export COMMUNITY_ID="test-community"
     export COMMUNITY_NAME="Test Community"
     export COMMUNITY_DESCRIPTION="A test community for testing"
+    export EDUCATION_PCT=30
+    export HEALTHCARE_PCT=40
+    export INFRASTRUCTURE_PCT=30
+    export OFFICIAL_COUNT=3
     
     # Create data directories
     mkdir -p "$DATA_DIR/community/$COMMUNITY_ID"
     mkdir -p "$DATA_DIR/community/$COMMUNITY_ID/services"
     mkdir -p "$DATA_DIR/community/$COMMUNITY_ID/credentials"
+    mkdir -p "$DATA_DIR/community/$COMMUNITY_ID/policies/templates"
+    
+    # Ensure the community templates directory exists
+    mkdir -p "$DATA_DIR/community/$COMMUNITY_ID/policies/templates"
+    
+    # Create sample policy templates
+    for policy in dispute_resolution membership resource_allocation; do
+        echo "# Mock ${policy} policy" > "$DATA_DIR/community/$COMMUNITY_ID/policies/templates/${policy}.ccl"
+        echo "policy {" >> "$DATA_DIR/community/$COMMUNITY_ID/policies/templates/${policy}.ccl"
+        echo "  name = \"${policy}\"" >> "$DATA_DIR/community/$COMMUNITY_ID/policies/templates/${policy}.ccl"
+        echo "  version = \"1.0.0\"" >> "$DATA_DIR/community/$COMMUNITY_ID/policies/templates/${policy}.ccl"
+        echo "  community = \"\${COMMUNITY_ID}\"" >> "$DATA_DIR/community/$COMMUNITY_ID/policies/templates/${policy}.ccl"
+        echo "}" >> "$DATA_DIR/community/$COMMUNITY_ID/policies/templates/${policy}.ccl"
+    done
     
     # Create mock cooperative DID file
     mkdir -p "$DATA_DIR/cooperative/$COOPERATIVE_ID/credentials"
@@ -381,6 +443,10 @@ test_community_bootstrap() {
             --community "$COMMUNITY_ID" \
             --name "$COMMUNITY_NAME" \
             --description "$COMMUNITY_DESCRIPTION" \
+            --official-count "$OFFICIAL_COUNT" \
+            --education-pct "$EDUCATION_PCT" \
+            --healthcare-pct "$HEALTHCARE_PCT" \
+            --infrastructure-pct "$INFRASTRUCTURE_PCT" \
             --data-dir "$DATA_DIR" \
             --config-dir "$CONFIG_DIR" \
             --templates-dir "$TEMPLATES_DIR" \

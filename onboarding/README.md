@@ -17,6 +17,7 @@ This onboarding bundle contains everything you need to deploy and operate a real
 - `scripts/federation_bootstrap.sh` - Script to bootstrap a new federation
 - `scripts/cooperative_bootstrap.sh` - Script to bootstrap a new cooperative within a federation
 - `scripts/community_bootstrap.sh` - Script to bootstrap a new community within a cooperative
+- `scripts/test_onboarding.sh` - Test script to validate the onboarding flow
 
 ### Documentation
 - `docs/security_and_recovery.md` - Security best practices and disaster recovery procedures
@@ -33,6 +34,23 @@ Before using this onboarding bundle, ensure you have:
    - jq for JSON processing
    - OpenSSL for cryptographic operations
    - Sufficient disk space for DAG store (~50GB recommended)
+
+### Testing the Onboarding Scripts
+
+Before deploying in a production environment, you can validate the entire onboarding flow using the test script:
+
+```bash
+# Run the test script to validate the federation, cooperative, and community bootstrap scripts
+./scripts/test_onboarding.sh
+```
+
+The test script will:
+- Set up a test environment with mock components
+- Execute all bootstrap scripts in sequence
+- Verify the outputs and configurations
+- Report success or detailed errors for troubleshooting
+
+This validation helps ensure your environment is correctly set up before deploying real components.
 
 ### Quick Start
 
