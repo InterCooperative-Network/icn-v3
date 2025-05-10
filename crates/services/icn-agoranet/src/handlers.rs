@@ -356,7 +356,7 @@ impl InMemoryStore {
             receipts,
             token_balances,
             token_transactions,
-            ledger: Some(create_example_ledger()),
+            ledger: None,
         }
     }
 
@@ -616,6 +616,16 @@ impl InMemoryStore {
             active_accounts: active_accounts.len() as u64,
             daily_volume: Some(daily_volume),
         }
+    }
+    
+    // Add a setter method for the ledger field
+    pub fn set_ledger(&mut self, ledger: impl Into<Option<LedgerStore>>) {
+        self.ledger = ledger.into();
+    }
+    
+    // Add a getter method to retrieve the ledger
+    pub fn get_ledger(&self) -> Option<LedgerStore> {
+        self.ledger.clone()
     }
 }
 
@@ -2269,49 +2279,4 @@ impl Ledger {
 /// Create a new ledger store with example data
 pub fn create_example_ledger() -> LedgerStore {
     Arc::new(RwLock::new(Ledger::with_example_data()))
-}
-
-/// Get the notification channels for a transfer
-fn get_transfer_notification_channels(transfer: &Transfer) -> Vec<String> {
-    let mut channels = Vec::new();
-    
-    // Add federation channel
-    channels.push(format!("federation:{}", transfer.federation_id));
-    
-    // Add from entity channel
-    match transfer.from.entity_type {
-        EntityType::Federation => {
-            // Already added above
-        },
-        EntityType::Cooperative => {
-            channels.push(format!("coop:{}", transfer.from.id));
-        },
-        EntityType::Community => {
-            channels.push(format!("community:{}", transfer.from.id));
-        },
-        EntityType::User => {
-            channels.push(format!("user:{}", transfer.from.id));
-        },
-    }
-    
-    // Add to entity channel
-    match transfer.to.entity_type {
-        EntityType::Federation => {
-            // Already added above
-        },
-        EntityType::Cooperative => {
-            channels.push(format!("coop:{}", transfer.to.id));
-        },
-        EntityType::Community => {
-            channels.push(format!("community:{}", transfer.to.id));
-        },
-        EntityType::User => {
-            channels.push(format!("user:{}", transfer.to.id));
-        },
-    }
-    
-    // Add a general transfers channel
-    channels.push("transfers".to_string());
-    
-    channels
 }

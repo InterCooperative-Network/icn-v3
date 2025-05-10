@@ -16,6 +16,8 @@ use utoipa_swagger_ui::SwaggerUi;
 // Import models and handlers from the crate
 // use icn_agoranet::models::*; // No longer needed directly here
 use icn_agoranet::handlers::InMemoryStore;
+use icn_agoranet::ledger::{self, LedgerStore, PostgresLedgerStore};
+use std::env;
 mod auth;
 mod auth_handlers;
 mod error;
@@ -44,7 +46,12 @@ mod transfers;
         icn_agoranet::handlers::get_receipt_stats_handler,
         icn_agoranet::handlers::get_token_balances_handler,
         icn_agoranet::handlers::get_token_transactions_handler,
-        icn_agoranet::handlers::get_token_stats_handler
+        icn_agoranet::handlers::get_token_stats_handler,
+        // Ledger endpoints
+        icn_agoranet::handlers::process_transfer_handler,
+        icn_agoranet::handlers::query_transfers,
+        icn_agoranet::handlers::batch_transfer_handler,
+        icn_agoranet::handlers::get_federation_ledger_stats
     ),
     components(
         schemas(
@@ -59,6 +66,10 @@ mod transfers;
             icn_agoranet::models::ReceiptStats, icn_agoranet::models::TokenStats,
             icn_agoranet::models::GetReceiptsQuery, icn_agoranet::models::GetTokenBalancesQuery, icn_agoranet::models::GetTokenTransactionsQuery,
             icn_agoranet::models::ReceiptStatsResponse, icn_agoranet::models::TokenStatsResponse,
+            // Ledger schemas
+            icn_agoranet::models::Transfer, icn_agoranet::models::TransferRequest, icn_agoranet::models::TransferResponse,
+            icn_agoranet::models::EntityRef, icn_agoranet::models::EntityType,
+            icn_agoranet::handlers::LedgerStats, icn_agoranet::handlers::BatchTransferResponse,
             icn_agoranet::error::ApiError
         )
     ),
@@ -69,7 +80,7 @@ mod transfers;
 struct ApiDoc;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG")
@@ -78,8 +89,39 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Initialize in-memory store
-    let db: Db = Arc::new(RwLock::new(InMemoryStore::new()));
+    // Get PostgreSQL connection string from environment variable
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
+        // Default connection string for local development
+        "postgres://postgres:postgres@localhost:5432/icn_ledger".to_string()
+    });
+
+    // Initialize the ledger store
+    let ledger_store: Arc<dyn LedgerStore + Send + Sync> = match env::var("USE_POSTGRES").unwrap_or_else(|_| "true".to_string()).as_str() {
+        "true" => {
+            // Create PostgreSQL ledger store
+            tracing::info!("Initializing PostgreSQL ledger store");
+            match ledger::create_pg_ledger_store(&database_url).await {
+                Ok(store) => {
+                    tracing::info!("PostgreSQL ledger store initialized successfully");
+                    Arc::new(store)
+                },
+                Err(e) => {
+                    tracing::error!("Failed to initialize PostgreSQL ledger store: {}", e);
+                    tracing::info!("Falling back to in-memory ledger store");
+                    Arc::new(transfers::create_example_ledger())
+                }
+            }
+        },
+        _ => {
+            tracing::info!("Using in-memory ledger store");
+            Arc::new(transfers::create_example_ledger())
+        }
+    };
+
+    // Initialize in-memory store with ledger
+    let mut store = InMemoryStore::new();
+    store.set_ledger(ledger_store);
+    let db: Db = Arc::new(RwLock::new(store));
     
     // Initialize WebSocket state
     let ws_state = WebSocketState::new();
@@ -95,6 +137,14 @@ async fn main() {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
+
+    // Initialize JWT configuration
+    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "icn-debug-secret-key".to_string());
+    let jwt_config = Arc::new(auth::JwtConfig::new(jwt_secret));
+    
+    // Initialize token revocation store
+    let token_revocation_store: Arc<dyn auth::TokenRevocationStore> = 
+        Arc::new(auth::InMemoryTokenRevocationStore::new());
 
     // Build the REST API router
     let rest_api = Router::new()
@@ -152,14 +202,28 @@ async fn main() {
             "/tokens/stats",
             get(icn_agoranet::handlers::get_token_stats_handler),
         )
+        // Ledger routes
+        .route(
+            "/federations/:federation_id/transfers",
+            post(icn_agoranet::handlers::process_transfer_handler)
+                .get(icn_agoranet::handlers::query_transfers),
+        )
+        .route(
+            "/federations/:federation_id/batch-transfers",
+            post(icn_agoranet::handlers::batch_transfer_handler),
+        )
+        .route(
+            "/federations/:federation_id/ledger-stats",
+            get(icn_agoranet::handlers::get_federation_ledger_stats),
+        )
         .layer(cors.clone())
-        .with_state(db.clone());
+        .with_state((db.clone(), ws_state.clone(), jwt_config.clone(), token_revocation_store.clone()));
     
     // Combine REST API with WebSocket routes
     let app = rest_api.merge(
         icn_agoranet::websocket::websocket_routes()
             .layer(cors)
-            .with_state((db, ws_state))
+            .with_state((db, ws_state, jwt_config, token_revocation_store))
     );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8787));
@@ -169,6 +233,8 @@ async fn main() {
     axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
         .await
         .unwrap();
+
+    Ok(())
 }
 
 // Root handler removed as it's not part of the API spec and /docs serves the UI home.
