@@ -58,6 +58,14 @@ pub enum DslOpcode {
         amount: u64,
         recipient: String,
     },
+    
+    /// Transfer tokens from one DID to another
+    TransferToken {
+        token_type: String,
+        amount: u64,
+        sender: String,
+        recipient: String,
+    },
 
     /// Submit a job to the planetary mesh
     SubmitJob {
@@ -358,6 +366,34 @@ lto = true
                     
                     f.instruction(&Instruction::End); // End of governance context check
                 }
+                DslOpcode::TransferToken {
+                    token_type: _,
+                    amount,
+                    sender,
+                    recipient,
+                } => {
+                    // No special context required for transfers, just need sufficient funds
+                    
+                    // Sender DID string
+                    let sender_str = sender.as_bytes();
+                    let sender_len = sender_str.len();
+                    
+                    // Recipient DID string
+                    let recipient_str = recipient.as_bytes();
+                    let recipient_len = recipient_str.len();
+                    
+                    // Call the transfer token host function
+                    f.instruction(&Instruction::I32Const(0)); // Sender string offset (placeholder)
+                    f.instruction(&Instruction::I32Const(sender_len as i32)); // Sender string length
+                    f.instruction(&Instruction::I32Const(sender_len as i32)); // Recipient string offset (placeholder)
+                    f.instruction(&Instruction::I32Const(recipient_len as i32)); // Recipient string length
+                    f.instruction(&Instruction::I64Const(*amount as i64)); // Amount
+                    f.instruction(&Instruction::Call(6)); // Call host_transfer_token
+                    
+                    // Check result - if negative (error), we could handle it
+                    // For now, just drop the result
+                    f.instruction(&Instruction::Drop);
+                }
                 DslOpcode::SubmitJob { .. } => {
                     f.instruction(&Instruction::Call(0));
                 }
@@ -419,6 +455,19 @@ pub fn action_steps_to_opcodes(steps: &[ActionStep]) -> Vec<DslOpcode> {
                     action_name: ident.clone(),
                     resource_type,
                     amount: *amount,
+                });
+            }
+            ActionStep::TransferToken {
+                token_type,
+                amount,
+                sender,
+                recipient
+            } => {
+                opcodes.push(DslOpcode::TransferToken {
+                    token_type: token_type.clone(),
+                    amount: *amount,
+                    sender: sender.clone(),
+                    recipient: recipient.clone(),
                 });
             }
         }

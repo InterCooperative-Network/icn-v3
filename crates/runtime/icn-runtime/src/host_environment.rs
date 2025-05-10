@@ -70,4 +70,32 @@ impl ConcreteHostEnvironment {
         // Record the minted tokens as a negative usage (increases allowance)
         self.ctx.economics.mint(&recipient_did, ResourceType::Token, amount, &self.ctx.resource_ledger)
     }
+    
+    /// Transfer tokens from sender to recipient
+    /// Returns:
+    /// - 0 on success
+    /// - -1 on insufficient funds
+    /// - -2 on invalid DID
+    pub fn transfer_token(&self, sender_did_str: &str, recipient_did_str: &str, amount: u64) -> i32 {
+        // Parse the sender DID
+        let sender_did = match Did::from_str(sender_did_str) {
+            Ok(did) => did,
+            Err(_) => return -2, // Invalid sender DID
+        };
+        
+        // Parse the recipient DID
+        let recipient_did = match Did::from_str(recipient_did_str) {
+            Ok(did) => did,
+            Err(_) => return -2, // Invalid recipient DID
+        };
+        
+        // Transfer tokens between DIDs
+        self.ctx.economics.transfer(
+            &sender_did,
+            &recipient_did,
+            ResourceType::Token,
+            amount,
+            &self.ctx.resource_ledger
+        )
+    }
 } 

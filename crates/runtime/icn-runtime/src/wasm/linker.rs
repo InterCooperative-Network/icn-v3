@@ -78,6 +78,37 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
             }
         },
     )?;
+    
+    // Register the transfer token function
+    linker.func_wrap(
+        "icn_host",
+        "host_transfer_token",
+        |mut caller: Caller<'_, StoreData>, sender_ptr: i32, sender_len: i32, 
+                                           recipient_ptr: i32, recipient_len: i32, amount: u64| -> i32 {
+            // Get the host environment
+            let host = caller.data().host();
+            
+            // Read the sender DID string from WASM memory
+            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).expect("WASM module must export memory");
+            let mut sender_buffer = vec![0u8; sender_len as usize];
+            if memory.read(&mut caller, sender_ptr as usize, &mut sender_buffer).is_err() {
+                return -2; // Memory read error
+            }
+            
+            // Read the recipient DID string from WASM memory
+            let mut recipient_buffer = vec![0u8; recipient_len as usize];
+            if memory.read(&mut caller, recipient_ptr as usize, &mut recipient_buffer).is_err() {
+                return -2; // Memory read error
+            }
+            
+            // Convert to UTF-8 strings
+            match (String::from_utf8(sender_buffer), String::from_utf8(recipient_buffer)) {
+                (Ok(sender_did), Ok(recipient_did)) => 
+                    host.transfer_token(&sender_did, &recipient_did, amount),
+                _ => -2, // Invalid UTF-8
+            }
+        },
+    )?;
 
     Ok(())
 } 

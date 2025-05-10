@@ -193,6 +193,17 @@ pub enum ActionStep {
         /// Amount of resource
         amount: u64,
     },
+    /// Transfer tokens from one DID to another
+    TransferToken {
+        /// Token type being transferred
+        token_type: String,
+        /// Amount of tokens to transfer
+        amount: u64,
+        /// Sender DID
+        sender: String,
+        /// Recipient DID
+        recipient: String,
+    },
 }
 
 /// Represents the resource type for metered actions
