@@ -342,3 +342,8 @@ mod tests {
         assert_eq!(node, deserialized_node);
     }
 }
+
+pub mod mesh;
+
+// Reexport the public types
+pub use mesh::ReceiptNode;

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use host_abi::*;
 use icn_economics::ResourceType;
+use icn_mesh_receipts::ExecutionReceipt;
 use wasmtime::{Caller, Linker};
 use std::cell::RefCell;
 
@@ -113,6 +114,57 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
                 (Ok(sender_did), Ok(recipient_did)) => 
                     caller.data().host_mut().transfer_token(&sender_did, &recipient_did, amount),
                 _ => -2, // Invalid UTF-8
+            }
+        },
+    )?;
+    
+    // Register the anchor receipt function
+    linker.func_wrap(
+        "icn_host", 
+        "host_anchor_receipt", 
+        |mut caller: Caller<'_, StoreData>, ptr: u32, len: u32| -> i32 {
+            // Get the memory
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(mem) => mem,
+                None => return -3, // Memory not found
+            };
+            
+            // Read the receipt bytes from memory
+            let data = memory.data(&caller);
+            let start = ptr as usize;
+            let end = start + len as usize;
+            
+            // Check bounds
+            if end > data.len() {
+                return -2; // Out of bounds
+            }
+            
+            let bytes = &data[start..end];
+            
+            // Deserialize the receipt
+            let receipt: ExecutionReceipt = match serde_cbor::from_slice(bytes) {
+                Ok(r) => r,
+                Err(_) => return -1, // Deserialization error
+            };
+            
+            // We'll use a blocking approach here since wasmtime doesn't support async calls
+            // In a production system, this should be handled differently with proper async
+            let host_env = caller.data().host_mut();
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            
+            match runtime.block_on(host_env.anchor_receipt(receipt)) {
+                Ok(()) => 0, // Success
+                Err(e) => {
+                    use crate::host_environment::AnchorError;
+                    match e {
+                        AnchorError::ExecutorMismatch(_, _) => -10, // Executor mismatch
+                        AnchorError::InvalidSignature(_) => -11,     // Invalid signature
+                        AnchorError::SerializationError(_) => -12,   // Serialization error
+                        AnchorError::CidError(_) => -13,             // CID error
+                        AnchorError::DagStoreError(_) => -14,        // DAG store error
+                        AnchorError::MissingFederationId => -15,     // Missing federation ID
+                    }
+                }
             }
         },
     )?;

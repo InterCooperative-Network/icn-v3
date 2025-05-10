@@ -1,8 +1,35 @@
 use crate::context::RuntimeContext;
 use icn_economics::ResourceType;
 use icn_identity::Did;
+use icn_mesh_receipts::ExecutionReceipt;
+use icn_types::dag::ReceiptNode;
+use serde_cbor;
 use std::sync::Arc;
 use std::str::FromStr;
+use anyhow::Result;
+use thiserror::Error;
+
+/// Errors that can occur during receipt anchoring
+#[derive(Debug, Error)]
+pub enum AnchorError {
+    #[error("Executor mismatch: receipt's executor ({0}) does not match caller ({1})")]
+    ExecutorMismatch(String, String),
+    
+    #[error("Invalid signature: {0}")]
+    InvalidSignature(String),
+    
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+    
+    #[error("CID generation error: {0}")]
+    CidError(String),
+    
+    #[error("DAG store error: {0}")]
+    DagStoreError(String),
+    
+    #[error("Missing federation ID")]
+    MissingFederationId,
+}
 
 /// Concrete implementation of the host environment for WASM execution
 pub struct ConcreteHostEnvironment {
@@ -97,5 +124,78 @@ impl ConcreteHostEnvironment {
             amount,
             &self.ctx.resource_ledger
         )
+    }
+
+    /// Anchor a serialized ExecutionReceipt into the DAG.
+    pub async fn anchor_receipt(&self, receipt: ExecutionReceipt) -> Result<(), AnchorError> {
+        // 1. Verify the receipt is from the caller
+        if receipt.executor != self.caller_did {
+            return Err(AnchorError::ExecutorMismatch(
+                receipt.executor.to_string(),
+                self.caller_did.to_string()
+            ));
+        }
+        
+        // 2. Verify the receipt signature if one exists
+        if !receipt.signature.is_empty() {
+            // Convert signature bytes to Signature type
+            let sig = match icn_identity::Signature::from_bytes(&receipt.signature) {
+                Ok(s) => s,
+                Err(e) => return Err(AnchorError::InvalidSignature(e.to_string())),
+            };
+            
+            // Verify signature
+            let is_valid = match verify_receipt(&receipt, &sig) {
+                Ok(valid) => valid,
+                Err(e) => return Err(AnchorError::InvalidSignature(e.to_string())),
+            };
+            
+            if !is_valid {
+                return Err(AnchorError::InvalidSignature("Signature verification failed".to_string()));
+            }
+        }
+        
+        // 3. Generate CID for the receipt
+        let receipt_cid = receipt.cid()
+            .map_err(|e| AnchorError::CidError(e.to_string()))?;
+        
+        // 4. Get federation ID
+        let federation_id = self.ctx.federation_id.clone()
+            .ok_or(AnchorError::MissingFederationId)?;
+        
+        // 5. Serialize receipt to CBOR
+        let receipt_cbor = serde_cbor::to_vec(&receipt)
+            .map_err(|e| AnchorError::SerializationError(e.to_string()))?;
+        
+        // 6. Create a ReceiptNode
+        let receipt_node = ReceiptNode::new(
+            receipt_cid, 
+            receipt_cbor, 
+            federation_id
+        );
+        
+        // 7. Create a DAG node from the receipt node
+        let dag_node = icn_types::dag::DagNodeBuilder::new()
+            .content(serde_json::to_string(&receipt_node)
+                .map_err(|e| AnchorError::SerializationError(e.to_string()))?)
+            .event_type(icn_types::dag::DagEventType::Receipt)
+            .scope_id(format!("receipt/{}", receipt_cid))
+            .timestamp(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_millis() as u64)
+            .build()
+            .map_err(|e| AnchorError::DagStoreError(e.to_string()))?;
+        
+        // 8. Insert into receipt store
+        self.ctx.receipt_store.insert(dag_node)
+            .await
+            .map_err(|e| AnchorError::DagStoreError(e.to_string()))?;
+        
+        // Log success
+        tracing::info!("Anchored receipt for task: {}, receipt CID: {}", 
+            receipt.task_cid, receipt_cid);
+        
+        Ok(())
     }
 } 

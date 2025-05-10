@@ -10,10 +10,13 @@ anyhow = "1.0.75"
 thiserror = "1.0.50"
 serde = { version = "1.0.190", features = ["derive"] }
 serde_json = "1.0.108"
+serde_cbor = "0.11"
 log = "0.4.20"
+tracing = "0.1"
 icn-types = { path = "../../common/icn-types" }
 icn-identity = { path = "../../common/icn-identity" }
 icn-identity-core = { path = "../../common/icn-identity-core", optional = true }
+icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
 icn-core-vm = { path = "../icn-core-vm" }
 icn-economics = { path = "../../common/icn-economics" }
 host-abi = { path = "../host-abi" }
@@ -27,10 +30,12 @@ ed25519-dalek = "2.0"
 [dev-dependencies]
 icn-identity = { path = "../../common/icn-identity" }
 serde_json = "1.0"
+serde_cbor = "0.11"
 tempfile = "3.8"
 anyhow = "1.0"
 async-trait = "0.1"
 wat = "1.0"
+wasm-encoder = "0.31"
 
 [features]
 default = []

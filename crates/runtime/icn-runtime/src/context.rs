@@ -16,6 +16,9 @@ pub struct RuntimeContext {
     /// Shared DAG store for transaction and anchor operations
     pub dag_store: Arc<SharedDagStore>,
     
+    /// Shared DAG store for mesh receipts
+    pub receipt_store: Arc<SharedDagStore>,
+    
     /// Federation identifier
     pub federation_id: Option<String>,
     
@@ -37,6 +40,7 @@ impl RuntimeContext {
     pub fn new() -> Self {
         Self {
             dag_store: Arc::new(SharedDagStore::new()),
+            receipt_store: Arc::new(SharedDagStore::new()),
             federation_id: None,
             executor_id: None,
             trust_validator: None,
@@ -49,12 +53,19 @@ impl RuntimeContext {
     pub fn with_dag_store(dag_store: Arc<SharedDagStore>) -> Self {
         Self {
             dag_store,
+            receipt_store: Arc::new(SharedDagStore::new()),
             federation_id: None,
             executor_id: None,
             trust_validator: None,
             economics: Arc::new(Economics::new(ResourceAuthorizationPolicy::default())),
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Set the receipt store
+    pub fn with_receipt_store(mut self, receipt_store: Arc<SharedDagStore>) -> Self {
+        self.receipt_store = receipt_store;
+        self
     }
 
     /// Set the federation ID
@@ -101,6 +112,7 @@ impl Default for RuntimeContext {
 /// Builder pattern for RuntimeContext
 pub struct RuntimeContextBuilder {
     dag_store: Option<Arc<SharedDagStore>>,
+    receipt_store: Option<Arc<SharedDagStore>>,
     federation_id: Option<String>,
     executor_id: Option<String>,
     trust_validator: Option<Arc<TrustValidator>>,
@@ -112,6 +124,7 @@ impl RuntimeContextBuilder {
     pub fn new() -> Self {
         Self {
             dag_store: None,
+            receipt_store: None,
             federation_id: None,
             executor_id: None,
             trust_validator: None,
@@ -122,6 +135,12 @@ impl RuntimeContextBuilder {
     /// Set the DAG store
     pub fn with_dag_store(mut self, dag_store: Arc<SharedDagStore>) -> Self {
         self.dag_store = Some(dag_store);
+        self
+    }
+
+    /// Set the receipt store
+    pub fn with_receipt_store(mut self, receipt_store: Arc<SharedDagStore>) -> Self {
+        self.receipt_store = Some(receipt_store);
         self
     }
 
@@ -152,6 +171,7 @@ impl RuntimeContextBuilder {
     /// Build the RuntimeContext
     pub fn build(self) -> RuntimeContext {
         let dag_store = self.dag_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
+        let receipt_store = self.receipt_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
         let economics = self.economics.unwrap_or_else(|| {
             Arc::new(Economics::new(ResourceAuthorizationPolicy::default()))
         });
@@ -159,6 +179,7 @@ impl RuntimeContextBuilder {
 
         RuntimeContext {
             dag_store,
+            receipt_store,
             federation_id: self.federation_id,
             executor_id: self.executor_id,
             trust_validator: self.trust_validator,
