@@ -1,1 +1,75 @@
- 
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: icn
+      POSTGRES_PASSWORD: icn
+      POSTGRES_DB: icn_federation
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  node-1:
+    image: icn-runtime-node
+    build:
+      context: ../
+      dockerfile: Dockerfile.node
+    environment:
+      - NODE_ID=node-1
+      - DATABASE_URL=postgres://icn:icn@postgres:5432/icn_federation
+    ports:
+      - "7001:7000"
+    depends_on:
+      - postgres
+
+  node-2:
+    image: icn-runtime-node
+    build:
+      context: ../
+      dockerfile: Dockerfile.node
+    environment:
+      - NODE_ID=node-2
+      - DATABASE_URL=postgres://icn:icn@postgres:5432/icn_federation
+    ports:
+      - "7002:7000"
+    depends_on:
+      - postgres
+
+  node-3:
+    image: icn-runtime-node
+    build:
+      context: ../
+      dockerfile: Dockerfile.node
+    environment:
+      - NODE_ID=node-3
+      - DATABASE_URL=postgres://icn:icn@postgres:5432/icn_federation
+    ports:
+      - "7003:7000"
+    depends_on:
+      - postgres
+
+  agoranet:
+    image: icn-agoranet
+    build:
+      context: ../
+      dockerfile: Dockerfile.agoranet
+    ports:
+      - "8080:8080"
+    depends_on:
+      - node-1
+
+  verifier-api:
+    image: icn-verifier
+    build:
+      context: ../
+      dockerfile: Dockerfile.verifier
+    ports:
+      - "8090:8090"
+    depends_on:
+      - node-1
+
+volumes:
+  pgdata: 
