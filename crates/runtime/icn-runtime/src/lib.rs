@@ -4,6 +4,7 @@ use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext,
 #[cfg(feature = "legacy-identity")]
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
 use icn_identity::{TrustBundle, TrustValidationError, Did};
+use icn_economics::ResourceType;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -11,9 +12,18 @@ use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
-// Import the new context module
+// Import the context module
 mod context;
 pub use context::RuntimeContext;
+pub use context::RuntimeContextBuilder;
+
+// Import the host environment module
+mod host_environment;
+pub use host_environment::ConcreteHostEnvironment;
+
+// Import the wasm module
+mod wasm;
+pub use wasm::register_host_functions;
 
 /// Error types specific to the runtime
 #[derive(Error, Debug)]
@@ -471,6 +481,8 @@ impl Runtime {
 
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
     fn vm_context_to_host_context(&self, _vm_context: VmContext) -> HostContext {
+        // For now, just return a default context
+        // In the future, we should pass information from VmContext to HostContext
         HostContext::default()
     }
 
