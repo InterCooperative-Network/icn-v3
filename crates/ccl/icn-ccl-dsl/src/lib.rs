@@ -19,6 +19,8 @@ pub enum DslModule {
     MeteredAction(MeteredAction),
     /// A role definition module.
     Role(Role),
+    /// An action handler module, defining steps for a specific event.
+    ActionHandler(ActionHandler),
 }
 
 /// Canonically-typed proposal object (post-parse, pre-codegen).
@@ -117,6 +119,27 @@ pub enum RuleValue {
     List(Vec<RuleValue>),
     /// A map represented as a list of rules (key-value pairs).
     Map(Vec<Rule>),
+}
+
+/// Represents a handler for a specific event, containing a sequence of actions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionHandler {
+    pub event: String,
+    pub steps: Vec<ActionStep>,
+}
+
+/// Represents a single step within an ActionHandler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ActionStep {
+    Metered(MeteredAction),
+    Anchor(Anchor),
+}
+
+/// Represents a reference to an on-chain data anchor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnchorReference {
+    /// CID of the payload to anchor.
+    pub payload_cid: String,
 }
 
 #[cfg(test)]

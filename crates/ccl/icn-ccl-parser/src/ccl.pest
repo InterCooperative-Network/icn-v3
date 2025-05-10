@@ -18,7 +18,7 @@ function_call_args = { (value ~ ("," ~ value)*)? }
 function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
 
 // Value types
-value = { function_call | general_identifier | string_literal | number | boolean | duration | array | object }
+value = { function_call | general_identifier | string_literal | duration | number | boolean | array | object }
 array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
 object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
 object_pair = { (string_literal | identifier) ~ ":" ~ value }
@@ -36,6 +36,7 @@ if_statement = { "if" ~ comparison_expression ~ block ~ ("else" ~ block)? }
 statement = {
     organization_def |
     roles_def |
+    role_def |
     governance_def |
     membership_def |
     actions_def |

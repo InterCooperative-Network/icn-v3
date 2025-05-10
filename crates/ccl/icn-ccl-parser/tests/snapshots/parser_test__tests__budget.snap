@@ -1437,7 +1437,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: role_def,
                                                 span: Span {
                                                     str: "role \"member\" {\n    single_transaction_limit 100\n    monthly_limit 300\n    categories [\"community\"]\n  }",
                                                     start: 1115,
@@ -1445,16 +1445,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "role",
-                                                            start: 1115,
-                                                            end: 1119,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"member\"",
                                                             start: 1120,
@@ -1462,23 +1453,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"member\"",
-                                                                    start: 1120,
-                                                                    end: 1128,
+                                                                    str: "member",
+                                                                    start: 1121,
+                                                                    end: 1127,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "member",
-                                                                            start: 1121,
-                                                                            end: 1127,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -1679,7 +1660,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: role_def,
                                                 span: Span {
                                                     str: "role \"steward\" {\n    single_transaction_limit 500\n    monthly_limit 1500\n    categories [\"operations\", \"community\"]\n  }",
                                                     start: 1224,
@@ -1687,16 +1668,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "role",
-                                                            start: 1224,
-                                                            end: 1228,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"steward\"",
                                                             start: 1229,
@@ -1704,23 +1676,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"steward\"",
-                                                                    start: 1229,
-                                                                    end: 1238,
+                                                                    str: "steward",
+                                                                    start: 1230,
+                                                                    end: 1237,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "steward",
-                                                                            start: 1230,
-                                                                            end: 1237,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -1950,7 +1912,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: role_def,
                                                 span: Span {
                                                     str: "role \"finance_committee\" {\n    single_transaction_limit 5000\n    monthly_limit 15000\n    categories [\"operations\", \"projects\", \"community\"]\n  }",
                                                     start: 1349,
@@ -1958,16 +1920,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "role",
-                                                            start: 1349,
-                                                            end: 1353,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"finance_committee\"",
                                                             start: 1354,
@@ -1975,23 +1928,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"finance_committee\"",
-                                                                    start: 1354,
-                                                                    end: 1373,
+                                                                    str: "finance_committee",
+                                                                    start: 1355,
+                                                                    end: 1372,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "finance_committee",
-                                                                            start: 1355,
-                                                                            end: 1372,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },

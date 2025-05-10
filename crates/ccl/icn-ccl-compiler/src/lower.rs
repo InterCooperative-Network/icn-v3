@@ -1,4 +1,4 @@
-use icn_ccl_dsl::{DslModule, Proposal, Rule as DslRule, RuleValue as DslValue};
+use icn_ccl_dsl::{DslModule, Proposal, Role as DslAstRole, Rule as DslRule, RuleValue as DslValue};
 use icn_ccl_parser::{CclParser, Rule};
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
@@ -70,8 +70,34 @@ impl Lowerer {
             Rule::election_def => {
                 modules.push(DslModule::Proposal(self.lower_election(pair)?));
             }
+            Rule::roles_def => {
+                let pair_span = pair.as_span(); // Get span before move
+                // roles_def = { "roles" ~ block }
+                // The block itself is the first inner pair of roles_def
+                if let Some(block_pair) = pair.into_inner().next() {
+                    if block_pair.as_rule() == Rule::block {
+                        self.lower_roles_from_block(block_pair, modules)?;
+                    } else {
+                        // This case should ideally be prevented by the grammar if roles_def strictly expects a block.
+                        // If it can occur, it's an unexpected structure.
+                        return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError {
+                                message: format!("Expected block within roles_def, found {:?}", block_pair.as_rule()),
+                            },
+                            block_pair.as_span(),
+                        )));
+                    }
+                } else {
+                    // roles_def was empty or did not contain a block, also an error.
+                    return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: "roles_def is empty or missing a block".to_string(),
+                        },
+                        pair_span, // Use the stored span
+                    )));
+                }
+            }
             // Top-level definitions from election.ccl and other templates - no-op for now
-            Rule::roles_def |
             Rule::process_def |
             Rule::vacancies_def |
             Rule::actions_def |
@@ -98,6 +124,65 @@ impl Lowerer {
             }
         }
         Ok(())
+    }
+
+    fn lower_roles_from_block(&self, block_pair: Pair<'_, Rule>, modules: &mut Vec<DslModule>) -> Result<(), LowerError> {
+        // block_pair is Rule::block, containing statements
+        for statement_pair in block_pair.into_inner() {
+            if statement_pair.as_rule() == Rule::statement {
+                // A statement should have one inner actual definition
+                if let Some(inner_def_pair) = statement_pair.into_inner().next() {
+                    if inner_def_pair.as_rule() == Rule::role_def {
+                        let role_dsl = self.lower_single_role_def(inner_def_pair)?;
+                        modules.push(DslModule::Role(role_dsl));
+                    }
+                    // else: other statement types inside roles block (e.g., comments parsed as WHITESPACE, or other valid statements).
+                    // For now, we only care about role_def.
+                }
+            }
+            // else: could be WHITESPACE (comments) directly within the block if grammar allows.
+        }
+        Ok(())
+    }
+
+    fn lower_single_role_def(&self, role_def_pair: Pair<'_, Rule>) -> Result<DslAstRole, LowerError> {
+        // role_def = { "role" ~ string_literal ~ block }
+        let pair_span = role_def_pair.as_span(); // Span of the whole role_def for error reporting
+        let mut inner_role_pairs = role_def_pair.into_inner();
+
+        // First inner is string_literal (role name)
+        let role_name_pair = inner_role_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "Role definition missing name".to_string() },
+            pair_span, // Error points to the whole role_def
+        )))?;
+        // Ensure it's a string_literal as expected by grammar `role_def = { "role" ~ string_literal ~ block }`
+        // Note: role_name_pair.as_rule() might be Rule::inner_string if string_literal is silent.
+        // The grammar for string_literal is `${ """ ~ inner_string ~ """ }`.
+        // inner_string is `@ { ... }`. `as_str()` on `string_literal` includes quotes.
+        let role_name = role_name_pair.as_str().trim_matches('"').to_string();
+
+        // Second inner is block (role attributes)
+        let role_block_pair = inner_role_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: format!("Role definition for '{}' missing block", role_name) },
+            pair_span, // Error points to the whole role_def
+        )))?;
+
+        if role_block_pair.as_rule() != Rule::block {
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("Expected block for role '{}', found {:?}", role_name, role_block_pair.as_rule()),
+                },
+                role_block_pair.as_span(),
+            )));
+        }
+
+        let (description, attributes) = self.lower_block_common_fields(role_block_pair)?;
+
+        Ok(DslAstRole {
+            name: role_name,
+            description: if description.is_empty() { None } else { Some(description) },
+            attributes,
+        })
     }
 
     fn lower_block_common_fields(

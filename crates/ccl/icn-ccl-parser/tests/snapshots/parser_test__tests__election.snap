@@ -209,7 +209,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: role_def,
                                                 span: Span {
                                                     str: "role \"steward\" {\n    description \"Governance steward with administrative capabilities\"\n    term_length 365d // 1 year term\n    // term_limit 2 // Maximum consecutive terms // FIXME: CCL parsing issue\n    // seats 7 // Number of stewards // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 180d // Must be a member for 6 months\n      standing \"good\" // Must be in good standing\n    }\n  }",
                                                     start: 306,
@@ -217,16 +217,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "role",
-                                                            start: 306,
-                                                            end: 310,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"steward\"",
                                                             start: 311,
@@ -234,23 +225,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"steward\"",
-                                                                    start: 311,
-                                                                    end: 320,
+                                                                    str: "steward",
+                                                                    start: 312,
+                                                                    end: 319,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "steward",
-                                                                            start: 312,
-                                                                            end: 319,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -323,17 +304,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "term_length 365",
+                                                                    str: "term_length 365d // 1 year term\n    // term_limit 2 // Maximum consecutive terms // FIXME: CCL parsing issue\n    // seats 7 // Number of stewards // FIXME: CCL parsing issue\n    ",
                                                                     start: 397,
-                                                                    end: 412,
+                                                                    end: 575,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "term_length 365",
+                                                                            str: "term_length 365d // 1 year term\n    // term_limit 2 // Maximum consecutive terms // FIXME: CCL parsing issue\n    // seats 7 // Number of stewards // FIXME: CCL parsing issue\n    ",
                                                                             start: 397,
-                                                                            end: 412,
+                                                                            end: 575,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -348,17 +329,17 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "365",
+                                                                                    str: "365d",
                                                                                     start: 409,
-                                                                                    end: 412,
+                                                                                    end: 413,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "365",
+                                                                                            str: "365d",
                                                                                             start: 409,
-                                                                                            end: 412,
+                                                                                            end: 413,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
@@ -371,56 +352,27 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "d // 1 year term\n    // term_limit 2 // Maximum consecutive terms // FIXME: CCL parsing issue\n    // seats 7 // Number of stewards // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 180d // Must be a member for 6 months\n      standing \"good\" // Must be in good standing\n    }",
-                                                                    start: 412,
-                                                                    end: 709,
+                                                                    str: "requirements {\n      membership_duration 180d // Must be a member for 6 months\n      standing \"good\" // Must be in good standing\n    }\n  ",
+                                                                    start: 575,
+                                                                    end: 712,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "d // 1 year term\n    // term_limit 2 // Maximum consecutive terms // FIXME: CCL parsing issue\n    // seats 7 // Number of stewards // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 180d // Must be a member for 6 months\n      standing \"good\" // Must be in good standing\n    }",
-                                                                            start: 412,
-                                                                            end: 709,
+                                                                            str: "requirements {\n      membership_duration 180d // Must be a member for 6 months\n      standing \"good\" // Must be in good standing\n    }\n  ",
+                                                                            start: 575,
+                                                                            end: 712,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
-                                                                                    str: "d",
-                                                                                    start: 412,
-                                                                                    end: 413,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
-                                                                            Pair {
-                                                                                rule: value,
-                                                                                span: Span {
                                                                                     str: "requirements",
                                                                                     start: 575,
                                                                                     end: 587,
                                                                                 },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "requirements",
-                                                                                            start: 575,
-                                                                                            end: 587,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "requirements",
-                                                                                                    start: 575,
-                                                                                                    end: 587,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                ],
+                                                                                inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: block,
@@ -433,17 +385,17 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "membership_duration 180",
+                                                                                            str: "membership_duration 180d // Must be a member for 6 months\n      ",
                                                                                             start: 596,
-                                                                                            end: 619,
+                                                                                            end: 660,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "membership_duration 180",
+                                                                                                    str: "membership_duration 180d // Must be a member for 6 months\n      ",
                                                                                                     start: 596,
-                                                                                                    end: 619,
+                                                                                                    end: 660,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
@@ -458,17 +410,17 @@ expression: pairs_debug_string
                                                                                                     Pair {
                                                                                                         rule: value,
                                                                                                         span: Span {
-                                                                                                            str: "180",
+                                                                                                            str: "180d",
                                                                                                             start: 616,
-                                                                                                            end: 619,
+                                                                                                            end: 620,
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: number,
+                                                                                                                rule: duration,
                                                                                                                 span: Span {
-                                                                                                                    str: "180",
+                                                                                                                    str: "180d",
                                                                                                                     start: 616,
-                                                                                                                    end: 619,
+                                                                                                                    end: 620,
                                                                                                                 },
                                                                                                                 inner: [],
                                                                                                             },
@@ -481,79 +433,30 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "d // Must be a member for 6 months\n      standing ",
-                                                                                            start: 619,
-                                                                                            end: 669,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: any_statement,
-                                                                                                span: Span {
-                                                                                                    str: "d // Must be a member for 6 months\n      standing ",
-                                                                                                    start: 619,
-                                                                                                    end: 669,
-                                                                                                },
-                                                                                                inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "d",
-                                                                                                            start: 619,
-                                                                                                            end: 620,
-                                                                                                        },
-                                                                                                        inner: [],
-                                                                                                    },
-                                                                                                    Pair {
-                                                                                                        rule: value,
-                                                                                                        span: Span {
-                                                                                                            str: "standing",
-                                                                                                            start: 660,
-                                                                                                            end: 668,
-                                                                                                        },
-                                                                                                        inner: [
-                                                                                                            Pair {
-                                                                                                                rule: general_identifier,
-                                                                                                                span: Span {
-                                                                                                                    str: "standing",
-                                                                                                                    start: 660,
-                                                                                                                    end: 668,
-                                                                                                                },
-                                                                                                                inner: [
-                                                                                                                    Pair {
-                                                                                                                        rule: identifier,
-                                                                                                                        span: Span {
-                                                                                                                            str: "standing",
-                                                                                                                            start: 660,
-                                                                                                                            end: 668,
-                                                                                                                        },
-                                                                                                                        inner: [],
-                                                                                                                    },
-                                                                                                                ],
-                                                                                                            },
-                                                                                                        ],
-                                                                                                    },
-                                                                                                ],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                    Pair {
-                                                                                        rule: statement,
-                                                                                        span: Span {
-                                                                                            str: "\"good\" // Must be in good standing\n    ",
-                                                                                            start: 669,
+                                                                                            str: "standing \"good\" // Must be in good standing\n    ",
+                                                                                            start: 660,
                                                                                             end: 708,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "\"good\" // Must be in good standing\n    ",
-                                                                                                    start: 669,
+                                                                                                    str: "standing \"good\" // Must be in good standing\n    ",
+                                                                                                    start: 660,
                                                                                                     end: 708,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
-                                                                                                        rule: string_literal,
+                                                                                                        rule: identifier,
+                                                                                                        span: Span {
+                                                                                                            str: "standing",
+                                                                                                            start: 660,
+                                                                                                            end: 668,
+                                                                                                        },
+                                                                                                        inner: [],
+                                                                                                    },
+                                                                                                    Pair {
+                                                                                                        rule: value,
                                                                                                         span: Span {
                                                                                                             str: "\"good\"",
                                                                                                             start: 669,
@@ -561,13 +464,23 @@ expression: pairs_debug_string
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: inner_string,
+                                                                                                                rule: string_literal,
                                                                                                                 span: Span {
-                                                                                                                    str: "good",
-                                                                                                                    start: 670,
-                                                                                                                    end: 674,
+                                                                                                                    str: "\"good\"",
+                                                                                                                    start: 669,
+                                                                                                                    end: 675,
                                                                                                                 },
-                                                                                                                inner: [],
+                                                                                                                inner: [
+                                                                                                                    Pair {
+                                                                                                                        rule: inner_string,
+                                                                                                                        span: Span {
+                                                                                                                            str: "good",
+                                                                                                                            start: 670,
+                                                                                                                            end: 674,
+                                                                                                                        },
+                                                                                                                        inner: [],
+                                                                                                                    },
+                                                                                                                ],
                                                                                                             },
                                                                                                         ],
                                                                                                     },
@@ -596,7 +509,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: role_def,
                                                 span: Span {
                                                     str: "role \"finance_committee\" {\n    description \"Committee overseeing financial decisions\"\n    term_length 365d\n    // term_limit 2 // FIXME: CCL parsing issue\n    // seats 5 // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 365d // Must be a member for 1 year\n      standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    }\n  }",
                                                     start: 719,
@@ -604,16 +517,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "role",
-                                                            start: 719,
-                                                            end: 723,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"finance_committee\"",
                                                             start: 724,
@@ -621,23 +525,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"finance_committee\"",
-                                                                    start: 724,
-                                                                    end: 743,
+                                                                    str: "finance_committee",
+                                                                    start: 725,
+                                                                    end: 742,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "finance_committee",
-                                                                            start: 725,
-                                                                            end: 742,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -710,17 +604,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "term_length 365",
+                                                                    str: "term_length 365d\n    // term_limit 2 // FIXME: CCL parsing issue\n    // seats 5 // FIXME: CCL parsing issue\n    ",
                                                                     start: 809,
-                                                                    end: 824,
+                                                                    end: 921,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "term_length 365",
+                                                                            str: "term_length 365d\n    // term_limit 2 // FIXME: CCL parsing issue\n    // seats 5 // FIXME: CCL parsing issue\n    ",
                                                                             start: 809,
-                                                                            end: 824,
+                                                                            end: 921,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -735,17 +629,17 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "365",
+                                                                                    str: "365d",
                                                                                     start: 821,
-                                                                                    end: 824,
+                                                                                    end: 825,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "365",
+                                                                                            str: "365d",
                                                                                             start: 821,
-                                                                                            end: 824,
+                                                                                            end: 825,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
@@ -758,56 +652,27 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "d\n    // term_limit 2 // FIXME: CCL parsing issue\n    // seats 5 // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 365d // Must be a member for 1 year\n      standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    }",
-                                                                    start: 824,
-                                                                    end: 1095,
+                                                                    str: "requirements {\n      membership_duration 365d // Must be a member for 1 year\n      standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    }\n  ",
+                                                                    start: 921,
+                                                                    end: 1098,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "d\n    // term_limit 2 // FIXME: CCL parsing issue\n    // seats 5 // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 365d // Must be a member for 1 year\n      standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    }",
-                                                                            start: 824,
-                                                                            end: 1095,
+                                                                            str: "requirements {\n      membership_duration 365d // Must be a member for 1 year\n      standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    }\n  ",
+                                                                            start: 921,
+                                                                            end: 1098,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
-                                                                                    str: "d",
-                                                                                    start: 824,
-                                                                                    end: 825,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
-                                                                            Pair {
-                                                                                rule: value,
-                                                                                span: Span {
                                                                                     str: "requirements",
                                                                                     start: 921,
                                                                                     end: 933,
                                                                                 },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "requirements",
-                                                                                            start: 921,
-                                                                                            end: 933,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "requirements",
-                                                                                                    start: 921,
-                                                                                                    end: 933,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                ],
+                                                                                inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: block,
@@ -820,17 +685,17 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "membership_duration 365",
+                                                                                            str: "membership_duration 365d // Must be a member for 1 year\n      ",
                                                                                             start: 942,
-                                                                                            end: 965,
+                                                                                            end: 1004,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "membership_duration 365",
+                                                                                                    str: "membership_duration 365d // Must be a member for 1 year\n      ",
                                                                                                     start: 942,
-                                                                                                    end: 965,
+                                                                                                    end: 1004,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
@@ -845,17 +710,17 @@ expression: pairs_debug_string
                                                                                                     Pair {
                                                                                                         rule: value,
                                                                                                         span: Span {
-                                                                                                            str: "365",
+                                                                                                            str: "365d",
                                                                                                             start: 962,
-                                                                                                            end: 965,
+                                                                                                            end: 966,
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: number,
+                                                                                                                rule: duration,
                                                                                                                 span: Span {
-                                                                                                                    str: "365",
+                                                                                                                    str: "365d",
                                                                                                                     start: 962,
-                                                                                                                    end: 965,
+                                                                                                                    end: 966,
                                                                                                                 },
                                                                                                                 inner: [],
                                                                                                             },
@@ -868,79 +733,30 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "d // Must be a member for 1 year\n      standing ",
-                                                                                            start: 965,
-                                                                                            end: 1013,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: any_statement,
-                                                                                                span: Span {
-                                                                                                    str: "d // Must be a member for 1 year\n      standing ",
-                                                                                                    start: 965,
-                                                                                                    end: 1013,
-                                                                                                },
-                                                                                                inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "d",
-                                                                                                            start: 965,
-                                                                                                            end: 966,
-                                                                                                        },
-                                                                                                        inner: [],
-                                                                                                    },
-                                                                                                    Pair {
-                                                                                                        rule: value,
-                                                                                                        span: Span {
-                                                                                                            str: "standing",
-                                                                                                            start: 1004,
-                                                                                                            end: 1012,
-                                                                                                        },
-                                                                                                        inner: [
-                                                                                                            Pair {
-                                                                                                                rule: general_identifier,
-                                                                                                                span: Span {
-                                                                                                                    str: "standing",
-                                                                                                                    start: 1004,
-                                                                                                                    end: 1012,
-                                                                                                                },
-                                                                                                                inner: [
-                                                                                                                    Pair {
-                                                                                                                        rule: identifier,
-                                                                                                                        span: Span {
-                                                                                                                            str: "standing",
-                                                                                                                            start: 1004,
-                                                                                                                            end: 1012,
-                                                                                                                        },
-                                                                                                                        inner: [],
-                                                                                                                    },
-                                                                                                                ],
-                                                                                                            },
-                                                                                                        ],
-                                                                                                    },
-                                                                                                ],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                    Pair {
-                                                                                        rule: statement,
-                                                                                        span: Span {
-                                                                                            str: "\"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    ",
-                                                                                            start: 1013,
+                                                                                            str: "standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    ",
+                                                                                            start: 1004,
                                                                                             end: 1094,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "\"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    ",
-                                                                                                    start: 1013,
+                                                                                                    str: "standing \"good\"\n      // skills [\"finance\", \"accounting\"] // FIXME: CCL parsing issue\n    ",
+                                                                                                    start: 1004,
                                                                                                     end: 1094,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
-                                                                                                        rule: string_literal,
+                                                                                                        rule: identifier,
+                                                                                                        span: Span {
+                                                                                                            str: "standing",
+                                                                                                            start: 1004,
+                                                                                                            end: 1012,
+                                                                                                        },
+                                                                                                        inner: [],
+                                                                                                    },
+                                                                                                    Pair {
+                                                                                                        rule: value,
                                                                                                         span: Span {
                                                                                                             str: "\"good\"",
                                                                                                             start: 1013,
@@ -948,13 +764,23 @@ expression: pairs_debug_string
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: inner_string,
+                                                                                                                rule: string_literal,
                                                                                                                 span: Span {
-                                                                                                                    str: "good",
-                                                                                                                    start: 1014,
-                                                                                                                    end: 1018,
+                                                                                                                    str: "\"good\"",
+                                                                                                                    start: 1013,
+                                                                                                                    end: 1019,
                                                                                                                 },
-                                                                                                                inner: [],
+                                                                                                                inner: [
+                                                                                                                    Pair {
+                                                                                                                        rule: inner_string,
+                                                                                                                        span: Span {
+                                                                                                                            str: "good",
+                                                                                                                            start: 1014,
+                                                                                                                            end: 1018,
+                                                                                                                        },
+                                                                                                                        inner: [],
+                                                                                                                    },
+                                                                                                                ],
                                                                                                             },
                                                                                                         ],
                                                                                                     },
@@ -983,7 +809,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: role_def,
                                                 span: Span {
                                                     str: "role \"community_coordinator\" {\n    description \"Facilitates community engagement and outreach\"\n    term_length 180d // 6 month term\n    // term_limit 4 // Can serve up to 2 years consecutively // FIXME: CCL parsing issue\n    // seats 3 // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 90d // Must be a member for 3 months\n      standing \"good\"\n    }\n  }",
                                                     start: 1105,
@@ -991,16 +817,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "role",
-                                                            start: 1105,
-                                                            end: 1109,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"community_coordinator\"",
                                                             start: 1110,
@@ -1008,23 +825,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"community_coordinator\"",
-                                                                    start: 1110,
-                                                                    end: 1133,
+                                                                    str: "community_coordinator",
+                                                                    start: 1111,
+                                                                    end: 1132,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "community_coordinator",
-                                                                            start: 1111,
-                                                                            end: 1132,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -1097,17 +904,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "term_length 180",
+                                                                    str: "term_length 180d // 6 month term\n    // term_limit 4 // Can serve up to 2 years consecutively // FIXME: CCL parsing issue\n    // seats 3 // FIXME: CCL parsing issue\n    ",
                                                                     start: 1204,
-                                                                    end: 1219,
+                                                                    end: 1373,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "term_length 180",
+                                                                            str: "term_length 180d // 6 month term\n    // term_limit 4 // Can serve up to 2 years consecutively // FIXME: CCL parsing issue\n    // seats 3 // FIXME: CCL parsing issue\n    ",
                                                                             start: 1204,
-                                                                            end: 1219,
+                                                                            end: 1373,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -1122,17 +929,17 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "180",
+                                                                                    str: "180d",
                                                                                     start: 1216,
-                                                                                    end: 1219,
+                                                                                    end: 1220,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "180",
+                                                                                            str: "180d",
                                                                                             start: 1216,
-                                                                                            end: 1219,
+                                                                                            end: 1220,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
@@ -1145,56 +952,27 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "d // 6 month term\n    // term_limit 4 // Can serve up to 2 years consecutively // FIXME: CCL parsing issue\n    // seats 3 // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 90d // Must be a member for 3 months\n      standing \"good\"\n    }",
-                                                                    start: 1219,
-                                                                    end: 1478,
+                                                                    str: "requirements {\n      membership_duration 90d // Must be a member for 3 months\n      standing \"good\"\n    }\n  ",
+                                                                    start: 1373,
+                                                                    end: 1481,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "d // 6 month term\n    // term_limit 4 // Can serve up to 2 years consecutively // FIXME: CCL parsing issue\n    // seats 3 // FIXME: CCL parsing issue\n    requirements {\n      membership_duration 90d // Must be a member for 3 months\n      standing \"good\"\n    }",
-                                                                            start: 1219,
-                                                                            end: 1478,
+                                                                            str: "requirements {\n      membership_duration 90d // Must be a member for 3 months\n      standing \"good\"\n    }\n  ",
+                                                                            start: 1373,
+                                                                            end: 1481,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
-                                                                                    str: "d",
-                                                                                    start: 1219,
-                                                                                    end: 1220,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
-                                                                            Pair {
-                                                                                rule: value,
-                                                                                span: Span {
                                                                                     str: "requirements",
                                                                                     start: 1373,
                                                                                     end: 1385,
                                                                                 },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "requirements",
-                                                                                            start: 1373,
-                                                                                            end: 1385,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "requirements",
-                                                                                                    start: 1373,
-                                                                                                    end: 1385,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                ],
+                                                                                inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: block,
@@ -1207,17 +985,17 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "membership_duration 90",
+                                                                                            str: "membership_duration 90d // Must be a member for 3 months\n      ",
                                                                                             start: 1394,
-                                                                                            end: 1416,
+                                                                                            end: 1457,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "membership_duration 90",
+                                                                                                    str: "membership_duration 90d // Must be a member for 3 months\n      ",
                                                                                                     start: 1394,
-                                                                                                    end: 1416,
+                                                                                                    end: 1457,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
@@ -1232,17 +1010,17 @@ expression: pairs_debug_string
                                                                                                     Pair {
                                                                                                         rule: value,
                                                                                                         span: Span {
-                                                                                                            str: "90",
+                                                                                                            str: "90d",
                                                                                                             start: 1414,
-                                                                                                            end: 1416,
+                                                                                                            end: 1417,
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: number,
+                                                                                                                rule: duration,
                                                                                                                 span: Span {
-                                                                                                                    str: "90",
+                                                                                                                    str: "90d",
                                                                                                                     start: 1414,
-                                                                                                                    end: 1416,
+                                                                                                                    end: 1417,
                                                                                                                 },
                                                                                                                 inner: [],
                                                                                                             },
@@ -1255,79 +1033,30 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "d // Must be a member for 3 months\n      standing ",
-                                                                                            start: 1416,
-                                                                                            end: 1466,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: any_statement,
-                                                                                                span: Span {
-                                                                                                    str: "d // Must be a member for 3 months\n      standing ",
-                                                                                                    start: 1416,
-                                                                                                    end: 1466,
-                                                                                                },
-                                                                                                inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "d",
-                                                                                                            start: 1416,
-                                                                                                            end: 1417,
-                                                                                                        },
-                                                                                                        inner: [],
-                                                                                                    },
-                                                                                                    Pair {
-                                                                                                        rule: value,
-                                                                                                        span: Span {
-                                                                                                            str: "standing",
-                                                                                                            start: 1457,
-                                                                                                            end: 1465,
-                                                                                                        },
-                                                                                                        inner: [
-                                                                                                            Pair {
-                                                                                                                rule: general_identifier,
-                                                                                                                span: Span {
-                                                                                                                    str: "standing",
-                                                                                                                    start: 1457,
-                                                                                                                    end: 1465,
-                                                                                                                },
-                                                                                                                inner: [
-                                                                                                                    Pair {
-                                                                                                                        rule: identifier,
-                                                                                                                        span: Span {
-                                                                                                                            str: "standing",
-                                                                                                                            start: 1457,
-                                                                                                                            end: 1465,
-                                                                                                                        },
-                                                                                                                        inner: [],
-                                                                                                                    },
-                                                                                                                ],
-                                                                                                            },
-                                                                                                        ],
-                                                                                                    },
-                                                                                                ],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                    Pair {
-                                                                                        rule: statement,
-                                                                                        span: Span {
-                                                                                            str: "\"good\"\n    ",
-                                                                                            start: 1466,
+                                                                                            str: "standing \"good\"\n    ",
+                                                                                            start: 1457,
                                                                                             end: 1477,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "\"good\"\n    ",
-                                                                                                    start: 1466,
+                                                                                                    str: "standing \"good\"\n    ",
+                                                                                                    start: 1457,
                                                                                                     end: 1477,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
-                                                                                                        rule: string_literal,
+                                                                                                        rule: identifier,
+                                                                                                        span: Span {
+                                                                                                            str: "standing",
+                                                                                                            start: 1457,
+                                                                                                            end: 1465,
+                                                                                                        },
+                                                                                                        inner: [],
+                                                                                                    },
+                                                                                                    Pair {
+                                                                                                        rule: value,
                                                                                                         span: Span {
                                                                                                             str: "\"good\"",
                                                                                                             start: 1466,
@@ -1335,13 +1064,23 @@ expression: pairs_debug_string
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: inner_string,
+                                                                                                                rule: string_literal,
                                                                                                                 span: Span {
-                                                                                                                    str: "good",
-                                                                                                                    start: 1467,
-                                                                                                                    end: 1471,
+                                                                                                                    str: "\"good\"",
+                                                                                                                    start: 1466,
+                                                                                                                    end: 1472,
                                                                                                                 },
-                                                                                                                inner: [],
+                                                                                                                inner: [
+                                                                                                                    Pair {
+                                                                                                                        rule: inner_string,
+                                                                                                                        span: Span {
+                                                                                                                            str: "good",
+                                                                                                                            start: 1467,
+                                                                                                                            end: 1471,
+                                                                                                                        },
+                                                                                                                        inner: [],
+                                                                                                                    },
+                                                                                                                ],
                                                                                                             },
                                                                                                         ],
                                                                                                     },
@@ -1427,17 +1166,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "duration 14",
+                                                                    str: "duration 14d\n    ",
                                                                     start: 1568,
-                                                                    end: 1579,
+                                                                    end: 1585,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "duration 14",
+                                                                            str: "duration 14d\n    ",
                                                                             start: 1568,
-                                                                            end: 1579,
+                                                                            end: 1585,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -1452,17 +1191,17 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "14",
+                                                                                    str: "14d",
                                                                                     start: 1577,
-                                                                                    end: 1579,
+                                                                                    end: 1580,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "14",
+                                                                                            str: "14d",
                                                                                             start: 1577,
-                                                                                            end: 1579,
+                                                                                            end: 1580,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
@@ -1475,50 +1214,50 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "d\n    self_nomination ",
-                                                                    start: 1579,
-                                                                    end: 1601,
+                                                                    str: "self_nomination allowed\n    ",
+                                                                    start: 1585,
+                                                                    end: 1613,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "d\n    self_nomination ",
-                                                                            start: 1579,
-                                                                            end: 1601,
+                                                                            str: "self_nomination allowed\n    ",
+                                                                            start: 1585,
+                                                                            end: 1613,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
-                                                                                    str: "d",
-                                                                                    start: 1579,
-                                                                                    end: 1580,
+                                                                                    str: "self_nomination",
+                                                                                    start: 1585,
+                                                                                    end: 1600,
                                                                                 },
                                                                                 inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "self_nomination",
-                                                                                    start: 1585,
-                                                                                    end: 1600,
+                                                                                    str: "allowed",
+                                                                                    start: 1601,
+                                                                                    end: 1608,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
                                                                                         rule: general_identifier,
                                                                                         span: Span {
-                                                                                            str: "self_nomination",
-                                                                                            start: 1585,
-                                                                                            end: 1600,
+                                                                                            str: "allowed",
+                                                                                            start: 1601,
+                                                                                            end: 1608,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: identifier,
                                                                                                 span: Span {
-                                                                                                    str: "self_nomination",
-                                                                                                    start: 1585,
-                                                                                                    end: 1600,
+                                                                                                    str: "allowed",
+                                                                                                    start: 1601,
+                                                                                                    end: 1608,
                                                                                                 },
                                                                                                 inner: [],
                                                                                             },
@@ -1533,56 +1272,27 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "allowed\n    peer_nomination {\n      allowed true\n      seconds_required 2 // Requires two other members to second\n    }",
-                                                                    start: 1601,
-                                                                    end: 1720,
+                                                                    str: "peer_nomination {\n      allowed true\n      seconds_required 2 // Requires two other members to second\n    }\n    ",
+                                                                    start: 1613,
+                                                                    end: 1725,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "allowed\n    peer_nomination {\n      allowed true\n      seconds_required 2 // Requires two other members to second\n    }",
-                                                                            start: 1601,
-                                                                            end: 1720,
+                                                                            str: "peer_nomination {\n      allowed true\n      seconds_required 2 // Requires two other members to second\n    }\n    ",
+                                                                            start: 1613,
+                                                                            end: 1725,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
-                                                                                    str: "allowed",
-                                                                                    start: 1601,
-                                                                                    end: 1608,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
-                                                                            Pair {
-                                                                                rule: value,
-                                                                                span: Span {
                                                                                     str: "peer_nomination",
                                                                                     start: 1613,
                                                                                     end: 1628,
                                                                                 },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "peer_nomination",
-                                                                                            start: 1613,
-                                                                                            end: 1628,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "peer_nomination",
-                                                                                                    start: 1613,
-                                                                                                    end: 1628,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                ],
+                                                                                inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: block,
@@ -1804,17 +1514,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "duration 14",
+                                                                    str: "duration 14d\n    ",
                                                                     start: 1796,
-                                                                    end: 1807,
+                                                                    end: 1813,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "duration 14",
+                                                                            str: "duration 14d\n    ",
                                                                             start: 1796,
-                                                                            end: 1807,
+                                                                            end: 1813,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -1829,17 +1539,17 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "14",
+                                                                                    str: "14d",
                                                                                     start: 1805,
-                                                                                    end: 1807,
+                                                                                    end: 1808,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "14",
+                                                                                            str: "14d",
                                                                                             start: 1805,
-                                                                                            end: 1807,
+                                                                                            end: 1808,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
@@ -1852,108 +1562,50 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "d\n    statement_allowed ",
-                                                                    start: 1807,
-                                                                    end: 1831,
+                                                                    str: "statement_allowed true\n    // max_statement_length 2000 // characters // FIXME: CCL parsing issue\n    ",
+                                                                    start: 1813,
+                                                                    end: 1915,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "d\n    statement_allowed ",
-                                                                            start: 1807,
-                                                                            end: 1831,
+                                                                            str: "statement_allowed true\n    // max_statement_length 2000 // characters // FIXME: CCL parsing issue\n    ",
+                                                                            start: 1813,
+                                                                            end: 1915,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "d",
-                                                                                    start: 1807,
-                                                                                    end: 1808,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
-                                                                            Pair {
-                                                                                rule: value,
                                                                                 span: Span {
                                                                                     str: "statement_allowed",
                                                                                     start: 1813,
                                                                                     end: 1830,
                                                                                 },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "statement_allowed",
-                                                                                            start: 1813,
-                                                                                            end: 1830,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "statement_allowed",
-                                                                                                    start: 1813,
-                                                                                                    end: 1830,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                ],
-                                                                            },
-                                                                        ],
-                                                                    },
-                                                                ],
-                                                            },
-                                                            Pair {
-                                                                rule: statement,
-                                                                span: Span {
-                                                                    str: "true\n    // max_statement_length 2000 // characters // FIXME: CCL parsing issue\n    q_and_a_session ",
-                                                                    start: 1831,
-                                                                    end: 1931,
-                                                                },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: any_statement,
-                                                                        span: Span {
-                                                                            str: "true\n    // max_statement_length 2000 // characters // FIXME: CCL parsing issue\n    q_and_a_session ",
-                                                                            start: 1831,
-                                                                            end: 1931,
-                                                                        },
-                                                                        inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "true",
-                                                                                    start: 1831,
-                                                                                    end: 1835,
-                                                                                },
                                                                                 inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "q_and_a_session",
-                                                                                    start: 1915,
-                                                                                    end: 1930,
+                                                                                    str: "true",
+                                                                                    start: 1831,
+                                                                                    end: 1835,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
                                                                                         rule: general_identifier,
                                                                                         span: Span {
-                                                                                            str: "q_and_a_session",
-                                                                                            start: 1915,
-                                                                                            end: 1930,
+                                                                                            str: "true",
+                                                                                            start: 1831,
+                                                                                            end: 1835,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: identifier,
                                                                                                 span: Span {
-                                                                                                    str: "q_and_a_session",
-                                                                                                    start: 1915,
-                                                                                                    end: 1930,
+                                                                                                    str: "true",
+                                                                                                    start: 1831,
+                                                                                                    end: 1835,
                                                                                                 },
                                                                                                 inner: [],
                                                                                             },
@@ -1968,27 +1620,56 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "required\n  ",
-                                                                    start: 1931,
+                                                                    str: "q_and_a_session required\n  ",
+                                                                    start: 1915,
                                                                     end: 1942,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "required\n  ",
-                                                                            start: 1931,
+                                                                            str: "q_and_a_session required\n  ",
+                                                                            start: 1915,
                                                                             end: 1942,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
+                                                                                    str: "q_and_a_session",
+                                                                                    start: 1915,
+                                                                                    end: 1930,
+                                                                                },
+                                                                                inner: [],
+                                                                            },
+                                                                            Pair {
+                                                                                rule: value,
+                                                                                span: Span {
                                                                                     str: "required",
                                                                                     start: 1931,
                                                                                     end: 1939,
                                                                                 },
-                                                                                inner: [],
+                                                                                inner: [
+                                                                                    Pair {
+                                                                                        rule: general_identifier,
+                                                                                        span: Span {
+                                                                                            str: "required",
+                                                                                            start: 1931,
+                                                                                            end: 1939,
+                                                                                        },
+                                                                                        inner: [
+                                                                                            Pair {
+                                                                                                rule: identifier,
+                                                                                                span: Span {
+                                                                                                    str: "required",
+                                                                                                    start: 1931,
+                                                                                                    end: 1939,
+                                                                                                },
+                                                                                                inner: [],
+                                                                                            },
+                                                                                        ],
+                                                                                    },
+                                                                                ],
                                                                             },
                                                                         ],
                                                                     },
@@ -2036,17 +1717,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "duration 7",
+                                                                    str: "duration 7d\n    ",
                                                                     start: 1980,
-                                                                    end: 1990,
+                                                                    end: 1996,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "duration 7",
+                                                                            str: "duration 7d\n    ",
                                                                             start: 1980,
-                                                                            end: 1990,
+                                                                            end: 1996,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -2061,17 +1742,17 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "7",
+                                                                                    str: "7d",
                                                                                     start: 1989,
-                                                                                    end: 1990,
+                                                                                    end: 1991,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "7",
+                                                                                            str: "7d",
                                                                                             start: 1989,
-                                                                                            end: 1990,
+                                                                                            end: 1991,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
@@ -2084,79 +1765,30 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "d\n    method ",
-                                                                    start: 1990,
-                                                                    end: 2003,
+                                                                    str: "method \"single_transferable_vote\"\n    ",
+                                                                    start: 1996,
+                                                                    end: 2034,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "d\n    method ",
-                                                                            start: 1990,
-                                                                            end: 2003,
+                                                                            str: "method \"single_transferable_vote\"\n    ",
+                                                                            start: 1996,
+                                                                            end: 2034,
                                                                         },
                                                                         inner: [
                                                                             Pair {
                                                                                 rule: identifier,
                                                                                 span: Span {
-                                                                                    str: "d",
-                                                                                    start: 1990,
-                                                                                    end: 1991,
+                                                                                    str: "method",
+                                                                                    start: 1996,
+                                                                                    end: 2002,
                                                                                 },
                                                                                 inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: value,
-                                                                                span: Span {
-                                                                                    str: "method",
-                                                                                    start: 1996,
-                                                                                    end: 2002,
-                                                                                },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "method",
-                                                                                            start: 1996,
-                                                                                            end: 2002,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "method",
-                                                                                                    start: 1996,
-                                                                                                    end: 2002,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                ],
-                                                                            },
-                                                                        ],
-                                                                    },
-                                                                ],
-                                                            },
-                                                            Pair {
-                                                                rule: statement,
-                                                                span: Span {
-                                                                    str: "\"single_transferable_vote\"\n    eligibility {\n      membership_duration 30d // Must be a member for at least 30 days to vote\n      standing \"good\"\n    }",
-                                                                    start: 2003,
-                                                                    end: 2154,
-                                                                },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: any_statement,
-                                                                        span: Span {
-                                                                            str: "\"single_transferable_vote\"\n    eligibility {\n      membership_duration 30d // Must be a member for at least 30 days to vote\n      standing \"good\"\n    }",
-                                                                            start: 2003,
-                                                                            end: 2154,
-                                                                        },
-                                                                        inner: [
-                                                                            Pair {
-                                                                                rule: string_literal,
                                                                                 span: Span {
                                                                                     str: "\"single_transferable_vote\"",
                                                                                     start: 2003,
@@ -2164,44 +1796,54 @@ expression: pairs_debug_string
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: inner_string,
+                                                                                        rule: string_literal,
                                                                                         span: Span {
-                                                                                            str: "single_transferable_vote",
-                                                                                            start: 2004,
-                                                                                            end: 2028,
-                                                                                        },
-                                                                                        inner: [],
-                                                                                    },
-                                                                                ],
-                                                                            },
-                                                                            Pair {
-                                                                                rule: value,
-                                                                                span: Span {
-                                                                                    str: "eligibility",
-                                                                                    start: 2034,
-                                                                                    end: 2045,
-                                                                                },
-                                                                                inner: [
-                                                                                    Pair {
-                                                                                        rule: general_identifier,
-                                                                                        span: Span {
-                                                                                            str: "eligibility",
-                                                                                            start: 2034,
-                                                                                            end: 2045,
+                                                                                            str: "\"single_transferable_vote\"",
+                                                                                            start: 2003,
+                                                                                            end: 2029,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
-                                                                                                rule: identifier,
+                                                                                                rule: inner_string,
                                                                                                 span: Span {
-                                                                                                    str: "eligibility",
-                                                                                                    start: 2034,
-                                                                                                    end: 2045,
+                                                                                                    str: "single_transferable_vote",
+                                                                                                    start: 2004,
+                                                                                                    end: 2028,
                                                                                                 },
                                                                                                 inner: [],
                                                                                             },
                                                                                         ],
                                                                                     },
                                                                                 ],
+                                                                            },
+                                                                        ],
+                                                                    },
+                                                                ],
+                                                            },
+                                                            Pair {
+                                                                rule: statement,
+                                                                span: Span {
+                                                                    str: "eligibility {\n      membership_duration 30d // Must be a member for at least 30 days to vote\n      standing \"good\"\n    }\n    ",
+                                                                    start: 2034,
+                                                                    end: 2159,
+                                                                },
+                                                                inner: [
+                                                                    Pair {
+                                                                        rule: any_statement,
+                                                                        span: Span {
+                                                                            str: "eligibility {\n      membership_duration 30d // Must be a member for at least 30 days to vote\n      standing \"good\"\n    }\n    ",
+                                                                            start: 2034,
+                                                                            end: 2159,
+                                                                        },
+                                                                        inner: [
+                                                                            Pair {
+                                                                                rule: identifier,
+                                                                                span: Span {
+                                                                                    str: "eligibility",
+                                                                                    start: 2034,
+                                                                                    end: 2045,
+                                                                                },
+                                                                                inner: [],
                                                                             },
                                                                             Pair {
                                                                                 rule: block,
@@ -2214,17 +1856,17 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "membership_duration 30",
+                                                                                            str: "membership_duration 30d // Must be a member for at least 30 days to vote\n      ",
                                                                                             start: 2054,
-                                                                                            end: 2076,
+                                                                                            end: 2133,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "membership_duration 30",
+                                                                                                    str: "membership_duration 30d // Must be a member for at least 30 days to vote\n      ",
                                                                                                     start: 2054,
-                                                                                                    end: 2076,
+                                                                                                    end: 2133,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
@@ -2239,17 +1881,17 @@ expression: pairs_debug_string
                                                                                                     Pair {
                                                                                                         rule: value,
                                                                                                         span: Span {
-                                                                                                            str: "30",
+                                                                                                            str: "30d",
                                                                                                             start: 2074,
-                                                                                                            end: 2076,
+                                                                                                            end: 2077,
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: number,
+                                                                                                                rule: duration,
                                                                                                                 span: Span {
-                                                                                                                    str: "30",
+                                                                                                                    str: "30d",
                                                                                                                     start: 2074,
-                                                                                                                    end: 2076,
+                                                                                                                    end: 2077,
                                                                                                                 },
                                                                                                                 inner: [],
                                                                                                             },
@@ -2262,79 +1904,30 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "d // Must be a member for at least 30 days to vote\n      standing ",
-                                                                                            start: 2076,
-                                                                                            end: 2142,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: any_statement,
-                                                                                                span: Span {
-                                                                                                    str: "d // Must be a member for at least 30 days to vote\n      standing ",
-                                                                                                    start: 2076,
-                                                                                                    end: 2142,
-                                                                                                },
-                                                                                                inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "d",
-                                                                                                            start: 2076,
-                                                                                                            end: 2077,
-                                                                                                        },
-                                                                                                        inner: [],
-                                                                                                    },
-                                                                                                    Pair {
-                                                                                                        rule: value,
-                                                                                                        span: Span {
-                                                                                                            str: "standing",
-                                                                                                            start: 2133,
-                                                                                                            end: 2141,
-                                                                                                        },
-                                                                                                        inner: [
-                                                                                                            Pair {
-                                                                                                                rule: general_identifier,
-                                                                                                                span: Span {
-                                                                                                                    str: "standing",
-                                                                                                                    start: 2133,
-                                                                                                                    end: 2141,
-                                                                                                                },
-                                                                                                                inner: [
-                                                                                                                    Pair {
-                                                                                                                        rule: identifier,
-                                                                                                                        span: Span {
-                                                                                                                            str: "standing",
-                                                                                                                            start: 2133,
-                                                                                                                            end: 2141,
-                                                                                                                        },
-                                                                                                                        inner: [],
-                                                                                                                    },
-                                                                                                                ],
-                                                                                                            },
-                                                                                                        ],
-                                                                                                    },
-                                                                                                ],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                    Pair {
-                                                                                        rule: statement,
-                                                                                        span: Span {
-                                                                                            str: "\"good\"\n    ",
-                                                                                            start: 2142,
+                                                                                            str: "standing \"good\"\n    ",
+                                                                                            start: 2133,
                                                                                             end: 2153,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "\"good\"\n    ",
-                                                                                                    start: 2142,
+                                                                                                    str: "standing \"good\"\n    ",
+                                                                                                    start: 2133,
                                                                                                     end: 2153,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
-                                                                                                        rule: string_literal,
+                                                                                                        rule: identifier,
+                                                                                                        span: Span {
+                                                                                                            str: "standing",
+                                                                                                            start: 2133,
+                                                                                                            end: 2141,
+                                                                                                        },
+                                                                                                        inner: [],
+                                                                                                    },
+                                                                                                    Pair {
+                                                                                                        rule: value,
                                                                                                         span: Span {
                                                                                                             str: "\"good\"",
                                                                                                             start: 2142,
@@ -2342,13 +1935,23 @@ expression: pairs_debug_string
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: inner_string,
+                                                                                                                rule: string_literal,
                                                                                                                 span: Span {
-                                                                                                                    str: "good",
-                                                                                                                    start: 2143,
-                                                                                                                    end: 2147,
+                                                                                                                    str: "\"good\"",
+                                                                                                                    start: 2142,
+                                                                                                                    end: 2148,
                                                                                                                 },
-                                                                                                                inner: [],
+                                                                                                                inner: [
+                                                                                                                    Pair {
+                                                                                                                        rule: inner_string,
+                                                                                                                        span: Span {
+                                                                                                                            str: "good",
+                                                                                                                            start: 2143,
+                                                                                                                            end: 2147,
+                                                                                                                        },
+                                                                                                                        inner: [],
+                                                                                                                    },
+                                                                                                                ],
                                                                                                             },
                                                                                                         ],
                                                                                                     },
@@ -2452,17 +2055,17 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "publication_delay 1",
+                                                                    str: "publication_delay 1d // Results published 1 day after voting closes\n    // transition_period 14d // Two weeks for handover // FIXME: CCL parsing issue\n  ",
                                                                     start: 2251,
-                                                                    end: 2270,
+                                                                    end: 2404,
                                                                 },
                                                                 inner: [
                                                                     Pair {
                                                                         rule: any_statement,
                                                                         span: Span {
-                                                                            str: "publication_delay 1",
+                                                                            str: "publication_delay 1d // Results published 1 day after voting closes\n    // transition_period 14d // Two weeks for handover // FIXME: CCL parsing issue\n  ",
                                                                             start: 2251,
-                                                                            end: 2270,
+                                                                            end: 2404,
                                                                         },
                                                                         inner: [
                                                                             Pair {
@@ -2477,50 +2080,21 @@ expression: pairs_debug_string
                                                                             Pair {
                                                                                 rule: value,
                                                                                 span: Span {
-                                                                                    str: "1",
+                                                                                    str: "1d",
                                                                                     start: 2269,
-                                                                                    end: 2270,
+                                                                                    end: 2271,
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: number,
+                                                                                        rule: duration,
                                                                                         span: Span {
-                                                                                            str: "1",
+                                                                                            str: "1d",
                                                                                             start: 2269,
-                                                                                            end: 2270,
+                                                                                            end: 2271,
                                                                                         },
                                                                                         inner: [],
                                                                                     },
                                                                                 ],
-                                                                            },
-                                                                        ],
-                                                                    },
-                                                                ],
-                                                            },
-                                                            Pair {
-                                                                rule: statement,
-                                                                span: Span {
-                                                                    str: "d // Results published 1 day after voting closes\n    // transition_period 14d // Two weeks for handover // FIXME: CCL parsing issue\n  ",
-                                                                    start: 2270,
-                                                                    end: 2404,
-                                                                },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: any_statement,
-                                                                        span: Span {
-                                                                            str: "d // Results published 1 day after voting closes\n    // transition_period 14d // Two weeks for handover // FIXME: CCL parsing issue\n  ",
-                                                                            start: 2270,
-                                                                            end: 2404,
-                                                                        },
-                                                                        inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "d",
-                                                                                    start: 2270,
-                                                                                    end: 2271,
-                                                                                },
-                                                                                inner: [],
                                                                             },
                                                                         ],
                                                                     },
@@ -3115,17 +2689,17 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "max_duration 180",
+                                                                                            str: "max_duration 180d\n    ",
                                                                                             start: 2790,
-                                                                                            end: 2806,
+                                                                                            end: 2812,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
                                                                                                 rule: any_statement,
                                                                                                 span: Span {
-                                                                                                    str: "max_duration 180",
+                                                                                                    str: "max_duration 180d\n    ",
                                                                                                     start: 2790,
-                                                                                                    end: 2806,
+                                                                                                    end: 2812,
                                                                                                 },
                                                                                                 inner: [
                                                                                                     Pair {
@@ -3140,50 +2714,21 @@ expression: pairs_debug_string
                                                                                                     Pair {
                                                                                                         rule: value,
                                                                                                         span: Span {
-                                                                                                            str: "180",
+                                                                                                            str: "180d",
                                                                                                             start: 2803,
-                                                                                                            end: 2806,
+                                                                                                            end: 2807,
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: number,
+                                                                                                                rule: duration,
                                                                                                                 span: Span {
-                                                                                                                    str: "180",
+                                                                                                                    str: "180d",
                                                                                                                     start: 2803,
-                                                                                                                    end: 2806,
+                                                                                                                    end: 2807,
                                                                                                                 },
                                                                                                                 inner: [],
                                                                                                             },
                                                                                                         ],
-                                                                                                    },
-                                                                                                ],
-                                                                                            },
-                                                                                        ],
-                                                                                    },
-                                                                                    Pair {
-                                                                                        rule: statement,
-                                                                                        span: Span {
-                                                                                            str: "d\n    ",
-                                                                                            start: 2806,
-                                                                                            end: 2812,
-                                                                                        },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: any_statement,
-                                                                                                span: Span {
-                                                                                                    str: "d\n    ",
-                                                                                                    start: 2806,
-                                                                                                    end: 2812,
-                                                                                                },
-                                                                                                inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "d",
-                                                                                                            start: 2806,
-                                                                                                            end: 2807,
-                                                                                                        },
-                                                                                                        inner: [],
                                                                                                     },
                                                                                                 ],
                                                                                             },

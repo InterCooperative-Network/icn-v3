@@ -17,5 +17,41 @@ expression: "serde_json::to_string_pretty(&ast).unwrap()"
         }
       ]
     }
+  },
+  {
+    "Role": {
+      "name": "steward",
+      "description": "Governance steward with administrative capabilities",
+      "attributes": [
+        {
+          "key": "term_length",
+          "value": "365d"
+        }
+      ]
+    }
+  },
+  {
+    "Role": {
+      "name": "finance_committee",
+      "description": "Committee overseeing financial decisions",
+      "attributes": [
+        {
+          "key": "term_length",
+          "value": "365d"
+        }
+      ]
+    }
+  },
+  {
+    "Role": {
+      "name": "community_coordinator",
+      "description": "Facilitates community engagement and outreach",
+      "attributes": [
+        {
+          "key": "term_length",
+          "value": "180d"
+        }
+      ]
+    }
   }
 ]
