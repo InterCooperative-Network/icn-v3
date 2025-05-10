@@ -198,3 +198,67 @@ bylaws "cooperative_bylaws" {
 }
 
 // Force update 
+
+// ICN Contract Chain Language – Bylaws Template
+bylaws_def "Cooperative Bylaws" version "1.0.0" {
+
+  // ─────────────  High-level parameters  ─────────────
+  description "Core operational rules and governance structure for the cooperative."
+  min_members_for_quorum 10
+  max_voting_period_days 14
+  default_proposal_duration "7d"
+
+  // ─────────────  Conditional rules  ─────────────
+  if proposal.type == "bylaw_change" {
+    description "Special rules for bylaw changes."
+    quorum 0.60
+    voting_period "14d"
+  }
+
+  if proposal.category == "emergency" {
+    fast_track true
+    notification_period "1d"
+  } else {
+    standard_review_period "7d"
+  }
+
+  // ─────────────  Range-based rules  ─────────────
+  member_age_requirement range 18 120 {
+    status "eligible"
+    requires_guardian_approval false
+  }
+
+  // ─────────────  Nested config blocks  ─────────────
+  proposal_processing {
+    min_duration "7d"
+    max_duration "21d"
+    default_duration "14d"
+    pass_threshold_percentage 0.66
+    quorum_percentage 0.10
+    can_be_emergency true
+    emergency_pass_threshold_percentage 0.75
+    emergency_quorum_percentage 0.20
+  }
+
+  // ─────────────  Lifecycle actions  ─────────────
+  actions {
+    on "bylaw.amendment.proposed" {
+      mint_token {
+        type "bylaw_amendment_proposal_receipt"
+        recipients proposal.submitter_id
+        data {
+          proposal_id proposal.id
+          submitted_at timestamp()
+        }
+      }
+
+      anchor_data {
+        path "governance/bylaws"
+        data proposal.content
+      }
+    }
+  }
+
+  // ─────────────  Logging example  ─────────────
+  log_event(name: "bylaws_loaded", detail: "Cooperative Bylaws v1.0.0 processed");
+} 

@@ -7,6 +7,7 @@ members = [
     "crates/ccl/icn-ccl-parser",
     "crates/ccl/icn-ccl-compiler",
     "crates/ccl/icn-ccl-dsl",
+    "crates/ccl/icn-ccl-wasm-codegen",
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
     "crates/p2p/planetary-mesh",

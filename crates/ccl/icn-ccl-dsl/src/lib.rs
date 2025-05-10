@@ -6,6 +6,17 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use uuid::Uuid;
 
+/// Represents a generic section of the CCL that hasn't been fully modeled yet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenericSection {
+    /// The kind of section, e.g., "organization", "process", "membership".
+    pub kind: String,
+    /// Optional quoted title string that might follow the keyword (e.g., organization "title").
+    pub title: Option<String>,
+    /// Everything inside the section's block, parsed as DSL rules.
+    pub rules: Vec<Rule>,
+}
+
 /// Every top-level cooperative artefact the DSL can emit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DslModule {
@@ -21,6 +32,8 @@ pub enum DslModule {
     Role(Role),
     /// An action handler module, defining steps for a specific event.
     ActionHandler(ActionHandler),
+    /// A generic section, for definitions not yet fully modeled.
+    Section(GenericSection),
 }
 
 /// Canonically-typed proposal object (post-parse, pre-codegen).

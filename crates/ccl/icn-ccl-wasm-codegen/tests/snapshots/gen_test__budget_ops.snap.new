@@ -1,0 +1,47 @@
+---
+source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
+assertion_line: 29
+expression: prog
+---
+{
+  "ops": [
+    {
+      "Todo": {
+        "note": "TODO: proposal \"cooperative_budget\""
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: section kind=allocations"
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: section kind=spending_rules"
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: section kind=reporting"
+      }
+    },
+    {
+      "MintToken": {
+        "resource_type": "expense_receipt",
+        "recipient": "ctx.submitter_id"
+      }
+    },
+    {
+      "AnchorData": {
+        "path": "finance/expenses",
+        "data_reference": "map_content_placeholder_[Rule { key: \"id\", value: String(\"ctx.expense_id\") }, Rule { key: \"details\", value: String(\"ctx.expense_details\") }, Rule { key: \"status\", value: String(\"approved\") }, Rule { key: \"approved_at\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+      }
+    },
+    {
+      "MintToken": {
+        "resource_type": "budget_proposal",
+        "recipient": "ctx.proposer_id"
+      }
+    }
+  ]
+}

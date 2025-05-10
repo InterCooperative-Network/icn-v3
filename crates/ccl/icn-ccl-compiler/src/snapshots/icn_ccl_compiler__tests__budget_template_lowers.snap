@@ -27,6 +27,141 @@ expression: dsl_modules
     }
   },
   {
+    "Section": {
+      "kind": "allocations",
+      "title": null,
+      "rules": [
+        {
+          "key": "category",
+          "value": "operations"
+        },
+        {
+          "key": "category",
+          "value": "projects"
+        },
+        {
+          "key": "category",
+          "value": "reserve"
+        },
+        {
+          "key": "category",
+          "value": "community"
+        }
+      ]
+    }
+  },
+  {
+    "Section": {
+      "kind": "spending_rules",
+      "title": null,
+      "rules": [
+        {
+          "key": "thresholds",
+          "value": [
+            {
+              "key": "range_0_500",
+              "value": {
+                "start": 0.0,
+                "end": 500.0,
+                "rules": [
+                  {
+                    "key": "approvers",
+                    "value": 1.0
+                  },
+                  {
+                    "key": "required_role",
+                    "value": "steward"
+                  }
+                ]
+              }
+            },
+            {
+              "key": "range_501_5000",
+              "value": {
+                "start": 501.0,
+                "end": 5000.0,
+                "rules": [
+                  {
+                    "key": "approvers",
+                    "value": 2.0
+                  },
+                  {
+                    "key": "required_role",
+                    "value": "finance_committee"
+                  }
+                ]
+              }
+            },
+            {
+              "key": "range_5001_999999999",
+              "value": {
+                "start": 5001.0,
+                "end": 999999999.0,
+                "rules": [
+                  {
+                    "key": "approval_threshold",
+                    "value": 0.6
+                  },
+                  {
+                    "key": "quorum",
+                    "value": 0.5
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "Section": {
+      "kind": "reporting",
+      "title": null,
+      "rules": [
+        {
+          "key": "frequency",
+          "value": "monthly"
+        },
+        {
+          "key": "reports",
+          "value": [
+            {
+              "key": "spending_summary",
+              "value": [
+                {
+                  "key": "fields",
+                  "value": [
+                    "category",
+                    "subcategory",
+                    "amount",
+                    "remaining_budget",
+                    "percentage_used"
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "transaction_log",
+              "value": [
+                {
+                  "key": "fields",
+                  "value": [
+                    "date",
+                    "amount",
+                    "category",
+                    "description",
+                    "authorized_by"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
     "ActionHandler": {
       "event": "expense.approved",
       "steps": [

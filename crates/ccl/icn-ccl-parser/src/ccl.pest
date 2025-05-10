@@ -14,11 +14,11 @@ duration = @{ ASCII_DIGIT+ ~ ("d" | "h" | "m" | "s") }
 path_identifier = @{ identifier ~ ("." ~ identifier)+ } // For a.b.c
 general_identifier = { path_identifier | identifier }
 
-function_call_args = { (value ~ ("," ~ value)*)? }
+function_call_args = { (object_pair ~ ("," ~ object_pair)*)? }
 function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
 
 // Value types
-value = { string_literal | duration | number | boolean | function_call | array | object | general_identifier }
+value = { string_literal | duration | number | boolean | function_call | array | object | range_value | general_identifier }
 array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
 object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
 object_pair = { (string_literal | identifier) ~ ":" ~ value }
@@ -108,6 +108,9 @@ vacancies_def = { "vacancies" ~ block }
 
 // Range statement definition (e.g., for budget thresholds)
 range_statement = { "range" ~ number ~ number ~ block }
+
+// Range value definition (e.g., for keyed ranges like `my_range range 0 100 { ... }`)
+range_value = { "range" ~ number ~ number ~ block }
 
 // Main rule
 ccl = { SOI ~ statement* ~ EOI } 

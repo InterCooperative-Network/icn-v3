@@ -94,6 +94,120 @@ expression: dsl_modules
     }
   },
   {
+    "Section": {
+      "kind": "process",
+      "title": null,
+      "rules": [
+        {
+          "key": "nomination",
+          "value": [
+            {
+              "key": "duration",
+              "value": "14d"
+            },
+            {
+              "key": "self_nomination",
+              "value": "allowed"
+            },
+            {
+              "key": "peer_nomination",
+              "value": [
+                {
+                  "key": "allowed",
+                  "value": true
+                },
+                {
+                  "key": "seconds_required",
+                  "value": 2.0
+                }
+              ]
+            },
+            {
+              "key": "confirmation_required",
+              "value": true
+            }
+          ]
+        },
+        {
+          "key": "campaign",
+          "value": [
+            {
+              "key": "duration",
+              "value": "14d"
+            },
+            {
+              "key": "statement_allowed",
+              "value": true
+            },
+            {
+              "key": "q_and_a_session",
+              "value": "required"
+            }
+          ]
+        },
+        {
+          "key": "voting",
+          "value": [
+            {
+              "key": "duration",
+              "value": "7d"
+            },
+            {
+              "key": "method",
+              "value": "single_transferable_vote"
+            },
+            {
+              "key": "eligibility",
+              "value": [
+                {
+                  "key": "membership_duration",
+                  "value": "30d"
+                },
+                {
+                  "key": "standing",
+                  "value": "good"
+                }
+              ]
+            },
+            {
+              "key": "quorum",
+              "value": 0.4
+            }
+          ]
+        },
+        {
+          "key": "results",
+          "value": [
+            {
+              "key": "publication_delay",
+              "value": "1d"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "Section": {
+      "kind": "vacancies",
+      "title": null,
+      "rules": [
+        {
+          "key": "scenario",
+          "value": "resignation"
+        },
+        {
+          "key": "scenario",
+          "value": "removal"
+        },
+        {
+          "key": "scenario",
+          "value": "insufficient_candidates"
+        }
+      ]
+    }
+  },
+  {
     "ActionHandler": {
       "event": "nomination.confirmed",
       "steps": [

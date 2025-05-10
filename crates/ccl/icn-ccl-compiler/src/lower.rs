@@ -1,6 +1,6 @@
 use icn_ccl_dsl::{
-    ActionHandler, ActionStep, Anchor, DslModule, IfExpr, MeteredAction, Proposal, Role as DslAstRole,
-    Rule as DslRule, RuleValue as DslValue, RangeRule,
+    ActionHandler, ActionStep, Anchor, DslModule, GenericSection, IfExpr, MeteredAction, Proposal,
+    Role as DslAstRole, Rule as DslRule, RuleValue as DslValue, RangeRule,
 };
 use icn_ccl_parser::{CclParser, Rule};
 use pest::iterators::{Pair, Pairs};
@@ -106,17 +106,15 @@ impl Lowerer {
             Rule::actions_def => {
                 modules.extend(self.lower_actions(pair)?);
             }
-            // Top-level definitions from election.ccl and other templates - no-op for now
-            Rule::process_def |
-            Rule::vacancies_def |
             Rule::organization_def |
             Rule::governance_def |
             Rule::membership_def |
             Rule::allocations_def |
             Rule::spending_rules_def |
-            Rule::reporting_def => {
-                // TODO: Implement lowering for these rules
-                // For now, consuming the pair and doing nothing allows tests to proceed
+            Rule::reporting_def |
+            Rule::process_def |
+            Rule::vacancies_def => {
+                modules.push(DslModule::Section(self.lower_generic_section(pair)?));
             }
 
             Rule::EOI => {} // EOI will be the last item from ccl_root_pair.into_inner()
@@ -359,37 +357,58 @@ impl Lowerer {
             }
             Rule::function_call => {
                 // function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
-                // function_call_args = { (value ~ ("," ~ value)*)? }
-                // For MVP, let's represent it as a map: { "function_name": "name", "args": [DslValue, ...] }
-                let original_fn_call_span = value_pair.as_span(); // Get span for error reporting
+                // function_call_args = { (object_pair ~ ("," ~ object_pair)*)? }
+                let original_fn_call_span = value_pair.as_span();
                 let mut inner_fc_pairs = value_pair.into_inner();
                 let fn_name_pair = inner_fc_pairs.next();
                 let fn_args_container_pair = inner_fc_pairs.next(); // This is Rule::function_call_args
 
                 if let Some(name_p) = fn_name_pair {
                     let fn_name = name_p.as_str().to_string();
-                    let mut dsl_args = Vec::new();
+                    let mut named_args_rules = Vec::new();
 
-                    if let Some(args_p) = fn_args_container_pair {
-                        for arg_value_rule_pair in args_p.into_inner() { // arg_value_rule_pair is Rule::value
-                            if let Some(actual_arg_pair) = arg_value_rule_pair.into_inner().next() {
-                                dsl_args.push(self.lower_value_rule(actual_arg_pair)?);
+                    if let Some(args_container) = fn_args_container_pair {
+                        // args_container is Rule::function_call_args
+                        // Its inner pairs are Rule::object_pair
+                        for arg_object_pair in args_container.into_inner() {
+                            if arg_object_pair.as_rule() == Rule::object_pair {
+                                // object_pair = { (string_literal | identifier) ~ ":" ~ value }
+                                let mut object_pair_inners = arg_object_pair.into_inner();
+                                let arg_key_pair = object_pair_inners.next();
+                                let arg_value_wrapper_pair = object_pair_inners.next(); // This is Rule::value
+
+                                if let (Some(k_pair), Some(v_wrapper_pair)) = (arg_key_pair, arg_value_wrapper_pair) {
+                                    let arg_key_str = k_pair.as_str().trim_matches('"').to_string();
+                                    // v_wrapper_pair is Rule::value, its inner is the actual value type
+                                    if let Some(actual_arg_val_pair) = v_wrapper_pair.into_inner().next() {
+                                        let dsl_arg_val = self.lower_value_rule(actual_arg_val_pair)?;
+                                        named_args_rules.push(DslRule { key: arg_key_str, value: dsl_arg_val });
+                                    }
+                                    // Else: Rule::value was empty, or malformed object_pair, ignore for now or error
+                                }
+                                // Else: Malformed object_pair, ignore for now or error
                             }
                         }
                     }
                     
                     let mut fn_call_map_rules = Vec::new();
                     fn_call_map_rules.push(DslRule { key: "function_name".to_string(), value: DslValue::String(fn_name) });
-                    fn_call_map_rules.push(DslRule { key: "args".to_string(), value: DslValue::List(dsl_args) });
+                    fn_call_map_rules.push(DslRule { key: "args".to_string(), value: DslValue::Map(named_args_rules) });
                     Ok(DslValue::Map(fn_call_map_rules))
                 } else {
                     Err(LowerError::Parse(pest::error::Error::new_from_span(
                         pest::error::ErrorVariant::CustomError {
                             message: "Invalid function call structure: missing function name".to_string(),
                         },
-                        original_fn_call_span, // Use the original span of the function_call pair
+                        original_fn_call_span,
                     )))
                 }
+            }
+            Rule::range_value => { // Added for keyed ranges
+                // value_pair is Rule::range_value. Its inner pairs (number, number, block)
+                // are what lower_range_statement expects.
+                let range_rule_data = self.lower_range_statement(value_pair)?;
+                Ok(DslValue::Range(Box::new(range_rule_data)))
             }
             _ => Ok(DslValue::String(format!("UNPROCESSED_VALUE_RULE_{:?}_{}", value_pair.as_rule(), value_pair.as_str()))), // Placeholder
         }
@@ -786,5 +805,53 @@ impl Lowerer {
             data_reference,
             path,
         })
+    }
+
+    fn lower_generic_section(&self, pair: Pair<'_, Rule>) -> Result<GenericSection, LowerError> {
+        let kind_str_debug = format!("{:?}", pair.as_rule());
+        // Example: kind_str_debug might be "OrganizationDef"
+        // We want "organization" or "process", etc.
+        let kind = kind_str_debug.to_lowercase().replace("_def", "");
+        let original_pair_span = pair.as_span();
+
+        let mut title: Option<String> = None;
+        let mut block_pair_option: Option<Pair<'_, Rule>> = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::string_literal => {
+                    title = Some(inner_pair.as_str().trim_matches('"').to_string());
+                }
+                Rule::block => {
+                    block_pair_option = Some(inner_pair);
+                }
+                _ => {
+                    // This might happen if the grammar for a _def rule is more complex than expected
+                    // or if a _def rule doesn't strictly follow string_literal? ~ block or just block.
+                    return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: format!("Unexpected rule {:?} inside generic section {}", inner_pair.as_rule(), kind)
+                        },
+                        inner_pair.as_span(),
+                    )));
+                }
+            }
+        }
+
+        if let Some(block_pair) = block_pair_option {
+            let (_description, rules) = self.lower_block_common_fields(block_pair)?;
+            Ok(GenericSection {
+                kind,
+                title,
+                rules,
+            })
+        } else {
+            Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("Generic section type '{}' missing main block", kind)
+                },
+                original_pair_span,
+            )))
+        }
     }
 } 

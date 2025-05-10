@@ -1,0 +1,69 @@
+---
+source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
+assertion_line: 24
+expression: prog
+---
+{
+  "ops": [
+    {
+      "Todo": {
+        "note": "TODO: proposal \"role_election\""
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: role \"steward\""
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: role \"finance_committee\""
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: role \"community_coordinator\""
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: section kind=process"
+      }
+    },
+    {
+      "Todo": {
+        "note": "TODO: section kind=vacancies"
+      }
+    },
+    {
+      "MintToken": {
+        "resource_type": "nomination_receipt",
+        "recipient": "ctx.nominee_id"
+      }
+    },
+    {
+      "AnchorData": {
+        "path": "governance/elections/nominations",
+        "data_reference": "map_content_placeholder_[Rule { key: \"nominee\", value: String(\"ctx.nominee_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"nominators\", value: String(\"ctx.nominators\") }, Rule { key: \"confirmed\", value: Boolean(true) }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+      }
+    },
+    {
+      "MintToken": {
+        "resource_type": "vote_receipt",
+        "recipient": "ctx.voter_id"
+      }
+    },
+    {
+      "MintToken": {
+        "resource_type": "role_credential",
+        "recipient": "ctx.elected_members"
+      }
+    },
+    {
+      "AnchorData": {
+        "path": "governance/elections/results",
+        "data_reference": "map_content_placeholder_[Rule { key: \"election_id\", value: String(\"ctx.election_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"elected_members\", value: String(\"ctx.elected_members\") }, Rule { key: \"vote_count\", value: String(\"ctx.vote_count\") }, Rule { key: \"quorum_reached\", value: String(\"ctx.quorum_reached\") }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]"
+      }
+    }
+  ]
+}

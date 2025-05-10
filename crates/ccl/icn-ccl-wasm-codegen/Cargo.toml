@@ -1,0 +1,13 @@
+[package]
+name        = "icn-ccl-wasm-codegen"
+version     = "0.1.0"
+edition     = "2021"
+
+[dependencies]
+icn-ccl-dsl = { path = "../icn-ccl-dsl" }
+serde       = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+insta = { version = "1.34.0", features = ["json"] }
+icn-ccl-compiler = { path = "../icn-ccl-compiler" }
+icn-ccl-parser = { path = "../icn-ccl-parser" } 
