@@ -1,0 +1,61 @@
+---
+source: crates/ccl/icn-ccl-compiler/src/lib.rs
+assertion_line: 341
+expression: dsl_modules
+---
+[
+  {
+    "Proposal": {
+      "id": "f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff",
+      "title": "cooperative_budget",
+      "body": "Annual cooperative budget allocation and spending rules",
+      "author": "unknown",
+      "created_at": 0,
+      "rules": [
+        {
+          "key": "version",
+          "value": "1.0.0"
+        },
+        {
+          "key": "currency",
+          "value": "USD"
+        },
+        {
+          "key": "period",
+          "value": "annual"
+        }
+      ]
+    }
+  },
+  {
+    "ActionHandler": {
+      "event": "expense.approved",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        },
+        {
+          "Anchor": {
+            "payload_cid": "bafy...placeholder"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "ActionHandler": {
+      "event": "budget.proposed",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        }
+      ]
+    }
+  }
+]

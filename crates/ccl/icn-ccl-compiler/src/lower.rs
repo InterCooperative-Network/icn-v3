@@ -1,6 +1,6 @@
 use icn_ccl_dsl::{
     ActionHandler, ActionStep, Anchor, DslModule, MeteredAction, Proposal, Role as DslAstRole,
-    Rule as DslRule, RuleValue as DslValue,
+    Rule as DslRule, RuleValue as DslValue, RangeRule,
 };
 use icn_ccl_parser::{CclParser, Rule};
 use pest::iterators::{Pair, Pairs};
@@ -73,6 +73,9 @@ impl Lowerer {
             Rule::election_def => {
                 modules.push(DslModule::Proposal(self.lower_election(pair)?));
             }
+            Rule::budget_def => {
+                modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
+            }
             Rule::roles_def => {
                 let pair_span = pair.as_span(); // Get span before move
                 // roles_def = { "roles" ~ block }
@@ -109,7 +112,6 @@ impl Lowerer {
             Rule::organization_def |
             Rule::governance_def |
             Rule::membership_def |
-            Rule::budget_def |
             Rule::allocations_def |
             Rule::spending_rules_def |
             Rule::reporting_def => {
@@ -205,45 +207,168 @@ impl Lowerer {
                             Rule::any_statement => {
                                 let mut field_parts = inner_def_pair.into_inner();
                                 let key_pair_opt = field_parts.next();
-                                let value_outer_pair_opt = field_parts.next(); // This is the (value | block | identifier) part
+                                let value_outer_pair_opt = field_parts.next();
 
                                 if let Some(key_pair) = key_pair_opt {
                                     let key_str = key_pair.as_str().trim_matches('"');
 
                                     if let Some(value_outer_pair) = value_outer_pair_opt {
-                                        // We are interested in Rule::value for description/version/simple rules
-                                        if value_outer_pair.as_rule() == Rule::value {
-                                            if let Some(value_inner_pair) = value_outer_pair.into_inner().next() {
-                                                // value_inner_pair is string_literal, number, boolean etc.
-                                                let value_str = value_inner_pair.as_str().trim_matches('"').to_string();
-                                                if key_str == "description" {
-                                                    description_body = value_str;
-                                                } else { // "version" and any other key becomes a DslRule
-                                                    dsl_rules.push(DslRule {
-                                                        key: key_str.to_string(),
-                                                        value: DslValue::String(value_str),
-                                                    });
+                                        // value_outer_pair is the (value | block | identifier) part of any_statement
+                                        match value_outer_pair.as_rule() {
+                                            Rule::value => {
+                                                if let Some(value_inner_pair) = value_outer_pair.into_inner().next() {
+                                                    let dsl_val = self.lower_value_rule(value_inner_pair)?;
+                                                    if key_str == "description" {
+                                                        // Assuming description is always a simple string for now
+                                                        if let DslValue::String(s) = dsl_val {
+                                                            description_body = s;
+                                                        } else {
+                                                            // Or handle error / log if description is not a string
+                                                        }
+                                                    } else {
+                                                        dsl_rules.push(DslRule {
+                                                            key: key_str.to_string(),
+                                                            value: dsl_val,
+                                                        });
+                                                    }
                                                 }
+                                                // else: Rule::value was empty, ignore for now
                                             }
-                                            // else: Rule::value was empty (e.g. value pair itself was an empty rule if grammar allowed)
+                                            Rule::block => {
+                                                // Recursive call to process the nested block
+                                                let (_nested_desc, nested_rules) = self.lower_block_common_fields(value_outer_pair)?;
+                                                // If the nested block produced a description, it's ignored here.
+                                                // The key_str gets a DslValue::Map of the rules from the nested block.
+                                                dsl_rules.push(DslRule {
+                                                    key: key_str.to_string(),
+                                                    value: DslValue::Map(nested_rules),
+                                                });
+                                            }
+                                            Rule::general_identifier => {
+                                                // Treat general_identifier as a string value for the rule
+                                                dsl_rules.push(DslRule {
+                                                    key: key_str.to_string(),
+                                                    value: DslValue::String(value_outer_pair.as_str().to_string()),
+                                                });
+                                            }
+                                            _ => {
+                                                // Should not happen if grammar for any_statement is (value | block | identifier)
+                                                // Potentially log an unhandled rule here.
+                                            }
                                         }
-                                        // else: value_outer_pair was Rule::block or Rule::identifier.
-                                        // These are not currently processed into DslValue::String.
+                                    } else {
+                                        // any_statement was just `key;` (no value part), create a boolean true rule or similar?
+                                        // For now, if no value_outer_pair, it implies a valueless key. We can represent this
+                                        // as a boolean true, or a special Null/Unit type if added to DslValue.
+                                        // Let's default to Boolean(true) as a placeholder convention.
+                                        dsl_rules.push(DslRule {
+                                            key: key_str.to_string(),
+                                            value: DslValue::Boolean(true), // Placeholder for valueless keys
+                                        });
                                     }
-                                    // else: any_statement had only a key (e.g. `my_key;`).
-                                    // Not processed for description/version, nor as a DslRule here.
                                 }
-                                // else: any_statement was malformed or empty (no key).
                             }
-                            _ => { /* Other definitions in statement, e.g. if_statement. Ignored for common fields. */ }
+                            Rule::range_statement => {
+                                let range_rule_data = self.lower_range_statement(inner_def_pair)?;
+                                let key = format!("range_{}_{}", range_rule_data.start, range_rule_data.end);
+                                dsl_rules.push(DslRule {
+                                    key,
+                                    value: DslValue::Range(Box::new(range_rule_data)),
+                                });
+                            }
+                            _ => { /* Other definitions in statement. Ignored for common fields. */ }
                         }
                     }
                 }
             }
         }
-        // If block_pair.as_rule() is not Rule::block, or if the block is empty / contains no relevant statements,
-        // this will return (String::new(), Vec::new()) as initialized.
         Ok((description_body, dsl_rules))
+    }
+
+    fn lower_value_rule(&self, value_pair: Pair<'_, Rule>) -> Result<DslValue, LowerError> {
+        // value_pair is the actual primitive rule like string_literal, number, boolean, etc.
+        // not Rule::value itself.
+        match value_pair.as_rule() {
+            Rule::string_literal => Ok(DslValue::String(value_pair.as_str().trim_matches('"').to_string())),
+            Rule::number => {
+                let num_str = value_pair.as_str();
+                num_str.parse::<f64>().map(DslValue::Number)
+                    .map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError { message: format!("Invalid number: {}", e) },
+                        value_pair.as_span(),
+                    )))
+            }
+            Rule::boolean => {
+                value_pair.as_str().parse::<bool>().map(DslValue::Boolean)
+                    .map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError { message: format!("Invalid boolean: {}", e) },
+                        value_pair.as_span(),
+                    )))
+            }
+            Rule::duration => {
+                // For now, treat duration as a string. Could be a specific DslValue variant later.
+                Ok(DslValue::String(value_pair.as_str().to_string()))
+            }
+            Rule::array => {
+                // array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
+                // Inner pairs of Rule::array will be Rule::value
+                let mut elements = Vec::new();
+                for element_value_pair in value_pair.into_inner() {
+                    // element_value_pair is Rule::value, so we need its inner actual value_inner_pair
+                    if let Some(actual_element_val_pair) = element_value_pair.into_inner().next() {
+                        elements.push(self.lower_value_rule(actual_element_val_pair)?);
+                    }
+                }
+                Ok(DslValue::List(elements))
+            }
+            // TODO: Rule::object, Rule::general_identifier (if not handled as string above), Rule::function_call
+            _ => Ok(DslValue::String(format!("UNPROCESSED_VALUE_RULE_{:?}_{}", value_pair.as_rule(), value_pair.as_str()))), // Placeholder
+        }
+    }
+
+    fn lower_range_statement(&self, pair: Pair<'_, Rule>) -> Result<RangeRule, LowerError> {
+        // pair is Rule::range_statement = { "range" ~ number ~ number ~ block }
+        let original_span = pair.as_span(); // For top-level error reporting
+        let mut inner_pairs = pair.into_inner();
+
+        let start_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "Range statement missing start number".to_string() },
+            original_span,
+        )))?;
+        let start_val = start_pair.as_str().parse::<f64>().map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: format!("Invalid start number for range: {}", e) },
+            start_pair.as_span(),
+        )))?;
+
+        let end_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "Range statement missing end number".to_string() },
+            original_span,
+        )))?;
+        let end_val = end_pair.as_str().parse::<f64>().map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: format!("Invalid end number for range: {}", e) },
+            end_pair.as_span(),
+        )))?;
+
+        let block_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "Range statement missing block".to_string() },
+            original_span,
+        )))?;
+
+        if block_pair.as_rule() != Rule::block {
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: format!("Expected block in range statement, found {:?}", block_pair.as_rule()) },
+                block_pair.as_span(),
+            )));
+        }
+
+        // The description part from lower_block_common_fields is not used for RangeRule's sub-rules.
+        let (_description, rules_for_range) = self.lower_block_common_fields(block_pair)?;
+
+        Ok(RangeRule {
+            start: start_val,
+            end: end_val,
+            rules: rules_for_range,
+        })
     }
 
     fn lower_proposal(&self, pair: Pair<'_, Rule>) -> Result<Proposal, LowerError> {

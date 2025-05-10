@@ -119,6 +119,19 @@ pub enum RuleValue {
     List(Vec<RuleValue>),
     /// A map represented as a list of rules (key-value pairs).
     Map(Vec<Rule>),
+    /// A range rule, typically for numeric thresholds.
+    Range(Box<RangeRule>),
+}
+
+/// Represents a rule defining a numeric range and associated sub-rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RangeRule {
+    /// The start of the range (inclusive).
+    pub start: f64,
+    /// The end of the range (inclusive).
+    pub end: f64,
+    /// Sub-rules that apply within this range.
+    pub rules: Vec<Rule>,
 }
 
 /// Represents a handler for a specific event, containing a sequence of actions.
