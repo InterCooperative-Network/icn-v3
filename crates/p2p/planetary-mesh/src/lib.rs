@@ -22,6 +22,12 @@ use uuid::Uuid;
 pub mod protocol;
 pub use protocol::{MeshProtocolMessage, NodeCapability, JobId};
 
+pub mod behaviour;
+pub use behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC};
+
+pub mod node;
+pub use node::MeshNode;
+
 /// Error types specific to the planetary mesh
 #[derive(Error, Debug)]
 pub enum MeshError {
@@ -271,71 +277,6 @@ pub struct JobExecutionReceipt {
     
     /// Execution logs
     pub execution_logs: Vec<String>,
-}
-
-/// Interface for a mesh node
-#[async_trait]
-pub trait MeshNode {
-    /// Get the DID of this node
-    fn node_did(&self) -> &Did;
-
-    /// Get the node ID
-    fn node_id(&self) -> &str;
-
-    /// Get the node capabilities
-    fn capabilities(&self) -> NodeCapability;
-
-    /// Submit a job to the network
-    async fn submit_job(&self, manifest: JobManifest) -> Result<String>;
-
-    /// Get the status of a job
-    async fn get_job_status(&self, job_id: &str) -> Result<JobStatus>;
-
-    /// List all active jobs
-    async fn list_jobs(&self) -> Result<Vec<JobManifest>>;
-
-    /// Get bids for a job
-    async fn get_bids(&self, job_id: &str) -> Result<Vec<Bid>>;
-
-    /// Accept a bid for a job
-    async fn accept_bid(&self, job_id: &str, node_id: &str) -> Result<()>;
-
-    /// Submit a bid for a job
-    async fn submit_bid(&self, job_id: &str, bid: Bid) -> Result<()>;
-
-    /// Cancel a job
-    async fn cancel_job(&self, job_id: &str) -> Result<()>;
-
-    /// Get a job receipt
-    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<ExecutionReceipt>>;
-}
-
-/// Mesh node implementation
-pub struct PlanetaryMeshNode {
-    /// Node DID
-    node_did: Did,
-
-    /// Node ID (derived from DID)
-    node_id: String,
-
-    /// Node capabilities
-    capabilities: NodeCapability,
-
-    /// Local job store
-    jobs: Arc<Mutex<HashMap<String, JobManifest>>>,
-
-    /// Local bid store
-    bids: Arc<Mutex<HashMap<String, Vec<Bid>>>>,
-
-    /// Local receipt store - updated to use standardized ExecutionReceipt
-    receipts: Arc<Mutex<HashMap<String, ExecutionReceipt>>>,
-
-    /// VM for executing WASM jobs
-    vm: CoVm,
-
-    /// P2P network behavior
-    #[allow(dead_code)]
-    network: Option<Arc<Mutex<NetworkBehavior>>>,
 }
 
 /// Network behavior for P2P communication
