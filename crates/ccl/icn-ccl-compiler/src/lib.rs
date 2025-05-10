@@ -1,14 +1,15 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 // use once_cell::sync::Lazy; // Removed
 use serde::{Deserialize, Serialize};
 // use std::collections::HashMap; // Removed
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use tempfile::TempDir;
+use tempfile::{tempdir, TempDir};
 use thiserror::Error;
+use icn_ccl_dsl::{ActionStep, ResourceType};
 use wasm_encoder::{
     CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType,
+    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType, BlockType,
 };
 
 pub mod lower;
@@ -43,6 +44,13 @@ pub enum DslOpcode {
 
     /// Perform a metered action
     PerformMeteredAction { action_type: String, amount: u64 },
+
+    /// Perform a resource metered action
+    PerformResourceMeteredAction {
+        action_name: String,
+        resource_type: String,
+        amount: u64,
+    },
 
     /// Mint a token
     MintToken {
@@ -203,6 +211,12 @@ lto = true
         // Type 1: () -> () for the main exported 'run' function
         types.function(vec![], vec![]);
         let run_fn_type_idx = types.len() - 1;
+        // Type 2: (i32, i64) -> i32 for host_check_resource_authorization and host_record_resource_usage
+        types.function(
+            vec![ValType::I32, ValType::I64],
+            vec![ValType::I32],
+        );
+        let resource_fn_type_idx = types.len() - 1;
         module.section(&types);
 
         // Imports section for host functions
@@ -210,15 +224,27 @@ lto = true
         // Imported functions get their own function indices starting from 0.
         // host_log_message will be func idx 0
         imports.import(
-            "host",
+            "icn_host",
             "host_log_message",
             EntityType::Function(host_fn_type_idx),
         );
         // host_anchor_to_dag will be func idx 1
         imports.import(
-            "host",
+            "icn_host",
             "host_anchor_to_dag",
             EntityType::Function(host_fn_type_idx),
+        );
+        // host_check_resource_authorization will be func idx 2
+        imports.import(
+            "icn_host",
+            "host_check_resource_authorization",
+            EntityType::Function(resource_fn_type_idx),
+        );
+        // host_record_resource_usage will be func idx 3
+        imports.import(
+            "icn_host",
+            "host_record_resource_usage",
+            EntityType::Function(resource_fn_type_idx),
         );
         module.section(&imports);
 
@@ -254,6 +280,33 @@ lto = true
                 } => {
                     f.instruction(&Instruction::Call(0)); // Call host_log_message (import func idx 0)
                 }
+                DslOpcode::PerformResourceMeteredAction {
+                    action_name: _,
+                    resource_type,
+                    amount,
+                } => {
+                    // Parse resource type string to ResourceType enum value
+                    let resource_type_val = match resource_type.as_str() {
+                        "CPU" => 0,
+                        "MEMORY" => 1,
+                        "TOKEN" => 2,
+                        "IO" => 3,
+                        _ => 0, // Default to CPU if unknown
+                    };
+                    
+                    // Check resource authorization
+                    f.instruction(&Instruction::I32Const(resource_type_val)); // ResourceType enum value
+                    f.instruction(&Instruction::I64Const(*amount as i64));    // Amount
+                    f.instruction(&Instruction::Call(2));                     // Call host_check_resource_authorization
+                    
+                    // If authorization succeeded (result > 0), record usage
+                    f.instruction(&Instruction::If(BlockType::Empty));
+                    f.instruction(&Instruction::I32Const(resource_type_val)); // ResourceType enum value
+                    f.instruction(&Instruction::I64Const(*amount as i64));    // Amount
+                    f.instruction(&Instruction::Call(3));                     // Call host_record_resource_usage
+                    f.instruction(&Instruction::Drop);                        // Drop the result
+                    f.instruction(&Instruction::End);
+                }
                 DslOpcode::MintToken {
                     token_type: _,
                     amount: _,
@@ -272,9 +325,9 @@ lto = true
 
         // Exports section: Export 'run' function
         // The 'run' function is the first (and only) locally defined function.
-        // Its index is the number of imported functions (currently 2).
+        // Its index is the number of imported functions (currently 4).
         let mut exports = ExportSection::new();
-        exports.export("run", ExportKind::Func, 2); // Export function at index 2 (0 & 1 are imports)
+        exports.export("run", ExportKind::Func, 4); // Export function at index 4 (0-3 are imports)
         module.section(&exports);
 
         Ok(module.finish())
@@ -286,6 +339,48 @@ lto = true
         types.function(param_types, result_types);
         types.len() - 1
     }
+}
+
+/// Create DSL opcodes from action steps
+pub fn action_steps_to_opcodes(steps: &[ActionStep]) -> Vec<DslOpcode> {
+    let mut opcodes = Vec::new();
+    
+    for step in steps {
+        match step {
+            ActionStep::Metered(action) => {
+                opcodes.push(DslOpcode::PerformMeteredAction {
+                    action_type: action.resource_type.clone(),
+                    amount: action.amount,
+                });
+            }
+            ActionStep::Anchor(anchor) => {
+                opcodes.push(DslOpcode::AnchorData {
+                    cid: anchor.data_reference.clone(),
+                });
+            }
+            ActionStep::PerformMeteredAction { 
+                ident, 
+                resource, 
+                amount 
+            } => {
+                // Map ResourceType enum to string
+                let resource_type = match resource {
+                    ResourceType::Cpu => "CPU".to_string(),
+                    ResourceType::Memory => "MEMORY".to_string(),
+                    ResourceType::Token => "TOKEN".to_string(),
+                    ResourceType::Io => "IO".to_string(),
+                };
+                
+                opcodes.push(DslOpcode::PerformResourceMeteredAction {
+                    action_name: ident.clone(),
+                    resource_type,
+                    amount: *amount,
+                });
+            }
+        }
+    }
+    
+    opcodes
 }
 
 #[cfg(test)]

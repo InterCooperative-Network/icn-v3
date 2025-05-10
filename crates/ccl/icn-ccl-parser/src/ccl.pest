@@ -82,7 +82,7 @@ actions_def = { "actions" ~ block }
 action_def = { "on" ~ string_literal ~ block }
 mint_token = { "mint_token" ~ block }
 anchor_data = { "anchor_data" ~ block }
-perform_metered_action = { "perform_metered_action" ~ block }
+perform_metered_action = { "perform_metered_action" ~ "(" ~ string_literal ~ "," ~ identifier ~ "." ~ identifier ~ "," ~ number ~ ")" ~ ";" }
 
 // Budget definition
 budget_def = { "budget" ~ string_literal ~ block }

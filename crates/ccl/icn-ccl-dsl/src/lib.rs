@@ -184,6 +184,35 @@ pub enum ActionStep {
     Metered(MeteredAction),
     /// An action that anchors data, usually by storing a CID on a DAG.
     Anchor(Anchor),
+    /// A metered action with specific resource type and amount
+    PerformMeteredAction {
+        /// Action identifier
+        ident: String,
+        /// Resource type to use
+        resource: ResourceType,
+        /// Amount of resource
+        amount: u64,
+    },
+}
+
+/// Represents the resource type for metered actions
+#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
+pub enum ResourceType {
+    /// CPU resources
+    #[strum(serialize = "CPU")]
+    Cpu = 0,
+    
+    /// Memory resources
+    #[strum(serialize = "MEMORY")]
+    Memory = 1,
+    
+    /// Token resources
+    #[strum(serialize = "TOKEN")]
+    Token = 2,
+    
+    /// IO resources
+    #[strum(serialize = "IO")]
+    Io = 3,
 }
 
 #[cfg(test)]
