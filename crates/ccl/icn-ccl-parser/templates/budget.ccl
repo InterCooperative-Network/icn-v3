@@ -15,9 +15,9 @@ allocations {
     description "Day-to-day operational expenses"
     allocation 0.4 // 40% of total budget
     subcategories {
-      "staff" 0.6,
-      "infrastructure" 0.3,
-      "tools" 0.1
+      "staff": 0.6,
+      "infrastructure": 0.3,
+      "tools": 0.1
     }
   }
   

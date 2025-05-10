@@ -28,7 +28,12 @@ fn main() -> CclParserResult<()> {
             Command::new("compile")
                 .about("Compiles a CCL file to WASM (stubbed)")
                 .arg(Arg::new("input").required(true).help("Input CCL file"))
-                .arg(Arg::new("output").short('o').long("output").help("Output WASM file path")),
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Output WASM file path"),
+                ),
         )
         .get_matches();
 
@@ -42,10 +47,10 @@ fn main() -> CclParserResult<()> {
 }
 
 fn parse_ccl_command(matches: &ArgMatches) -> CclParserResult<()> {
-    let input_path_str = matches.get_one::<String>("input")
+    let input_path_str = matches
+        .get_one::<String>("input")
         .ok_or_else(|| CclError::InvalidInput("Missing input file path".to_string()))?;
-    let file_content = std::fs::read_to_string(input_path_str)
-        .map_err(CclError::IoError)?;
+    let file_content = std::fs::read_to_string(input_path_str).map_err(CclError::IoError)?;
     let document = CclDocument::parse(&file_content)
         .map_err(|e| CclError::ParseError(format!("Failed to parse CCL: {}", e)))?;
 
@@ -67,10 +72,10 @@ fn parse_ccl_command(matches: &ArgMatches) -> CclParserResult<()> {
 }
 
 fn validate_ccl_command(matches: &ArgMatches) -> CclParserResult<()> {
-    let input_path_str = matches.get_one::<String>("input")
+    let input_path_str = matches
+        .get_one::<String>("input")
         .ok_or_else(|| CclError::InvalidInput("Missing input file path".to_string()))?;
-    let file_content = std::fs::read_to_string(input_path_str)
-        .map_err(CclError::IoError)?;
+    let file_content = std::fs::read_to_string(input_path_str).map_err(CclError::IoError)?;
     CclDocument::parse(&file_content)
         .map_err(|e| CclError::ValidationError(format!("CCL validation failed: {}", e)))?;
     println!("CCL file is valid (basic check).");

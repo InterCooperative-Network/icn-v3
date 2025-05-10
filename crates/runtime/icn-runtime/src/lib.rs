@@ -350,10 +350,11 @@ impl Runtime {
     /// Execute a WASM binary with the given context
     pub fn execute_wasm(&self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult> {
         let host_context = self.vm_context_to_host_context(context);
-        
-        let updated_host_context = self.vm.execute(wasm_bytes, host_context).map_err(|e| {
-            RuntimeError::ExecutionError(format!("Failed to execute WASM: {}", e))
-        })?;
+
+        let updated_host_context = self
+            .vm
+            .execute(wasm_bytes, host_context)
+            .map_err(|e| RuntimeError::ExecutionError(format!("Failed to execute WASM: {}", e)))?;
 
         let metrics_guard = updated_host_context.metrics.lock().unwrap();
         let final_metrics = metrics_guard.clone();
@@ -370,7 +371,7 @@ impl Runtime {
         let logs_guard = updated_host_context.logs.lock().unwrap();
         let final_logs = logs_guard.clone();
         drop(logs_guard);
-        
+
         Ok(ExecutionResult {
             metrics: final_metrics,
             anchored_cids: final_anchored_cids,
@@ -400,7 +401,7 @@ impl Runtime {
         // Create the execution receipt
         let receipt = ExecutionReceiptCredential::new(
             receipt_id,
-            context.executor_did.clone(),                 // issuer
+            context.executor_did.clone(),           // issuer
             format!("proposal-{}", Uuid::new_v4()), // placeholder proposal ID
             wasm_cid.to_string(),
             ccl_cid.to_string(),
@@ -448,9 +449,9 @@ pub mod dsl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use std::fs;
     use std::sync::Mutex;
-    use anyhow::anyhow;
 
     // A mock storage implementation for testing
     struct MockStorage {

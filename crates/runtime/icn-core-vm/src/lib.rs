@@ -1,9 +1,10 @@
 use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
 use wasmtime::{
-    AsContextMut, Caller, Config, Engine, Extern, Func, FuncType, Instance, Module, OptLevel, Store, Val, ValType,
+    AsContextMut, Caller, Config, Engine, Extern, Func, FuncType, Instance, Module, OptLevel,
+    Store, Val, ValType,
 };
 
 /// Error types specific to the Cooperative VM
@@ -66,10 +67,10 @@ pub struct ResourceLimits {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            max_fuel: 10_000_000,  // Default reasonable limit
+            max_fuel: 10_000_000, // Default reasonable limit
             max_host_calls: 1000,
-            max_io_bytes: 10_000_000, // Default reasonable limit
-            max_anchored_cids: 1000, // Default reasonable limit
+            max_io_bytes: 10_000_000,  // Default reasonable limit
+            max_anchored_cids: 1000,   // Default reasonable limit
             max_job_submissions: 1000, // Default reasonable limit
         }
     }
@@ -191,10 +192,15 @@ impl CoVm {
 
         store.data_mut().metrics.lock().unwrap().fuel_used = fuel_consumed;
         store.data_mut().metrics.lock().unwrap().anchored_cids_count = anchored_cids_len;
-        store.data_mut().metrics.lock().unwrap().job_submissions_count = job_submissions_len;
+        store
+            .data_mut()
+            .metrics
+            .lock()
+            .unwrap()
+            .job_submissions_count = job_submissions_len;
 
         let final_host_context = store.into_data();
-        
+
         execution_result.map(|_| final_host_context)
     }
 
@@ -203,14 +209,13 @@ impl CoVm {
         let entrypoint = instance
             .get_typed_func::<(), ()>(&mut *store, "_start")
             .map_err(|e| anyhow!("Failed to get _start function: {}", e))?;
-        entrypoint.call(store.as_context_mut(), ())
-            .map_err(|e| {
-                if e.to_string().contains("all fuel consumed") {
-                    CoVmError::FuelExhausted.into()
-                } else {
-                    anyhow!("WASM execution trapped: {}", e)
-                }
-            })
+        entrypoint.call(store.as_context_mut(), ()).map_err(|e| {
+            if e.to_string().contains("all fuel consumed") {
+                CoVmError::FuelExhausted.into()
+            } else {
+                anyhow!("WASM execution trapped: {}", e)
+            }
+        })
     }
 
     /// Create host function for logging messages

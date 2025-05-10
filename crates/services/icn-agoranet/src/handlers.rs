@@ -100,7 +100,11 @@ impl InMemoryStore {
 
         self.votes.push(vote);
 
-        if let Some(proposal_detail) = self.proposals.iter_mut().find(|p| p.summary.id == proposal_id_clone) {
+        if let Some(proposal_detail) = self
+            .proposals
+            .iter_mut()
+            .find(|p| p.summary.id == proposal_id_clone)
+        {
             match vote_type_clone {
                 VoteType::Approve => proposal_detail.summary.vote_counts.approve += 1,
                 VoteType::Reject => proposal_detail.summary.vote_counts.reject += 1,

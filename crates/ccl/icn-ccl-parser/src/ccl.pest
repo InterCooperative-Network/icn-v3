@@ -1,7 +1,7 @@
 // Contract Chain Language (CCL) grammar
 
-WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "//" ~ (!("\n") ~ ANY)* }
+WHITESPACE = _{ (" " | "\t" | "\r" | "\n" | COMMENT)+ }
 
 // Basic building blocks
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
@@ -32,10 +32,11 @@ statement = {
     election_def |
     process_def |
     vacancies_def |
+    range_statement |
     any_statement
 }
 
-any_statement = { identifier ~ (value | block | identifier)? ~ (";" | block)? }
+any_statement = { (identifier | string_literal) ~ (value | block | identifier)? ~ ((";" | block) | NEWLINE+)? }
 
 // Organization definition
 organization_def = { "organization" ~ string_literal ~ block }
@@ -79,6 +80,9 @@ process_def = { "process" ~ block }
 
 // Vacancies definition
 vacancies_def = { "vacancies" ~ block }
+
+// Range statement definition (e.g., for budget thresholds)
+range_statement = { "range" ~ number ~ number ~ block }
 
 // Main rule
 ccl = { SOI ~ statement* ~ EOI } 

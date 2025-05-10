@@ -24,9 +24,8 @@ mod tests {
     }
 
     fn test_template_parsing(template_path: &str) {
-        let cwd = std::env::current_dir().unwrap();
-        let template_dir = Path::new("crates/ccl/icn-ccl-parser");
-        let full_path = cwd.join(template_dir).join(template_path);
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let full_path = manifest_dir.join(template_path);
 
         println!("Testing template: {}", full_path.display());
 

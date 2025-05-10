@@ -22,35 +22,43 @@ async fn dummy_test() {
 // without running a full server.
 
 // use axum::{ // Commened out entire block
-//     // body::Body, 
-//     // http::{Request, StatusCode}, 
-//     // Router, 
+//     // body::Body,
+//     // http::{Request, StatusCode},
+//     // Router,
 // };
 use chrono::{Duration, Utc};
 use icn_agoranet::{
     handlers::{
         // cast_vote_handler, create_proposal_handler, create_thread_handler,
         // get_proposal_detail_handler, get_proposal_votes_handler, get_threads_handler,
-        // health_check_handler, 
+        // health_check_handler,
         Db,
         // InMemoryStore,
     },
     models::{
         // GetProposalsQuery, GetThreadsQuery, Message,
-        NewProposalRequest, NewThreadRequest, NewVoteRequest,
-        ProposalDetail, ProposalStatus, ProposalSummary,
-        ProposalVotesResponse, ThreadDetail, ThreadSummary,
+        NewProposalRequest,
+        NewThreadRequest,
+        NewVoteRequest,
+        ProposalDetail,
+        ProposalStatus,
+        ProposalSummary,
+        ProposalVotesResponse,
+        ThreadDetail,
+        ThreadSummary,
         // Timestamp,
-        Vote, VoteCounts, VoteType,
+        Vote,
+        VoteCounts,
+        VoteType,
     },
 };
 use reqwest::Client;
 use serde_json::json; // For ad-hoc json creation in tests
-// use std::net::SocketAddr;
-// use std::sync::{Arc, RwLock};
+                      // use std::net::SocketAddr;
+                      // use std::sync::{Arc, RwLock};
+use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
-use tokio::net::TcpListener;
 // use tower::ServiceExt;
 
 use icn_agoranet::app::create_app;
@@ -115,7 +123,11 @@ async fn create_proposal(
 }
 
 // Helper to get proposal detail
-async fn get_proposal_detail(client: &Client, base_url_for_test: &str, proposal_id: &str) -> ProposalDetail {
+async fn get_proposal_detail(
+    client: &Client,
+    base_url_for_test: &str,
+    proposal_id: &str,
+) -> ProposalDetail {
     client
         .get(format!("{}/proposals/{}", base_url_for_test, proposal_id))
         .send()
@@ -153,9 +165,16 @@ async fn cast_vote(
 }
 
 // Helper to get proposal votes
-async fn get_proposal_votes(client: &Client, base_url_for_test: &str, proposal_id: &str) -> ProposalVotesResponse {
+async fn get_proposal_votes(
+    client: &Client,
+    base_url_for_test: &str,
+    proposal_id: &str,
+) -> ProposalVotesResponse {
     client
-        .get(format!("{}/proposals/{}/votes", base_url_for_test, proposal_id))
+        .get(format!(
+            "{}/proposals/{}/votes",
+            base_url_for_test, proposal_id
+        ))
         .send()
         .await
         .expect("Failed to send get proposal votes request")
@@ -165,7 +184,11 @@ async fn get_proposal_votes(client: &Client, base_url_for_test: &str, proposal_i
 }
 
 // Helper to get thread detail
-async fn get_thread_detail(client: &Client, base_url_for_test: &str, thread_id: &str) -> ThreadDetail {
+async fn get_thread_detail(
+    client: &Client,
+    base_url_for_test: &str,
+    thread_id: &str,
+) -> ThreadDetail {
     client
         .get(format!("{}/threads/{}", base_url_for_test, thread_id))
         .send()
@@ -222,8 +245,14 @@ async fn test_full_lifecycle() {
     let thread_title = "Integration Test Thread";
     let thread_author = "did:test:thread_author";
     let thread_scope = "test.scope.thread";
-    let created_thread_summary =
-        create_thread(&client, &server_url, thread_title, thread_author, thread_scope).await;
+    let created_thread_summary = create_thread(
+        &client,
+        &server_url,
+        thread_title,
+        thread_author,
+        thread_scope,
+    )
+    .await;
 
     assert_eq!(created_thread_summary.title, thread_title);
     assert_eq!(created_thread_summary.author_did, thread_author);
@@ -332,18 +361,40 @@ async fn test_full_lifecycle() {
         .iter()
         .any(|v| v.voter_did == voter3 && v.vote_type == VoteType::Abstain));
 
-    let approve_count = proposal_votes_response.votes.iter().filter(|v| v.vote_type == VoteType::Approve).count();
-    let reject_count = proposal_votes_response.votes.iter().filter(|v| v.vote_type == VoteType::Reject).count();
-    let abstain_count = proposal_votes_response.votes.iter().filter(|v| v.vote_type == VoteType::Abstain).count();
+    let approve_count = proposal_votes_response
+        .votes
+        .iter()
+        .filter(|v| v.vote_type == VoteType::Approve)
+        .count();
+    let reject_count = proposal_votes_response
+        .votes
+        .iter()
+        .filter(|v| v.vote_type == VoteType::Reject)
+        .count();
+    let abstain_count = proposal_votes_response
+        .votes
+        .iter()
+        .filter(|v| v.vote_type == VoteType::Abstain)
+        .count();
 
-    assert_eq!(approve_count, 1, "Approve votes should be 1 in full_lifecycle");
-    assert_eq!(reject_count, 1, "Reject votes should be 1 in full_lifecycle");
-    assert_eq!(abstain_count, 1, "Abstain votes should be 1 in full_lifecycle");
+    assert_eq!(
+        approve_count, 1,
+        "Approve votes should be 1 in full_lifecycle"
+    );
+    assert_eq!(
+        reject_count, 1,
+        "Reject votes should be 1 in full_lifecycle"
+    );
+    assert_eq!(
+        abstain_count, 1,
+        "Abstain votes should be 1 in full_lifecycle"
+    );
 
     println!("Proposal votes response: {:?}", proposal_votes_response);
 
     // Optional: Verify thread detail (if proposals are linked back to threads, which they are not in the current model)
-    let final_thread_detail = get_thread_detail(&client, &server_url, &created_thread_summary.id).await;
+    let final_thread_detail =
+        get_thread_detail(&client, &server_url, &created_thread_summary.id).await;
     // Depending on whether ThreadDetail is updated to show linked proposals, add assertions here.
     // For now, we just check that the thread still exists.
     assert_eq!(final_thread_detail.summary.id, created_thread_summary.id);
@@ -355,9 +406,30 @@ async fn test_get_threads_with_query_params() {
     let client = Client::new();
 
     // Create a couple of threads with different scopes
-    let _ = create_thread(&client, &server_url, "Thread A Scope X", "did:test:authorA", "scope.x").await;
-    let _ = create_thread(&client, &server_url, "Thread B Scope Y", "did:test:authorB", "scope.y").await;
-    let _ = create_thread(&client, &server_url, "Thread C Scope X", "did:test:authorC", "scope.x").await;
+    let _ = create_thread(
+        &client,
+        &server_url,
+        "Thread A Scope X",
+        "did:test:authorA",
+        "scope.x",
+    )
+    .await;
+    let _ = create_thread(
+        &client,
+        &server_url,
+        "Thread B Scope Y",
+        "did:test:authorB",
+        "scope.y",
+    )
+    .await;
+    let _ = create_thread(
+        &client,
+        &server_url,
+        "Thread C Scope X",
+        "did:test:authorC",
+        "scope.x",
+    )
+    .await;
 
     // Test filtering by scope
     let threads_scope_x = client
@@ -489,7 +561,11 @@ async fn test_get_proposal_votes_handler() {
                 title: "Votes Test Proposal".to_string(),
                 scope: "test.votes".to_string(),
                 status: ProposalStatus::Open,
-                vote_counts: VoteCounts { approve: 0, reject: 0, abstain: 0 }, // Initial counts
+                vote_counts: VoteCounts {
+                    approve: 0,
+                    reject: 0,
+                    abstain: 0,
+                }, // Initial counts
                 voting_deadline: Utc::now() + Duration::days(1),
             },
             full_text: "Full text for votes test proposal".to_string(),
@@ -541,9 +617,21 @@ async fn test_get_proposal_votes_handler() {
     assert_eq!(proposal_votes_response.votes.len(), 3);
 
     // Assert vote counts by iterating and filtering
-    let approve_count = proposal_votes_response.votes.iter().filter(|v| v.vote_type == VoteType::Approve).count();
-    let reject_count = proposal_votes_response.votes.iter().filter(|v| v.vote_type == VoteType::Reject).count();
-    let abstain_count = proposal_votes_response.votes.iter().filter(|v| v.vote_type == VoteType::Abstain).count();
+    let approve_count = proposal_votes_response
+        .votes
+        .iter()
+        .filter(|v| v.vote_type == VoteType::Approve)
+        .count();
+    let reject_count = proposal_votes_response
+        .votes
+        .iter()
+        .filter(|v| v.vote_type == VoteType::Reject)
+        .count();
+    let abstain_count = proposal_votes_response
+        .votes
+        .iter()
+        .filter(|v| v.vote_type == VoteType::Abstain)
+        .count();
 
     assert_eq!(approve_count, 1, "Approve votes should be 1");
     assert_eq!(reject_count, 1, "Reject votes should be 1");

@@ -1,26 +1,45 @@
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 // use std::sync::{Arc, RwLock}; // Removed unused Arc, RwLock
 use tower_http::cors::{Any, CorsLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 // Import all necessary components from the current crate
-use crate::handlers::{
-    Db, // InMemoryStore, // Removed unused InMemoryStore
-    health_check_handler,
-    get_threads_handler, create_thread_handler, get_thread_detail_handler,
-    get_proposals_handler, create_proposal_handler, get_proposal_detail_handler,
-    cast_vote_handler, get_proposal_votes_handler
-};
-use crate::models::{ // For OpenAPI schema generation
-    ThreadSummary, ThreadDetail, Message,
-    ProposalSummary, ProposalDetail, Vote,
-    VoteCounts, ProposalStatus, VoteType,
-    NewThreadRequest, NewProposalRequest, NewVoteRequest,
-    GetThreadsQuery, GetProposalsQuery, ProposalVotesResponse,
-    // Timestamp is implicitly handled by chrono in models
-};
 use crate::error::ApiError;
+use crate::handlers::{
+    cast_vote_handler,
+    create_proposal_handler,
+    create_thread_handler,
+    get_proposal_detail_handler,
+    get_proposal_votes_handler,
+    get_proposals_handler,
+    get_thread_detail_handler,
+    get_threads_handler,
+    health_check_handler,
+    Db, // InMemoryStore, // Removed unused InMemoryStore
+};
+use crate::models::{
+    GetProposalsQuery,
+    GetThreadsQuery,
+    Message,
+    NewProposalRequest,
+    NewThreadRequest,
+    NewVoteRequest,
+    ProposalDetail,
+    ProposalStatus,
+    ProposalSummary,
+    ProposalVotesResponse,
+    // Timestamp is implicitly handled by chrono in models
+    ThreadDetail,
+    // For OpenAPI schema generation
+    ThreadSummary,
+    Vote,
+    VoteCounts,
+    VoteType,
+};
 
 // Define the OpenAPI documentation structure
 // This should be identical to the one in main.rs
@@ -62,18 +81,12 @@ pub fn create_app(db: Db) -> Router {
             "/threads",
             get(get_threads_handler).post(create_thread_handler),
         )
-        .route(
-            "/threads/:id",
-            get(get_thread_detail_handler),
-        )
+        .route("/threads/:id", get(get_thread_detail_handler))
         .route(
             "/proposals",
             get(get_proposals_handler).post(create_proposal_handler),
         )
-        .route(
-            "/proposals/:id",
-            get(get_proposal_detail_handler),
-        )
+        .route("/proposals/:id", get(get_proposal_detail_handler))
         .route("/votes", post(cast_vote_handler))
         .route(
             "/proposals/:proposal_id/votes",
@@ -81,4 +94,4 @@ pub fn create_app(db: Db) -> Router {
         )
         .layer(cors)
         .with_state(db)
-} 
+}

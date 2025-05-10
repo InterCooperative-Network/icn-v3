@@ -1,11 +1,11 @@
-use anyhow::{Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use icn_core_vm::{CoVm, ExecutionMetrics, HostContext, ResourceLimits};
 use icn_economics::ScopedResourceToken;
 // use icn_identity_core::did::Did;
 type Did = String; // DIDs are strings in the format did:key:...
-// use icn_identity_core::vc::ExecutionReceiptCredential;
+                   // use icn_identity_core::vc::ExecutionReceiptCredential;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -372,7 +372,8 @@ impl PlanetaryMeshNode {
         let host_context = HostContext::default();
 
         // Execute the WASM module
-        let updated_host_context = self.vm
+        let updated_host_context = self
+            .vm
             .execute(wasm_bytes, host_context)
             .map_err(|e| MeshError::ExecutionFailed(e.to_string()))?;
 
@@ -387,7 +388,8 @@ impl PlanetaryMeshNode {
         let wasm_bytes = std::fs::read(path)
             .map_err(|e| MeshError::ExecutionFailed(format!("Failed to read WASM: {}", e)))?;
         let host_context = HostContext::default();
-        let updated_host_context = self.vm
+        let updated_host_context = self
+            .vm
             .execute(&wasm_bytes, host_context)
             .map_err(|e| MeshError::ExecutionFailed(e.to_string()))?;
         let metrics = updated_host_context.metrics.lock().unwrap().clone();

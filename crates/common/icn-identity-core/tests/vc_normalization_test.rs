@@ -1,8 +1,8 @@
+use base64::Engine;
 use ed25519_dalek::Keypair;
 use icn_types::identity::{CredentialProof, CredentialSubject, VerifiableCredential};
 use rand::rngs::OsRng;
 use std::collections::HashMap;
-use base64::Engine;
 
 #[test]
 fn test_credential_canonical_serialization() {

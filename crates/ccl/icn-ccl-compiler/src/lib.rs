@@ -1,4 +1,4 @@
-use anyhow::{Result};
+use anyhow::Result;
 // use once_cell::sync::Lazy; // Removed
 use serde::{Deserialize, Serialize};
 // use std::collections::HashMap; // Removed
@@ -7,8 +7,8 @@ use std::process::Command;
 use tempfile::TempDir;
 use thiserror::Error;
 use wasm_encoder::{
-    CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType, EntityType,
+    CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
+    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType,
 };
 
 /// Error types specific to the CCL compiler
@@ -86,9 +86,7 @@ impl CclCompiler {
     pub fn new() -> Result<Self> {
         let temp_dir = TempDir::new()?;
 
-        Ok(Self {
-            temp_dir,
-        })
+        Ok(Self { temp_dir })
     }
 
     /// Compile CCL source to an intermediate DSL representation (stub)
@@ -209,9 +207,17 @@ lto = true
         let mut imports = ImportSection::new();
         // Imported functions get their own function indices starting from 0.
         // host_log_message will be func idx 0
-        imports.import("host", "host_log_message", EntityType::Function(host_fn_type_idx));
+        imports.import(
+            "host",
+            "host_log_message",
+            EntityType::Function(host_fn_type_idx),
+        );
         // host_anchor_to_dag will be func idx 1
-        imports.import("host", "host_anchor_to_dag", EntityType::Function(host_fn_type_idx));
+        imports.import(
+            "host",
+            "host_anchor_to_dag",
+            EntityType::Function(host_fn_type_idx),
+        );
         module.section(&imports);
 
         // Function section: Declare 'run' function (locally defined)
@@ -222,12 +228,17 @@ lto = true
 
         // Memory section (minimum 1 page)
         let mut memory_section = MemorySection::new();
-        memory_section.memory(MemoryType { minimum: 1, maximum: None, memory64: false, shared: false });
+        memory_section.memory(MemoryType {
+            minimum: 1,
+            maximum: None,
+            memory64: false,
+            shared: false,
+        });
         module.section(&memory_section);
 
         // Code section: Define the body of the 'run' function
         let mut code = CodeSection::new();
-        let locals = vec![]; 
+        let locals = vec![];
         let mut f = Function::new(locals);
 
         for opcode in opcodes {
@@ -235,19 +246,26 @@ lto = true
                 DslOpcode::AnchorData { cid: _ } => {
                     f.instruction(&Instruction::Call(1)); // Call host_anchor_to_dag (import func idx 1)
                 }
-                DslOpcode::PerformMeteredAction { action_type: _, amount: _ } => {
+                DslOpcode::PerformMeteredAction {
+                    action_type: _,
+                    amount: _,
+                } => {
                     f.instruction(&Instruction::Call(0)); // Call host_log_message (import func idx 0)
                 }
-                DslOpcode::MintToken { token_type: _, amount: _, recipient: _ } => {
-                    f.instruction(&Instruction::Call(0)); 
+                DslOpcode::MintToken {
+                    token_type: _,
+                    amount: _,
+                    recipient: _,
+                } => {
+                    f.instruction(&Instruction::Call(0));
                 }
                 DslOpcode::SubmitJob { .. } => {
-                    f.instruction(&Instruction::Call(0)); 
+                    f.instruction(&Instruction::Call(0));
                 }
             }
         }
         f.instruction(&Instruction::End);
-        code.function(&f); 
+        code.function(&f);
         module.section(&code);
 
         // Exports section: Export 'run' function
@@ -264,7 +282,7 @@ lto = true
         let param_types = vec![ValType::I32, ValType::I32];
         let result_types = vec![];
         types.function(param_types, result_types);
-        types.len() - 1 
+        types.len() - 1
     }
 }
 

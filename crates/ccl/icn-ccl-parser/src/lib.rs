@@ -293,13 +293,13 @@ pub struct CclElectionRole {
 impl CclDocument {
     /// Parse a CCL string into a document
     pub fn parse(input: &str) -> CclParserResult<Self> {
-        let _parsed = CclParser::parse(Rule::ccl, input)
-            .map_err(|e| CclError::ParseError(e.to_string()))?;
+        let _parsed =
+            CclParser::parse(Rule::ccl, input).map_err(|e| CclError::ParseError(e.to_string()))?;
 
         // TODO: Actual parsing logic to populate CclDocument fields from `_parsed` (pest Pairs)
         // For now, return a minimal CclDocument to satisfy compilation
         Ok(CclDocument {
-            title: "Parsed CCL Document (Stub)".to_string(), 
+            title: "Parsed CCL Document (Stub)".to_string(),
             description: "Description (Stub)".to_string(),
             author: "Author (Stub)".to_string(),
             created: "Created (Stub)".to_string(),
