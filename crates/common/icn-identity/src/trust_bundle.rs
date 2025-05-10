@@ -107,4 +107,10 @@ impl TrustBundle {
         proof.verify(&hash, allowed_signers)
             .map_err(TrustBundleError::QuorumError)
     }
+    
+    /// Returns the root DAG CID of this trust bundle.
+    /// This is a convenience method to avoid having to access the field directly.
+    pub fn cid(&self) -> &str {
+        &self.root_dag_cid
+    }
 } 

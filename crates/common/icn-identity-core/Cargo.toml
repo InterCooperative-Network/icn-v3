@@ -2,9 +2,11 @@
 name = "icn-identity-core"
 version = "0.1.0"
 edition = "2021"
-description = "DID and credential primitives for ICN [DEPRECATED: use icn-identity instead]"
+description = "Core identity types for ICN [DEPRECATED]"
 license = "Apache-2.0"
-publish = false # Mark as not publishable since it's deprecated
+publish = false
+doctest = false
+test = false
 
 [dependencies]
 ed25519-dalek = "1.0"

@@ -22,6 +22,13 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.0"
 
+[dev-dependencies]
+icn-identity = { path = "../../common/icn-identity" }
+serde_json = "1.0"
+tempfile = "3.8"
+anyhow = "1.0"
+async-trait = "0.1"
+
 [features]
 default = []
 legacy-identity = ["icn-identity-core"] 

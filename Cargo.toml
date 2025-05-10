@@ -17,6 +17,26 @@ members = [
     "crates/services/icn-agoranet",
     "tests/federation_bootstrap_test"
 ]
+
+# Default members excludes deprecated crates
+default-members = [
+    "crates/common/icn-types",
+    "crates/common/icn-crypto",
+    "crates/common/icn-identity",
+    "crates/common/icn-economics",
+    "crates/ccl/icn-ccl-parser",
+    "crates/ccl/icn-ccl-compiler",
+    "crates/ccl/icn-ccl-dsl",
+    "crates/ccl/icn-ccl-wasm-codegen",
+    "crates/runtime/icn-core-vm",
+    "crates/runtime/icn-runtime",
+    "crates/p2p/planetary-mesh",
+    "crates/tools/icn-cli",
+    "crates/tools/meshctl",
+    "crates/services/icn-agoranet",
+    "tests/federation_bootstrap_test"
+]
+
 resolver = "2"
 
 [workspace.package]
