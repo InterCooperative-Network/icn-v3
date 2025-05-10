@@ -1,0 +1,13 @@
+---
+source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
+expression: prog
+---
+{
+  "ops": [
+    {
+      "Todo": {
+        "note": "TODO: proposal \"Cooperative Bylaws\""
+      }
+    }
+  ]
+}

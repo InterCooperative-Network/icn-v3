@@ -7,6 +7,7 @@ expression: dsl_modules
     "Proposal": {
       "id": "f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff",
       "title": "cooperative_budget",
+      "version": "0.0.0-unknown",
       "body": "Annual cooperative budget allocation and spending rules",
       "author": "unknown",
       "created_at": 0,
@@ -205,7 +206,7 @@ expression: dsl_modules
         },
         {
           "Anchor": {
-            "data_reference": "map_content_placeholder_[Rule { key: \"id\", value: String(\"ctx.expense_id\") }, Rule { key: \"details\", value: String(\"ctx.expense_details\") }, Rule { key: \"status\", value: String(\"approved\") }, Rule { key: \"approved_at\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: List([]) }]) }]",
+            "data_reference": "map_content_placeholder_[Rule { key: \"id\", value: String(\"ctx.expense_id\") }, Rule { key: \"details\", value: String(\"ctx.expense_details\") }, Rule { key: \"status\", value: String(\"approved\") }, Rule { key: \"approved_at\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: Map([]) }]) }]",
             "path": "finance/expenses"
           }
         }

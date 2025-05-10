@@ -43,6 +43,8 @@ pub struct Proposal {
     pub id: Uuid,
     /// Title of the proposal.
     pub title: String,
+    /// Version of the proposal.
+    pub version: String,
     /// Body content of the proposal.
     pub body: String,
     /// Author identifier (e.g., DID).
@@ -197,6 +199,7 @@ mod tests {
         let p = Proposal {
             id: Uuid::parse_str(TEST_UUID).unwrap(), // Use fixed UUID
             title: "Test".into(),
+            version: "1.0".into(),
             body: "hello".into(),
             author: "did:key:z6M...".into(),
             created_at: 0,

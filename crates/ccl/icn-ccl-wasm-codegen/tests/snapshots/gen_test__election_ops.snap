@@ -1,6 +1,5 @@
 ---
 source: crates/ccl/icn-ccl-wasm-codegen/tests/gen_test.rs
-assertion_line: 24
 expression: prog
 ---
 {

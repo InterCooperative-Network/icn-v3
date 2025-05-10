@@ -1,57 +1,88 @@
 //'!' Pass #2: lower `icn-ccl-dsl` structures into an executable opcode stream.
 
-mod opcodes;
-pub use opcodes::{Opcode, Program};
+use icn_ccl_dsl::{ActionStep, DslModule, DslRule, DslValue};
+// Removed DslValue from here as it's used qualified like DslValue::If
+use crate::opcodes::{Opcode, Program};
 
-use icn_ccl_dsl::*;
-use Program as P;
+pub mod opcodes;
 
-pub struct WasmGenerator;
+pub struct WasmGenerator {
+    ops: Vec<Opcode>,
+}
 
 impl WasmGenerator {
-    pub fn generate(modules: &[DslModule]) -> P {
-        let mut prog = P::new();
+    pub fn new() -> Self {
+        Self { ops: Vec::new() }
+    }
 
-        for m in modules {
-            match m {
-                // ───────────────────────────────────────────────────
-                DslModule::ActionHandler(handler) => {
-                    for step in &handler.steps {
-                        match step {
-                            ActionStep::Metered(ma) => prog.ops.push(Opcode::MintToken {
-                                resource_type: ma.resource_type.clone(),
-                                recipient: ma
-                                    .recipient
-                                    .clone()
-                                    .unwrap_or_else(|| "<unknown>".into()),
-                            }),
-                            ActionStep::Anchor(a) => prog.ops.push(Opcode::AnchorData {
-                                path: a.path.clone().unwrap_or_default(),
-                                data_reference: a.data_reference.clone(),
-                            }),
-                        }
-                    }
+    pub fn generate(mut self, modules: Vec<DslModule>) -> Program { // Changed to take Vec, not slice, and consume self
+        for module in modules {
+            self.walk_module(&module);
+        }
+        Program::new(self.ops) // Program::new now takes ops
+    }
+
+    fn walk_module(&mut self, m: &DslModule) {
+        match m {
+            DslModule::Proposal(p) => {
+                self.ops.push(Opcode::CreateProposal {
+                    title: p.title.clone(),
+                    version: p.version.clone(), 
+                });
+                self.walk_rules(&p.rules);
+            }
+            DslModule::ActionHandler(h) => {
+                self.ops.push(Opcode::OnEvent { event: h.event.clone() });
+                for step in &h.steps {
+                    self.walk_step(step);
                 }
+            }
+            DslModule::Section(s) => {
+                self.ops.push(Opcode::BeginSection {
+                    kind: s.kind.clone(),
+                    title: s.title.clone(),
+                });
+                self.walk_rules(&s.rules);
+                self.ops.push(Opcode::EndSection);
+            }
+            DslModule::Role(r) => {
+                self.ops.push(Opcode::Todo(format!("Role definition: {}", r.name)));
+                // If Role has rules, uncomment and ensure DslRule.rules exists:
+                // self.walk_rules(&r.rules);
+            }
+            other => self.ops.push(Opcode::Todo(format!("Unhandled DslModule: {:?}", other))),
+        }
+    }
 
-                DslModule::Proposal(p) => prog.ops.push(Opcode::Todo {
-                    note: format!("TODO: proposal \"{}\"", p.title),
-                }),
+    fn walk_step(&mut self, step: &ActionStep) {
+        match step {
+            ActionStep::MintToken(mt) => {
+                self.ops.push(Opcode::Todo(format!("ActionStep::MintToken to be implemented for: {:?}", mt.token_type)));
+            }
+            ActionStep::AnchorData(ad) => {
+                self.ops.push(Opcode::Todo(format!("ActionStep::AnchorData to be implemented for path: {:?}", ad.path)));
+            }
+            ActionStep::PerformMeteredAction(pma) => {
+                self.ops.push(Opcode::Todo(format!("ActionStep::PerformMeteredAction to be implemented for: {:?}", pma.action)));
+            }
+            // Removed the catch-all _ => as the previous match was exhaustive. 
+            // If new ActionStep variants are added, they'll cause a compile error here, which is good.
+        }
+    }
 
-                DslModule::Role(r) => prog.ops.push(Opcode::Todo {
-                    note: format!("TODO: role \"{}\"", r.name),
-                }),
-
-                DslModule::Section(s) => prog.ops.push(Opcode::Todo {
-                    note: format!("TODO: section kind={}", s.kind),
-                }),
-                // Catch-all for DslModule variants not yet handled above
-                // (Vote, Anchor, MeteredAction if they were to appear top-level)
-                _ => prog.ops.push(Opcode::Todo {
-                    note: format!("TODO: Unhandled DslModule variant: {:?}", m)
-                })
+    fn walk_rules(&mut self, rules: &[DslRule]) {
+        for rule in rules {
+            match &rule.value {
+                DslValue::If(if_expr) => {
+                    self.ops.push(Opcode::Todo(format!("IfExpr to be implemented for condition: {:?}", if_expr.condition_raw)));
+                }
+                DslValue::Range(range_rule) => {
+                    self.ops.push(Opcode::Todo(format!("RangeRule to be implemented: {}-{}", range_rule.start, range_rule.end)));
+                }
+                _ => {
+                    self.ops.push(Opcode::Todo(format!("Unhandled DslRule in walk_rules: {} = {:?}", rule.key, rule.value)));
+                }
             }
         }
-
-        prog
     }
 } 

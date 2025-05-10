@@ -6,91 +6,136 @@ expression: dsl_modules
   {
     "Proposal": {
       "id": "f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff",
-      "title": "cooperative_bylaws",
+      "title": "Cooperative Bylaws from CONST",
+      "version": "1.0.0-const",
       "body": "Core operational rules and governance structure for the cooperative.",
       "author": "unknown",
       "created_at": 0,
       "rules": [
         {
-          "key": "version",
-          "value": "1.0.0"
+          "key": "min_members_for_quorum",
+          "value": 10.0
         },
         {
-          "key": "membership_rules",
-          "value": [
-            {
-              "key": "eligibility",
-              "value": "all_welcome"
-            },
-            {
-              "key": "application_process",
-              "value": "simple_form"
-            },
-            {
-              "key": "dues",
-              "value": [
-                {
-                  "key": "amount",
-                  "value": 0.0
-                },
-                {
-                  "key": "currency",
-                  "value": "USD"
-                }
-              ]
-            }
-          ]
+          "key": "max_voting_period_days",
+          "value": 14.0
         },
         {
-          "key": "voting_rights",
-          "value": [
-            {
-              "key": "standard_member",
-              "value": "one_person_one_vote"
-            }
-          ]
+          "key": "default_proposal_duration",
+          "value": "7d"
+        },
+        {
+          "key": "if_condition_3",
+          "value": {
+            "condition_raw": "proposal.type == \"bylaw_change\"",
+            "then_rules": [
+              {
+                "key": "quorum",
+                "value": 0.6
+              },
+              {
+                "key": "voting_period",
+                "value": "14d"
+              }
+            ],
+            "else_rules": null
+          }
+        },
+        {
+          "key": "if_condition_4",
+          "value": {
+            "condition_raw": "proposal.category == \"emergency\"",
+            "then_rules": [
+              {
+                "key": "fast_track",
+                "value": true
+              },
+              {
+                "key": "notification_period",
+                "value": "1d"
+              }
+            ],
+            "else_rules": [
+              {
+                "key": "standard_review_period",
+                "value": "7d"
+              }
+            ]
+          }
+        },
+        {
+          "key": "member_age_requirement",
+          "value": {
+            "start": 18.0,
+            "end": 120.0,
+            "rules": [
+              {
+                "key": "status",
+                "value": "eligible"
+              },
+              {
+                "key": "requires_guardian_approval",
+                "value": false
+              }
+            ]
+          }
         },
         {
           "key": "proposal_processing",
           "value": [
             {
-              "key": "if_condition_0",
-              "value": {
-                "condition_raw": "proposal.type == \"bylaw_change\"",
-                "then_rules": [
-                  {
-                    "key": "quorum",
-                    "value": 0.6
-                  },
-                  {
-                    "key": "voting_period",
-                    "value": "14d"
-                  }
-                ],
-                "else_rules": null
-              }
+              "key": "min_duration",
+              "value": "7d"
             },
             {
-              "key": "if_condition_1",
-              "value": {
-                "condition_raw": "proposal.category == \"emergency\"",
-                "then_rules": [
-                  {
-                    "key": "fast_track",
-                    "value": true
-                  },
-                  {
-                    "key": "notification_period",
-                    "value": "1d"
-                  }
-                ],
-                "else_rules": [
-                  {
-                    "key": "standard_review_period",
-                    "value": "7d"
-                  }
-                ]
-              }
+              "key": "max_duration",
+              "value": "21d"
+            },
+            {
+              "key": "default_duration",
+              "value": "14d"
+            },
+            {
+              "key": "pass_threshold_percentage",
+              "value": 0.66
+            },
+            {
+              "key": "quorum_percentage",
+              "value": 0.1
+            },
+            {
+              "key": "can_be_emergency",
+              "value": true
+            },
+            {
+              "key": "emergency_pass_threshold_percentage",
+              "value": 0.75
+            },
+            {
+              "key": "emergency_quorum_percentage",
+              "value": 0.2
+            }
+          ]
+        },
+        {
+          "key": "log_event",
+          "value": [
+            {
+              "key": "function_name",
+              "value": "log_event"
+            },
+            {
+              "key": "args",
+              "value": [
+                {
+                  "key": "name",
+                  "value": "bylaws_loaded"
+                },
+                {
+                  "key": "detail",
+                  "value": "Cooperative Bylaws CONST v1.0.0-const processed"
+                }
+              ]
             }
           ]
         }

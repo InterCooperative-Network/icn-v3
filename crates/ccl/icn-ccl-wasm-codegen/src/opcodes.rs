@@ -3,36 +3,39 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Opcode represents a single operation in a compiled ICN program.
+// These are high-level opcodes, not raw WASM instructions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Opcode {
-    /// Placeholder emitted for un-lowered DSL modules.
-    Todo { note: String },
+    // high-level
+    CreateProposal { title: String, version: Option<String> },
+    OnEvent { event: String },
 
-    /// Mint a token of `resource_type` to `recipient`, with optional embedded JSON (`data`).
-    MintToken {
-        resource_type: String,
-        recipient: String,
-    },
+    // actions
+    MintToken { res_type: String, amount: u64, recipient: Option<String> },
+    AnchorData { path: Option<String>, data_ref: String },
 
-    /// Anchor `data_reference` (CID or pointer) under `path`.
-    AnchorData {
-        path: String,
-        data_reference: String,
-    },
+    // control flow
+    If { condition: String },
+    Else,
+    EndIf,
 
-    /// Stub for branching – the second `u32` is the jump-target index in `Program.ops`.
-    If { condition_raw: String, jump_on_false: u32 },
+    // misc
+    RangeCheck { start: f64, end: f64 },
+    BeginSection { kind: String, title: Option<String> },
+    EndSection,
 
-    // (More opcodes will land here very soon…)
+    Todo(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Program is a sequence of opcodes, the result of compiling a DslModule list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub ops: Vec<Opcode>,
 }
 
 impl Program {
-    pub fn new() -> Self {
-        Self { ops: Vec::new() }
+    pub fn new(ops: Vec<Opcode>) -> Self {
+        Program { ops }
     }
 } 

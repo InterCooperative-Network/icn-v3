@@ -297,53 +297,69 @@ mod tests {
     const ELECTION_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/election.ccl");
     const BUDGET_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/budget.ccl");
     const BYLAWS_CCL_STR: &str = r#"
-// ICN Contract Chain Language - Bylaws Template
-bylaws "cooperative_bylaws" {
+// ICN Contract Chain Language – Bylaws Template
+bylaws_def "Cooperative Bylaws from CONST" version "1.0.0-const" {
+
+  // ─────────────  High-level parameters  ─────────────
   description "Core operational rules and governance structure for the cooperative."
-  version "1.0.0"
+  min_members_for_quorum 10
+  max_voting_period_days 14
+  default_proposal_duration "7d"
 
-  membership_rules {
-    eligibility "all_welcome"
-    application_process "simple_form"
-    dues {
-      amount 0
-      currency "USD"
-    }
+  // ─────────────  Conditional rules  ─────────────
+  if proposal.type == "bylaw_change" {
+    description "Special rules for bylaw changes."
+    quorum 0.60
+    voting_period "14d"
   }
 
-  voting_rights {
-    standard_member "one_person_one_vote"
+  if proposal.category == "emergency" {
+    fast_track true
+    notification_period "1d"
+  } else {
+    standard_review_period "7d"
   }
 
-  // Example if statement processing rules
+  // ─────────────  Range-based rules  ─────────────
+  member_age_requirement range 18 120 {
+    status "eligible"
+    requires_guardian_approval false
+  }
+
+  // ─────────────  Nested config blocks  ─────────────
   proposal_processing {
-    if proposal.type == "bylaw_change" {
-      description "Special rules for bylaw changes."
-      quorum 0.6
-      voting_period "14d" // Note: Pest parses this as string_literal, not duration
-                         // This is fine for MVP, DslValue::String("14d") is acceptable.
-    }
-
-    if proposal.category == "emergency" {
-        fast_track true
-        notification_period "1d"
-    } else {
-        standard_review_period "7d"
-    }
+    min_duration "7d"
+    max_duration "21d"
+    default_duration "14d"
+    pass_threshold_percentage 0.66
+    quorum_percentage 0.10
+    can_be_emergency true
+    emergency_pass_threshold_percentage 0.75
+    emergency_quorum_percentage 0.20
   }
 
-  // Actions specific to bylaws lifecycle
+  // ─────────────  Lifecycle actions  ─────────────
   actions {
     on "bylaw.amendment.proposed" {
       mint_token {
         type "bylaw_amendment_proposal_receipt"
-        // Further details for the token can be added here
+        recipients proposal.submitter_id
+        data {
+          proposal_id proposal.id
+          submitted_at timestamp()
+        }
+      }
+
+      anchor_data {
+        path "governance/bylaws"
+        data proposal.content
       }
     }
-    // Other bylaw-specific actions can be defined here
   }
+
+  // ─────────────  Logging example  ─────────────
+  log_event(name: "bylaws_loaded", detail: "Cooperative Bylaws CONST v1.0.0-const processed");
 }
-// Force update
 "#;
 
     #[test]

@@ -74,7 +74,7 @@ impl Lowerer {
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
             }
             Rule::bylaws_def => {
-                modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
+                modules.push(DslModule::Proposal(self.lower_bylaws_def(pair)?));
             }
             Rule::roles_def => {
                 let pair_span = pair.as_span(); // Get span before move
@@ -271,6 +271,28 @@ impl Lowerer {
                                     key,
                                     value: DslValue::If(Box::new(if_expr_data)),
                                 });
+                            }
+                            Rule::function_call_statement => {
+                                // function_call_statement = { function_call ~ ";" }
+                                // inner_def_pair is Rule::function_call_statement
+                                // Its first inner should be Rule::function_call
+                                if let Some(fc_pair) = inner_def_pair.into_inner().next() { 
+                                    if fc_pair.as_rule() == Rule::function_call {
+                                        // Extract function name from the function_call pair for the key
+                                        // function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
+                                        // The first inner of fc_pair is the identifier (function name)
+                                        let fn_name = fc_pair.clone().into_inner().next()
+                                            .map_or_else(|| "unknown_function_call".to_string(), |p| p.as_str().to_string());
+                                        
+                                        let dsl_val = self.lower_value_rule(fc_pair)?;
+                                        dsl_rules.push(DslRule {
+                                            key: fn_name,
+                                            value: dsl_val,
+                                        });
+                                    }
+                                    // Else: malformed function_call_statement, inner was not function_call
+                                }
+                                // Else: malformed function_call_statement, no inner pair
                             }
                             _ => { /* Other definitions in statement. Ignored for common fields. */ }
                         }
@@ -529,6 +551,9 @@ impl Lowerer {
             .as_str()
             .trim_matches('"')
             .to_owned();
+        
+        // For proposal_def, election_def, budget_def which don't have a version in grammar
+        let version = "0.0.0-unknown".to_string(); // Default/placeholder version
 
         let block_pair = proposal_specific_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
             pest::error::ErrorVariant::CustomError { message: "Proposal missing block".to_string() },
@@ -537,7 +562,7 @@ impl Lowerer {
 
         let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
         
-        Ok(self.build_stub_proposal(title, description_body, dsl_rules))
+        Ok(self.build_stub_proposal(title, version, description_body, dsl_rules))
     }
 
     fn lower_election(&self, pair: Pair<'_, Rule>) -> Result<Proposal, LowerError> {
@@ -561,10 +586,10 @@ impl Lowerer {
 
         let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
 
-        Ok(self.build_stub_proposal(title, description_body, dsl_rules))
+        Ok(self.build_stub_proposal(title, "0.0.0-unknown".to_string(), description_body, dsl_rules))
     }
 
-    fn build_stub_proposal(&self, title: String, body: String, rules: Vec<DslRule>) -> Proposal {
+    fn build_stub_proposal(&self, title: String, version: String, body: String, rules: Vec<DslRule>) -> Proposal {
         let id = {
             #[cfg(test)]
             { Uuid::parse_str(TEST_UUID_STR).unwrap() } 
@@ -575,11 +600,47 @@ impl Lowerer {
         Proposal {
             id,
             title,
+            version,
             body,
             author: "unknown".into(),
             created_at: 0,
             rules, // Use passed in rules
         }
+    }
+
+    fn lower_bylaws_def(&self, pair: Pair<'_, Rule>) -> Result<Proposal, LowerError> {
+        // bylaws_def = { "bylaws_def" ~ string_literal ~ "version" ~ string_literal ~ block }
+        let pair_span = pair.as_span();
+        let mut bylaws_specific_pairs = pair.into_inner();
+
+        let title = bylaws_specific_pairs
+            .next()
+            .ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: "Bylaws definition missing title".to_string() },
+                pair_span,
+            )))?
+            .as_str()
+            .trim_matches('"')
+            .to_owned();
+
+        let version = bylaws_specific_pairs
+            .next() // Skips "version" keyword, takes the string_literal after it
+            .ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: "Bylaws definition missing version string".to_string() },
+                pair_span,
+            )))?
+            .as_str()
+            .trim_matches('"')
+            .to_owned();
+
+        let block_pair = bylaws_specific_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "Bylaws definition missing block".to_string() },
+            pair_span,
+        )))?;
+
+        let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
+        
+        Ok(self.build_stub_proposal(title, version, description_body, dsl_rules))
     }
 
     fn lower_actions(&self, pair: Pair<'_, Rule>) -> Result<Vec<DslModule>, LowerError> {

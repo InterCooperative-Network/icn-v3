@@ -32,6 +32,7 @@ comparison_expression = { comparison_operand ~ comparison_operator ~ comparison_
 if_statement = { "if" ~ comparison_expression ~ block ~ ("else" ~ block)? }
 
 // specific_id_num_statement = { identifier ~ number } // Diagnostic for id ~ num issue
+function_call_statement = { function_call ~ ";" }
 
 statement = {
     organization_def |
@@ -54,6 +55,7 @@ statement = {
     vacancies_def |
     if_statement |
     range_statement |
+    function_call_statement |
     // specific_id_num_statement | // Diagnostic
     any_statement
 }
@@ -85,7 +87,7 @@ perform_metered_action = { "perform_metered_action" ~ block }
 budget_def = { "budget" ~ string_literal ~ block }
 
 // Bylaws definition
-bylaws_def = { "bylaws" ~ string_literal ~ block }
+bylaws_def = { "bylaws_def" ~ string_literal ~ "version" ~ string_literal ~ block }
 
 // Allocations definition
 allocations_def = { "allocations" ~ block }
