@@ -1,7 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
+#[cfg(feature = "legacy-identity")]
 use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
+use icn_identity::{TrustBundle, TrustValidationError, Did};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -29,6 +31,12 @@ pub enum RuntimeError {
 
     #[error("Resource authorization failed: {0}")]
     AuthorizationFailed(String),
+    
+    #[error("Trust bundle verification failed: {0}")]
+    TrustBundleVerificationError(#[from] TrustValidationError),
+    
+    #[error("No trust validator configured")]
+    NoTrustValidator,
 }
 
 /// Context for WASM virtual machine execution
@@ -460,6 +468,51 @@ impl Runtime {
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
     fn vm_context_to_host_context(&self, _vm_context: VmContext) -> HostContext {
         HostContext::default()
+    }
+
+    /// Verify a trust bundle using the configured trust validator
+    pub fn verify_trust_bundle(&self, bundle: &TrustBundle) -> Result<(), RuntimeError> {
+        let validator = self.context.trust_validator()
+            .ok_or(RuntimeError::NoTrustValidator)?;
+            
+        validator.set_trust_bundle(bundle.clone())
+            .map_err(RuntimeError::TrustBundleVerificationError)
+    }
+    
+    /// Register a trusted signer with DID and verifying key
+    pub fn register_trusted_signer(&self, did: Did, key: ed25519_dalek::VerifyingKey) -> Result<(), RuntimeError> {
+        let validator = self.context.trust_validator()
+            .ok_or(RuntimeError::NoTrustValidator)?;
+        
+        validator.register_signer(did, key);
+        Ok(())
+    }
+    
+    /// Check if a signer is authorized
+    pub fn is_authorized_signer(&self, did: &Did) -> Result<bool, RuntimeError> {
+        let validator = self.context.trust_validator()
+            .ok_or(RuntimeError::NoTrustValidator)?;
+            
+        validator.is_authorized_signer(did)
+            .map_err(RuntimeError::TrustBundleVerificationError)
+    }
+    
+    /// Host function for WASM to retrieve a trust bundle from a given CID
+    pub async fn host_get_trust_bundle(&self, cid: &str) -> Result<bool, RuntimeError> {
+        // This would normally retrieve a trust bundle from storage and verify it
+        // For now, just a stub that returns success
+        // In a real implementation, we would:
+        // 1. Retrieve the trust bundle from storage by CID
+        // 2. Verify it using the trust validator
+        // 3. Return true if verification succeeds
+        
+        // Check if we have a trust validator
+        if self.context.trust_validator().is_none() {
+            return Err(RuntimeError::NoTrustValidator);
+        }
+        
+        // For now, just return true if we have a trust validator
+        Ok(true)
     }
 }
 

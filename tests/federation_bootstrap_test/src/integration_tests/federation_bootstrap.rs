@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use icn_identity::{KeyPair, FederationMetadata, TrustBundle, QuorumProof, QuorumType, TrustValidator};
 use icn_runtime::{Runtime, RuntimeContext};
 use icn_types::{
     dag::{DagEventType, DagNodeBuilder},
@@ -10,7 +11,7 @@ use std::{
     process::Command,
     sync::Arc,
     time::{Duration, Instant},
-    collections::HashSet,
+    collections::{HashSet, HashMap},
 };
 use tokio::time::sleep;
 
@@ -23,6 +24,14 @@ const NODE_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 async fn test_federation_bootstrap() -> Result<()> {
     // Create a shared DAG store for the test
     let dag_store = Arc::new(SharedDagStore::new());
+    
+    // Create a TrustValidator
+    let trust_validator = Arc::new(TrustValidator::new());
+    
+    // Create a RuntimeContext with the trust validator
+    let context = RuntimeContext::new()
+        .with_dag_store(dag_store.clone())
+        .with_trust_validator(trust_validator.clone());
 
     // 1. Clean up any existing state
     cleanup_devnet()?;
@@ -30,6 +39,53 @@ async fn test_federation_bootstrap() -> Result<()> {
     // 2. Generate federation and node keys
     let keys_dir = Path::new("devnet/examples/federation_keys");
     std::fs::create_dir_all(keys_dir)?;
+
+    // Generate signer keypairs for the federation
+    let keypairs = generate_signer_keypairs(5);
+    
+    // Extract the DIDs for federation metadata
+    let signer_dids: Vec<_> = keypairs.iter().map(|kp| kp.did.clone()).collect();
+    
+    // Register all keypairs with the trust validator
+    for kp in &keypairs {
+        trust_validator.register_signer(kp.did.clone(), kp.pk);
+    }
+    
+    // Create federation metadata
+    let metadata = FederationMetadata {
+        name: "Test Federation".to_string(),
+        description: Some("A test federation for integration tests".to_string()),
+        version: "1.0".to_string(),
+        additional: HashMap::new(),
+    };
+    
+    // Create a trust bundle with a test DAG CID
+    let mut bundle = TrustBundle::new(
+        "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
+        metadata,
+    );
+    
+    // Calculate the hash for signing
+    let bundle_hash = bundle.calculate_hash()?;
+    
+    // Create signatures from a majority of signers
+    let mut signatures = Vec::new();
+    for i in 0..3 {
+        signatures.push((
+            keypairs[i].did.clone(), 
+            keypairs[i].sign(&bundle_hash)
+        ));
+    }
+    
+    // Create a quorum proof requiring majority approval
+    let proof = QuorumProof::new(QuorumType::Majority, signatures);
+    
+    // Add the proof to the bundle
+    bundle.add_quorum_proof(proof);
+    
+    // Verify the trust bundle
+    assert!(trust_validator.set_trust_bundle(bundle.clone()).is_ok(), 
+            "Trust bundle verification failed");
 
     // Generate federation keys
     let federation_keys = generate_federation_keys(keys_dir)?;
@@ -63,6 +119,11 @@ async fn test_federation_bootstrap() -> Result<()> {
     cleanup_devnet()?;
 
     Ok(())
+}
+
+// Generate a set of signer keypairs for testing
+fn generate_signer_keypairs(count: usize) -> Vec<KeyPair> {
+    (0..count).map(|_| KeyPair::generate()).collect()
 }
 
 fn cleanup_devnet() -> Result<()> {

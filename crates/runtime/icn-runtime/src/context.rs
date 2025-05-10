@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use icn_types::dag_store::SharedDagStore;
+use icn_identity::TrustValidator;
 
 /// Runtime context for execution environments
 ///
 /// Provides shared infrastructure and state needed across the runtime,
 /// including access to the DAG store for anchoring and querying 
-/// governance events and receipts.
+/// governance events and receipts, and the TrustValidator for verifying
+/// trust bundles.
 #[derive(Clone)]
 pub struct RuntimeContext {
     /// Shared DAG store for transaction and anchor operations
@@ -16,6 +18,9 @@ pub struct RuntimeContext {
     
     /// Executor identifier (node ID or DID)
     pub executor_id: Option<String>,
+    
+    /// Trust validator for verifying trust bundles
+    pub trust_validator: Option<Arc<TrustValidator>>,
 }
 
 impl RuntimeContext {
@@ -25,6 +30,7 @@ impl RuntimeContext {
             dag_store: Arc::new(SharedDagStore::new()),
             federation_id: None,
             executor_id: None,
+            trust_validator: None,
         }
     }
 
@@ -34,6 +40,7 @@ impl RuntimeContext {
             dag_store,
             federation_id: None,
             executor_id: None,
+            trust_validator: None,
         }
     }
 
@@ -47,6 +54,17 @@ impl RuntimeContext {
     pub fn with_executor_id(mut self, executor_id: impl Into<String>) -> Self {
         self.executor_id = Some(executor_id.into());
         self
+    }
+    
+    /// Set the trust validator
+    pub fn with_trust_validator(mut self, trust_validator: Arc<TrustValidator>) -> Self {
+        self.trust_validator = Some(trust_validator);
+        self
+    }
+    
+    /// Get a reference to the trust validator, if present
+    pub fn trust_validator(&self) -> Option<&Arc<TrustValidator>> {
+        self.trust_validator.as_ref()
     }
 }
 

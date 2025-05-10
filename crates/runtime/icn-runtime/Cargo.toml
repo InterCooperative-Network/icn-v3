@@ -12,10 +12,15 @@ serde = { version = "1.0.190", features = ["derive"] }
 serde_json = "1.0.108"
 log = "0.4.20"
 icn-types = { path = "../../common/icn-types" }
-icn-identity-core = { path = "../../common/icn-identity-core" }
+icn-identity = { path = "../../common/icn-identity" }
+icn-identity-core = { path = "../../common/icn-identity-core", optional = true }
 icn-core-vm = { path = "../icn-core-vm" }
 tokio = { version = "1.33.0", features = ["full"] }
 async-trait = "0.1.74"
 wasmtime = "18.0.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] } 
+chrono = { version = "0.4", features = ["serde"] }
+
+[features]
+default = []
+legacy-identity = ["icn-identity-core"] 
