@@ -1,4 +1,4 @@
-use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC};
+use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC};
 use crate::protocol::{MeshProtocolMessage, NodeCapability};
 use futures::StreamExt;
 use icn_identity::Did;
@@ -11,14 +11,19 @@ use std::error::Error;
 use std::time::Duration;
 use tokio::time;
 use icn_economics::ResourceType; // For mock capability data
+use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile}; // Added for MeshJob
+use uuid::Uuid; // For generating mock JobId
 
 pub struct MeshNode {
     swarm: Swarm<MeshBehaviour>,
     local_peer_id: PeerId,
     local_node_did: Did, // Store the DID string for capability construction
     capability_gossip_topic: Topic,
+    job_announcement_topic: Topic, // Added for job announcements
     // TODO: Add a way to store received capabilities from other nodes
     // received_capabilities: Arc<Mutex<HashMap<PeerId, NodeCapability>>>,
+    // TODO: Add a way to store received jobs
+    // available_jobs: Arc<Mutex<HashMap<JobId, MeshJob>>>,
 }
 
 impl MeshNode {
@@ -46,7 +51,9 @@ impl MeshNode {
             local_peer_id,
             local_node_did: Did::parse(&node_did_str)?, // Convert string to Did type
             capability_gossip_topic: Topic::new(CAPABILITY_TOPIC),
+            job_announcement_topic: Topic::new(JOB_ANNOUNCEMENT_TOPIC), // Initialize job announcement topic
             // received_capabilities: Arc::new(Mutex::new(HashMap::new())),
+            // available_jobs: Arc::new(Mutex::new(HashMap::new()))
         })
     }
 
@@ -86,14 +93,64 @@ impl MeshNode {
         Ok(())
     }
 
+    pub async fn announce_job(&mut self, job: MeshJob) -> Result<(), Box<dyn Error>> {
+        let message = MeshProtocolMessage::JobAnnouncementV1(job.clone()); // Clone job if it's used after this
+        match serde_cbor::to_vec(&message) {
+            Ok(serialized_message) => {
+                println!(
+                    "Broadcasting JobAnnouncementV1 for JobID: {} from PeerID: {}...",
+                    job.job_id, self.local_peer_id
+                );
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(self.job_announcement_topic.clone(), serialized_message)?;
+            }
+            Err(e) => {
+                eprintln!("Error serializing job announcement message: {:?}", e);
+                // Consider returning an error or specific result
+                return Err(Box::new(e));
+            }
+        }
+        Ok(())
+    }
+
+    fn construct_mock_job(&self) -> MeshJob {
+        // Create mock MeshJobParams
+        let params = MeshJobParams {
+            wasm_cid: "bafyreigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(), // Placeholder CID
+            input_data_cid: Some("bafyreigcafecafebeeffeedbeeffeedbeeffeedbeeffeedbeeffeedbeeffeed".to_string()), // Placeholder CID
+            required_resources_json: r#"{ "min_memory_mb": 512, "min_cpu_cores": 1 }"#.to_string(),
+            qos_profile_json: serde_json::to_string(&QoSProfile::Balanced).unwrap_or_default(),
+            max_acceptable_bid_tokens: Some(100),
+            environment_vars: Some(vec![("KEY".to_string(), "VALUE".to_string())]),
+        };
+
+        // Create and return the mock MeshJob
+        MeshJob {
+            job_id: Uuid::new_v4().to_string(), // Generate a unique JobId
+            originator_did: self.local_node_did.clone(),
+            params,
+            submitted_at: chrono::Utc::now(),
+            // status will be set by runtime/orchestrator later
+        }
+    }
+
     pub async fn run_event_loop(mut self) {
-        let mut broadcast_interval = time::interval(Duration::from_secs(30)); // Broadcast every 30s
+        let mut broadcast_interval = time::interval(Duration::from_secs(30)); // Broadcast capabilities every 30s
+        let mut job_announce_interval = time::interval(Duration::from_secs(45)); // Broadcast mock job every 45s
 
         loop {
             tokio::select! {
                 _ = broadcast_interval.tick() => {
                     if let Err(e) = self.broadcast_capabilities().await {
                         eprintln!("Failed to broadcast capabilities: {:?}", e);
+                    }
+                }
+                _ = job_announce_interval.tick() => {
+                    let mock_job = self.construct_mock_job();
+                    if let Err(e) = self.announce_job(mock_job).await {
+                        eprintln!("Failed to announce mock job: {:?}", e);
                     }
                 }
                 event = self.swarm.select_next_some() => {
@@ -123,7 +180,12 @@ impl MeshNode {
                                         Ok(protocol_message) => match protocol_message {
                                             MeshProtocolMessage::CapabilityAdvertisementV1(capability) => {
                                                 println!(
-                                                    "Received CapabilityAdvertisementV1 from PeerID: {}\n  Node DID: {}\n  Resources: {:?}\n  Engines: {:?}\n  Load: {}\n  Region: {:?}",
+                                                    "Received CapabilityAdvertisementV1 from PeerID: {}
+  Node DID: {}
+  Resources: {:?}
+  Engines: {:?}
+  Load: {}
+  Region: {:?}",
                                                     peer_id,
                                                     capability.node_did,
                                                     capability.available_resources,
@@ -137,10 +199,40 @@ impl MeshNode {
                                             }
                                             _ => {
                                                 // Handle other message types on this topic if any, or log unexpected
+                                                eprintln!("Received unexpected message type on capability topic from PeerID {}", peer_id);
                                             }
                                         }
                                         Err(e) => {
-                                            eprintln!("Failed to deserialize gossip message data from PeerID {}: {:?}", peer_id, e);
+                                            eprintln!("Failed to deserialize CAPABILITY gossip message data from PeerID {}: {:?}", peer_id, e);
+                                        }
+                                    }
+                                } else if message.topic == self.job_announcement_topic.hash() {
+                                    match serde_cbor::from_slice::<MeshProtocolMessage>(&message.data) {
+                                        Ok(protocol_message) => match protocol_message {
+                                            MeshProtocolMessage::JobAnnouncementV1(received_job) => {
+                                                println!(
+                                                    "Received JobAnnouncementV1 from PeerID: {}
+  Job ID: {}
+  Originator DID: {}
+  WASM CID: {}
+  Submitted At: {}",
+                                                    peer_id,
+                                                    received_job.job_id,
+                                                    received_job.originator_did,
+                                                    received_job.params.wasm_cid,
+                                                    received_job.submitted_at
+                                                );
+                                                // TODO: Store received job in available_jobs
+                                                // let mut jobs = self.available_jobs.lock().unwrap();
+                                                // jobs.insert(received_job.job_id.clone(), received_job);
+                                            }
+                                            _ => {
+                                                // Handle other message types on this topic if any, or log unexpected
+                                                eprintln!("Received unexpected message type on job announcement topic from PeerID {}", peer_id);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to deserialize JOB ANNOUNCEMENT gossip message data from PeerID {}: {:?}", peer_id, e);
                                         }
                                     }
                                 } else {

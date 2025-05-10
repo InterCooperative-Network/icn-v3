@@ -1,5 +1,5 @@
 use libp2p::{
-    gossipsub::{self, IdentTopic as Topic, MessageId, PublishError},
+    gossipsub::{self, IdentTopic as Topic, MessageId, PublishError, TopicHash},
     mdns::tokio::Behaviour as Mdns,
     swarm::NetworkBehaviour,
 };
@@ -9,6 +9,9 @@ use crate::protocol::MeshProtocolMessage;
 // Define a topic for capability advertisements
 // It's crucial that all nodes use the same topic string.
 pub const CAPABILITY_TOPIC: &str = "/icn/mesh/capabilities/v1";
+
+// Define a new topic for job announcements
+pub const JOB_ANNOUNCEMENT_TOPIC: &str = "/icn/mesh/jobs/announcements/v1";
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "MeshBehaviourEvent")]
@@ -45,6 +48,11 @@ impl MeshBehaviour {
         let capability_topic = Topic::new(CAPABILITY_TOPIC);
         gossipsub.subscribe(&capability_topic)
             .map_err(|e| format!("Failed to subscribe to capability topic: {:?}", e))?;
+
+        // Subscribe to the job announcement topic
+        let job_announcement_topic = Topic::new(JOB_ANNOUNCEMENT_TOPIC);
+        gossipsub.subscribe(&job_announcement_topic)
+            .map_err(|e| format!("Failed to subscribe to job announcement topic: {:?}", e))?;
 
         // Configure mDNS for local peer discovery
         // The mdns::Config::default() should work for basic local discovery.
