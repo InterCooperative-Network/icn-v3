@@ -17,6 +17,8 @@ pub enum DslModule {
     Anchor(Anchor),
     /// A metered action module.
     MeteredAction(MeteredAction),
+    /// A role definition module.
+    Role(Role),
 }
 
 /// Canonically-typed proposal object (post-parse, pre-codegen).
@@ -79,6 +81,17 @@ pub struct MeteredAction {
     pub resource_type: String,
     /// Amount of resource consumed.
     pub amount: u64,
+}
+
+/// Represents a role definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Role {
+    /// The name of the role.
+    pub name: String,
+    /// Optional description for the role.
+    pub description: Option<String>,
+    /// Attributes associated with the role (e.g., term_length, seats).
+    pub attributes: Vec<Rule>,
 }
 
 /// Generic on-chain rule block.

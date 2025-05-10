@@ -1,4 +1,4 @@
-use icn_ccl_dsl::{DslModule, Proposal, Rule as DslRule, Value as DslValue};
+use icn_ccl_dsl::{DslModule, Proposal, Rule as DslRule, RuleValue as DslValue};
 use icn_ccl_parser::{CclParser, Rule};
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
@@ -100,6 +100,62 @@ impl Lowerer {
         Ok(())
     }
 
+    fn lower_block_common_fields(
+        &self,
+        block_pair: Pair<'_, Rule>,
+    ) -> Result<(String, Vec<DslRule>), LowerError> {
+        let mut description_body = String::new();
+        let mut dsl_rules = Vec::<DslRule>::new();
+
+        if block_pair.as_rule() == Rule::block {
+            for statement_pair in block_pair.into_inner() {
+                if statement_pair.as_rule() == Rule::statement {
+                    if let Some(inner_def_pair) = statement_pair.into_inner().next() {
+                        match inner_def_pair.as_rule() {
+                            Rule::any_statement => {
+                                let mut field_parts = inner_def_pair.into_inner();
+                                let key_pair_opt = field_parts.next();
+                                let value_outer_pair_opt = field_parts.next(); // This is the (value | block | identifier) part
+
+                                if let Some(key_pair) = key_pair_opt {
+                                    let key_str = key_pair.as_str().trim_matches('"');
+
+                                    if let Some(value_outer_pair) = value_outer_pair_opt {
+                                        // We are interested in Rule::value for description/version/simple rules
+                                        if value_outer_pair.as_rule() == Rule::value {
+                                            if let Some(value_inner_pair) = value_outer_pair.into_inner().next() {
+                                                // value_inner_pair is string_literal, number, boolean etc.
+                                                let value_str = value_inner_pair.as_str().trim_matches('"').to_string();
+                                                if key_str == "description" {
+                                                    description_body = value_str;
+                                                } else { // "version" and any other key becomes a DslRule
+                                                    dsl_rules.push(DslRule {
+                                                        key: key_str.to_string(),
+                                                        value: DslValue::String(value_str),
+                                                    });
+                                                }
+                                            }
+                                            // else: Rule::value was empty (e.g. value pair itself was an empty rule if grammar allowed)
+                                        }
+                                        // else: value_outer_pair was Rule::block or Rule::identifier.
+                                        // These are not currently processed into DslValue::String.
+                                    }
+                                    // else: any_statement had only a key (e.g. `my_key;`).
+                                    // Not processed for description/version, nor as a DslRule here.
+                                }
+                                // else: any_statement was malformed or empty (no key).
+                            }
+                            _ => { /* Other definitions in statement, e.g. if_statement. Ignored for common fields. */ }
+                        }
+                    }
+                }
+            }
+        }
+        // If block_pair.as_rule() is not Rule::block, or if the block is empty / contains no relevant statements,
+        // this will return (String::new(), Vec::new()) as initialized.
+        Ok((description_body, dsl_rules))
+    }
+
     fn lower_proposal(&self, pair: Pair<'_, Rule>) -> Result<Proposal, LowerError> {
         let pair_span = pair.as_span();
         let mut proposal_specific_pairs = pair.into_inner(); // These are specific to proposal_def
@@ -119,48 +175,8 @@ impl Lowerer {
             pair_span,
         )))?;
 
-        let mut description_body = String::new();
-        let mut dsl_rules = Vec::<DslRule>::new();
-
-        if block_pair.as_rule() == Rule::block {
-            for statement_pair in block_pair.into_inner() { // These are statements inside the block
-                if statement_pair.as_rule() == Rule::statement {
-                    // A statement should have one inner actual definition (e.g., any_statement)
-                    if let Some(inner_def_pair) = statement_pair.into_inner().next() {
-                        match inner_def_pair.as_rule() {
-                            Rule::any_statement => {
-                                let mut field_parts = inner_def_pair.into_inner();
-                                let key_pair = field_parts.next();
-                                let value_pair_outer = field_parts.next();
-
-                                if let (Some(key), Some(val_outer)) = (key_pair, value_pair_outer) {
-                                    let key_str = key.as_str();
-                                    // val_outer is a Rule::value, need to get its actual inner string/number etc.
-                                    if let Some(val_inner) = val_outer.into_inner().next() {
-                                        let value_str = val_inner.as_str().trim_matches('"').to_string();
-                                        if key_str == "description" {
-                                            description_body = value_str;
-                                        } else if key_str == "version" {
-                                            dsl_rules.push(DslRule {
-                                                key: key_str.to_string(),
-                                                value: DslValue::String(value_str),
-                                            });
-                                        } else {
-                                            // Other fields can become generic rules for now
-                                            dsl_rules.push(DslRule {
-                                                key: key_str.to_string(),
-                                                value: DslValue::String(value_str), // Or more specific DslValue type
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            _ => { /* Unhandled statement type in block */ }
-                        }
-                    }
-                }
-            }
-        }
+        let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
+        
         Ok(self.build_stub_proposal(title, description_body, dsl_rules))
     }
 
@@ -178,55 +194,13 @@ impl Lowerer {
             .trim_matches('"')
             .to_owned();
 
-        // The next pair should be the block
         let block_pair = election_specific_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
             pest::error::ErrorVariant::CustomError { message: "Election missing block".to_string() },
-            pair_span, // Use the original election_def span for error reporting
+            pair_span, 
         )))?;
 
-        let mut description_body = String::new();
-        let mut dsl_rules = Vec::<DslRule>::new();
+        let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
 
-        if block_pair.as_rule() == Rule::block {
-            for statement_pair in block_pair.into_inner() { // These are statements inside the block
-                if statement_pair.as_rule() == Rule::statement {
-                    // A statement should have one inner actual definition (e.g., any_statement)
-                    if let Some(inner_def_pair) = statement_pair.into_inner().next() {
-                        match inner_def_pair.as_rule() {
-                            Rule::any_statement => {
-                                let mut field_parts = inner_def_pair.into_inner();
-                                let key_pair = field_parts.next();
-                                let value_pair_outer = field_parts.next();
-
-                                if let (Some(key), Some(val_outer)) = (key_pair, value_pair_outer) {
-                                    let key_str = key.as_str();
-                                    // val_outer is a Rule::value, need to get its actual inner string/number etc.
-                                    if let Some(val_inner) = val_outer.into_inner().next() {
-                                        let value_str = val_inner.as_str().trim_matches('"').to_string();
-                                        if key_str == "description" {
-                                            description_body = value_str;
-                                        } else if key_str == "version" {
-                                            dsl_rules.push(DslRule {
-                                                key: key_str.to_string(),
-                                                value: DslValue::String(value_str),
-                                            });
-                                        } else {
-                                            // Other fields can become generic rules for now
-                                            dsl_rules.push(DslRule {
-                                                key: key_str.to_string(),
-                                                value: DslValue::String(value_str), // Or more specific DslValue type
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            _ => { /* Unhandled statement type in block */ }
-                        }
-                    }
-                }
-            }
-        }
-        // Use the extracted title, description (as body), and version (as a rule)
         Ok(self.build_stub_proposal(title, description_body, dsl_rules))
     }
 
