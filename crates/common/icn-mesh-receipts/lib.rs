@@ -12,6 +12,7 @@ use icn_identity::Did;
 use icn_types::org::{CooperativeId, CommunityId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use thiserror::Error;
 
 /// Error types for receipt operations
@@ -72,12 +73,9 @@ mod tests {
         let mut usage = HashMap::new();
         usage.insert(ResourceType::Cpu, 1000);
         
-        // Use a generated KeyPair to get a valid DID
-        let kp = KeyPair::generate();
-        
         let receipt = ExecutionReceipt {
             task_cid: "test-cid".to_string(),
-            executor: kp.did.clone(),
+            executor: Did::from_str("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap(),
             resource_usage: usage,
             timestamp: Utc::now(),
             signature: vec![1, 2, 3, 4],
@@ -96,12 +94,9 @@ mod tests {
         let mut usage = HashMap::new();
         usage.insert(ResourceType::Cpu, 1000);
         
-        // Use a generated KeyPair to get a valid DID
-        let kp = KeyPair::generate();
-        
         let receipt = ExecutionReceipt {
             task_cid: "test-cid".to_string(),
-            executor: kp.did.clone(),
+            executor: Did::from_str("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap(),
             resource_usage: usage,
             timestamp: Utc::now(),
             signature: vec![1, 2, 3, 4],

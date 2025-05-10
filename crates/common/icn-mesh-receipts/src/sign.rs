@@ -1,6 +1,6 @@
 use crate::ExecutionReceipt;
 use icn_identity::{KeyPair, Signature};
-use ed25519_dalek::Verifier;
+use signature::Verifier;
 use serde_cbor;
 use thiserror::Error;
 
@@ -41,7 +41,7 @@ pub fn verify_receipt(receipt: &ExecutionReceipt, signature: &Signature) -> Resu
     let verifying_key = executor_did.to_ed25519()
         .map_err(|_| SignError::InvalidSignature)?;
     
-    // Verify signature using ed25519_dalek's Verifier trait
+    // Verify signature using Verifier trait
     Ok(verifying_key.verify(&cbor_bytes, signature).is_ok())
 }
 
@@ -68,6 +68,8 @@ mod tests {
             resource_usage: usage,
             timestamp: Utc::now(),
             signature: Vec::new(), // Empty for now
+            coop_id: None,
+            community_id: None,
         };
         
         // Sign the receipt
