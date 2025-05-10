@@ -15,6 +15,7 @@ use chrono::Utc;
 
 use crate::handlers::Db;
 use crate::models::{ExecutionReceiptSummary, TokenTransaction, ResourceType};
+use crate::auth::{validate_token, JwtConfig, Claims, ScopeClaims};
 
 // Maximum number of messages to buffer for each channel
 const MAX_CHANNEL_CAPACITY: usize = 100;
@@ -150,8 +151,8 @@ impl WebSocketState {
                 ("Memory".to_string(), (rand::random::<u16>() as u64) * 512),
             ]),
             timestamp: Utc::now(),
-            coop_id: coop_id.map(|id| id.to_string()),
-            community_id: community_id.map(|id| id.to_string()),
+            coop_id: coop_id.clone(),
+            community_id: community_id.clone(),
         };
         
         // Create and broadcast event
@@ -184,8 +185,8 @@ impl WebSocketState {
             timestamp: Utc::now(),
             from_coop_id: None,
             from_community_id: None,
-            to_coop_id: coop_id.map(|id| id.to_string()),
-            to_community_id: community_id.map(|id| id.to_string()),
+            to_coop_id: coop_id.clone(),
+            to_community_id: community_id.clone(),
         };
         
         // Create and broadcast event
@@ -219,10 +220,10 @@ impl WebSocketState {
             amount: (rand::random::<u16>() as u64) * 50,
             operation: "transfer".to_string(),
             timestamp: Utc::now(),
-            from_coop_id: coop_id.map(|id| id.to_string()),
-            from_community_id: community_id.map(|id| id.to_string()),
-            to_coop_id: coop_id.map(|id| id.to_string()),
-            to_community_id: community_id.map(|id| id.to_string()),
+            from_coop_id: coop_id.clone(),
+            from_community_id: community_id.clone(),
+            to_coop_id: coop_id.clone(),
+            to_community_id: community_id.clone(),
         };
         
         // Create and broadcast event
@@ -253,8 +254,8 @@ impl WebSocketState {
             amount: (rand::random::<u16>() as u64) * 25,
             operation: "burn".to_string(),
             timestamp: Utc::now(),
-            from_coop_id: coop_id.map(|id| id.to_string()),
-            from_community_id: community_id.map(|id| id.to_string()),
+            from_coop_id: coop_id.clone(),
+            from_community_id: community_id.clone(),
             to_coop_id: None,
             to_community_id: None,
         };
@@ -300,8 +301,17 @@ impl WebSocketState {
 pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<WebSocketParams>,
-    State((db, ws_state)): State<(Db, WebSocketState)>,
+    State((db, ws_state, jwt_config)): State<(Db, WebSocketState, Arc<JwtConfig>)>,
 ) -> impl IntoResponse {
+    // Validate organization scope hierarchy
+    if let Some(err) = validate_org_scope_hierarchy(&params) {
+        tracing::warn!("Invalid organization scope: {}", err);
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("Invalid organization scope: {}", err),
+        ).into_response();
+    }
+    
     // Build the channel name based on organization scope
     let channel_name = build_channel_name(
         params.federation_id.as_deref(),
@@ -315,21 +325,69 @@ pub async fn websocket_handler(
         channel_name
     );
     
-    // Perform JWT verification if token is provided (in a real implementation)
-    if let Some(token) = params.token {
-        // For now, just log the token
-        tracing::debug!("JWT token provided: {}", token);
-        
-        // In a real implementation, verify the token and check permissions
-        // If verification fails, return an error response
-    }
+    // Perform JWT verification if token is provided
+    let scope_claims = if let Some(token) = params.token {
+        match validate_token(&token, &jwt_config) {
+            Ok(claims) => {
+                let scope_claims: ScopeClaims = claims.into();
+                
+                // Check if the user has access to the requested organization scope
+                if !scope_claims.has_org_scope_access(
+                    params.federation_id.as_deref(),
+                    params.coop_id.as_deref(),
+                    params.community_id.as_deref(),
+                ) {
+                    tracing::warn!("Unauthorized organization access attempt");
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        "Unauthorized: You do not have access to this organization scope",
+                    ).into_response();
+                }
+                
+                Some(scope_claims)
+            },
+            Err(err) => {
+                tracing::warn!("JWT validation failed: {}", err);
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    format!("Unauthorized: {}", err),
+                ).into_response();
+            }
+        }
+    } else {
+        // For now, allow connections without tokens for development/testing purposes
+        // In production, you should enforce token authentication
+        tracing::warn!("WebSocket connection without token - this should be disabled in production");
+        None
+    };
     
     // Upgrade to WebSocket
-    ws.on_upgrade(move |socket| websocket_connection(socket, channel_name, ws_state))
+    ws.on_upgrade(move |socket| websocket_connection(socket, channel_name, ws_state, scope_claims))
+}
+
+/// Validate organization scope hierarchy
+/// This ensures that we don't have invalid combinations like a community without a coop
+fn validate_org_scope_hierarchy(params: &WebSocketParams) -> Option<String> {
+    // Community ID requires Cooperative ID
+    if params.community_id.is_some() && params.coop_id.is_none() {
+        return Some("Cannot specify a community without a cooperative".into());
+    }
+    
+    // Cooperative ID requires Federation ID
+    if params.coop_id.is_some() && params.federation_id.is_none() {
+        return Some("Cannot specify a cooperative without a federation".into());
+    }
+    
+    None
 }
 
 /// Handle WebSocket connection for a specific channel
-async fn websocket_connection(socket: WebSocket, channel_name: String, ws_state: WebSocketState) {
+async fn websocket_connection(
+    socket: WebSocket, 
+    channel_name: String, 
+    ws_state: WebSocketState,
+    scope_claims: Option<ScopeClaims>,
+) {
     // Split the socket into sender and receiver
     let (mut sender, mut receiver) = socket.split();
     
@@ -340,6 +398,9 @@ async fn websocket_connection(socket: WebSocket, channel_name: String, ws_state:
     // Generate client ID
     let client_id = Uuid::new_v4().to_string();
     tracing::info!("Client connected: {} to channel {}", client_id, channel_name);
+    
+    // Clone client_id for use in tasks
+    let client_id_for_task = client_id.clone();
     
     // Task for sending messages to the WebSocket
     let mut send_task = tokio::spawn(async move {
@@ -362,14 +423,11 @@ async fn websocket_connection(socket: WebSocket, channel_name: String, ws_state:
                     // Handle commands if needed
                 },
                 Message::Ping(ping) => {
-                    // Respond to ping with pong
-                    if let Err(e) = receiver.send(Message::Pong(ping)).await {
-                        tracing::error!("Failed to send pong: {}", e);
-                        break;
-                    }
+                    tracing::debug!("Received ping, pong will be sent automatically by axum");
+                    // Axum automatically responds to pings with pongs, no need to do it manually
                 },
                 Message::Close(_) => {
-                    tracing::info!("Client requested close: {}", client_id);
+                    tracing::info!("Client requested close: {}", client_id_for_task);
                     break;
                 },
                 _ => { /* Ignore other message types */ }
@@ -387,7 +445,7 @@ async fn websocket_connection(socket: WebSocket, channel_name: String, ws_state:
 }
 
 /// Helper function to create a WebSocket router
-pub fn websocket_routes() -> Router<(Db, WebSocketState)> {
+pub fn websocket_routes() -> Router<(Db, WebSocketState, Arc<JwtConfig>)> {
     Router::new()
         .route("/ws", get(websocket_handler))
         .route("/ws/:federation_id", get(federation_websocket_handler))
@@ -400,7 +458,7 @@ async fn federation_websocket_handler(
     ws: WebSocketUpgrade,
     Path(federation_id): Path<String>,
     Query(params): Query<WebSocketParams>,
-    State((db, ws_state)): State<(Db, WebSocketState)>,
+    State((db, ws_state, jwt_config)): State<(Db, WebSocketState, Arc<JwtConfig>)>,
 ) -> impl IntoResponse {
     // Combine path and query parameters
     let combined_params = WebSocketParams {
@@ -410,7 +468,7 @@ async fn federation_websocket_handler(
         token: params.token,
     };
     
-    websocket_handler(ws, Query(combined_params), State((db, ws_state))).await
+    websocket_handler(ws, Query(combined_params), State((db, ws_state, jwt_config))).await
 }
 
 /// WebSocket handler for cooperative-specific channels
@@ -418,7 +476,7 @@ async fn coop_websocket_handler(
     ws: WebSocketUpgrade,
     Path((federation_id, coop_id)): Path<(String, String)>,
     Query(params): Query<WebSocketParams>,
-    State((db, ws_state)): State<(Db, WebSocketState)>,
+    State((db, ws_state, jwt_config)): State<(Db, WebSocketState, Arc<JwtConfig>)>,
 ) -> impl IntoResponse {
     // Combine path and query parameters
     let combined_params = WebSocketParams {
@@ -428,7 +486,7 @@ async fn coop_websocket_handler(
         token: params.token,
     };
     
-    websocket_handler(ws, Query(combined_params), State((db, ws_state))).await
+    websocket_handler(ws, Query(combined_params), State((db, ws_state, jwt_config))).await
 }
 
 /// WebSocket handler for community-specific channels
@@ -436,7 +494,7 @@ async fn community_websocket_handler(
     ws: WebSocketUpgrade,
     Path((federation_id, coop_id, community_id)): Path<(String, String, String)>,
     Query(params): Query<WebSocketParams>,
-    State((db, ws_state)): State<(Db, WebSocketState)>,
+    State((db, ws_state, jwt_config)): State<(Db, WebSocketState, Arc<JwtConfig>)>,
 ) -> impl IntoResponse {
     // Combine path and query parameters
     let combined_params = WebSocketParams {
@@ -446,5 +504,5 @@ async fn community_websocket_handler(
         token: params.token,
     };
     
-    websocket_handler(ws, Query(combined_params), State((db, ws_state))).await
+    websocket_handler(ws, Query(combined_params), State((db, ws_state, jwt_config))).await
 } 

@@ -1,0 +1,30 @@
+{
+  "name": "icn-ws-client",
+  "version": "1.0.0",
+  "description": "ICN v3 Organization-Scoped WebSocket Client",
+  "main": "ws-client.js",
+  "bin": {
+    "icn-ws-client": "./ws-client.js"
+  },
+  "scripts": {
+    "start": "node ws-client.js"
+  },
+  "keywords": [
+    "ICN",
+    "WebSocket",
+    "organization",
+    "federation",
+    "cooperative",
+    "community"
+  ],
+  "author": "ICN Development Team",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "ws": "^8.14.1",
+    "yargs": "^17.7.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+} 

@@ -8,9 +8,16 @@ use std::sync::{Arc, RwLock}; // For in-memory storage
 use std::collections::HashMap;
 use uuid::Uuid;
 use chrono::{DateTime, Duration};
+use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::models::*; // Added ApiError import
+use crate::auth::{
+    AuthenticatedRequest, AuthError, 
+    TokenIssueRequest, TokenResponse,
+    issue_token, ensure_federation_admin,
+    JwtConfig
+};
 
 // For now, we'll use in-memory storage.
 // In a real application, this would be a database connection pool.
@@ -1030,4 +1037,348 @@ pub async fn get_token_stats_handler(
 // Health check handler
 pub async fn health_check_handler() -> StatusCode {
     StatusCode::OK
+}
+
+/// Endpoint for accessing execution receipts with authorization
+pub async fn get_receipts_authorized(
+    auth: AuthenticatedRequest,
+    Query(params): Query<GetReceiptsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<ExecutionReceiptSummary>>, AuthError> {
+    // Check if the user has access to the requested organization scope
+    if !auth.claims.has_org_scope_access(
+        None, // We don't have federation_id in the model yet
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    // Access granted, retrieve the receipts
+    let receipts = db.get_receipts(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+        params.limit,
+        params.offset,
+    ).await;
+    
+    Ok(Json(receipts))
+}
+
+/// Endpoint for accessing token balances with authorization
+pub async fn get_token_balances_authorized(
+    auth: AuthenticatedRequest,
+    Query(params): Query<GetTokenBalancesQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<TokenBalance>>, AuthError> {
+    // Check if the user has access to the requested organization scope
+    if !auth.claims.has_org_scope_access(
+        None, // We don't have federation_id in the model yet
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    // Access granted, retrieve the token balances
+    let balances = db.get_token_balances(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+        params.did.as_deref(),
+    ).await;
+    
+    Ok(Json(balances))
+}
+
+/// Endpoint for accessing token transactions with authorization
+pub async fn get_token_transactions_authorized(
+    auth: AuthenticatedRequest,
+    Query(params): Query<GetTokenTransactionsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<TokenTransaction>>, AuthError> {
+    // Collect all organization IDs from query params to check access permissions
+    let federation_id = None; // We don't have federation_id in the model yet
+    let coop_ids = [
+        params.from_coop_id.as_deref(),
+        params.to_coop_id.as_deref(),
+    ].iter().filter_map(|&id| id).collect::<Vec<_>>();
+    
+    let community_ids = [
+        params.from_community_id.as_deref(),
+        params.to_community_id.as_deref(),
+    ].iter().filter_map(|&id| id).collect::<Vec<_>>();
+    
+    // Check if the user has access to ALL requested organization scopes
+    for &coop_id in &coop_ids {
+        if !auth.claims.has_coop_access(coop_id) {
+            return Err(AuthError::UnauthorizedOrgAccess);
+        }
+    }
+    
+    for &community_id in &community_ids {
+        if !auth.claims.has_community_access(community_id) {
+            return Err(AuthError::UnauthorizedOrgAccess);
+        }
+    }
+    
+    // Access granted, retrieve the token transactions
+    let transactions = db.get_token_transactions(
+        params.from_did.as_deref(),
+        params.to_did.as_deref(),
+        params.from_coop_id.as_deref(),
+        params.from_community_id.as_deref(),
+        params.to_coop_id.as_deref(),
+        params.to_community_id.as_deref(),
+        params.limit,
+        params.offset,
+    ).await;
+    
+    Ok(Json(transactions))
+}
+
+/// Endpoint for accessing receipt statistics with authorization
+pub async fn get_receipt_stats_authorized(
+    auth: AuthenticatedRequest,
+    Query(params): Query<GetReceiptStatsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Value>, AuthError> {
+    // Check if the user has access to the requested organization scope
+    if !auth.claims.has_org_scope_access(
+        None, // We don't have federation_id in the model yet
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    // Access granted, retrieve the receipt statistics
+    let stats = db.get_receipt_stats(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ).await;
+    
+    Ok(Json(stats))
+}
+
+/// Endpoint for accessing token statistics with authorization
+pub async fn get_token_stats_authorized(
+    auth: AuthenticatedRequest,
+    Query(params): Query<GetTokenStatsQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Value>, AuthError> {
+    // Check if the user has access to the requested organization scope
+    if !auth.claims.has_org_scope_access(
+        None, // We don't have federation_id in the model yet
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    // Access granted, retrieve the token statistics
+    let stats = db.get_token_stats(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ).await;
+    
+    Ok(Json(stats))
+}
+
+/// Process a request to issue a new JWT token for a user with specific organization scopes
+/// This endpoint is only accessible by federation admins
+pub async fn issue_jwt_token_handler(
+    State((db, _, jwt_config)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>)>,
+    auth: AuthenticatedRequest,
+    AxumPath(federation_id): AxumPath<String>,
+    Json(payload): Json<crate::auth::TokenIssueRequest>,
+) -> Result<Json<crate::auth::TokenResponse>, AuthError> {
+    // Ensure the requesting user has federation admin role
+    crate::auth::ensure_federation_admin(auth, &federation_id).await?;
+    
+    // Verify that user isn't trying to grant access to federations they don't control
+    if let Some(fed_ids) = &payload.federation_ids {
+        for fed_id in fed_ids {
+            if fed_id != &federation_id {
+                return Err(AuthError::UnauthorizedOrgAccess);
+            }
+        }
+    }
+    
+    // Get the federation issuer
+    let issuer = Some(format!("federation:{}", federation_id));
+    
+    // Issue the token
+    let token_response = issue_token(&payload, issuer, &jwt_config)?;
+    
+    // Log token issuance action
+    tracing::info!(
+        "JWT token issued for {} by federation admin, expiring at {}",
+        payload.subject,
+        token_response.expires_at
+    );
+    
+    Ok(Json(token_response))
+}
+
+/// Revoke a JWT token
+/// This endpoint is only accessible by federation admins
+pub async fn revoke_token_handler(
+    State((db, _, jwt_config, revocation_store)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)>,
+    auth: AuthenticatedRequest,
+    AxumPath(federation_id): AxumPath<String>,
+    Json(payload): Json<crate::auth::revocation::RevokeTokenRequest>,
+) -> Result<Json<crate::auth::revocation::RevokeTokenResponse>, AuthError> {
+    // Ensure the requesting user has federation admin role
+    crate::auth::ensure_federation_admin(auth.clone(), &federation_id).await?;
+    
+    // We need either a jti or a subject to revoke
+    if payload.jti.is_none() && payload.subject.is_none() {
+        return Err(AuthError::InvalidTokenFormat);
+    }
+    
+    let now = Utc::now();
+    let mut revoked = false;
+    let mut revoked_jti = None;
+    let mut revoked_subject = None;
+    
+    // If we have a JTI, revoke that specific token
+    if let Some(jti) = &payload.jti {
+        let revoked_token = crate::auth::revocation::RevokedToken {
+            jti: jti.clone(),
+            subject: payload.subject.clone().unwrap_or_else(|| "unknown".to_string()),
+            issuer: Some(format!("federation:{}", federation_id)),
+            revoked_at: now,
+            reason: payload.reason.clone(),
+            revoked_by: auth.claims.sub.clone(),
+        };
+        
+        revoked = revocation_store.revoke_token(revoked_token);
+        revoked_jti = Some(jti.clone());
+    } 
+    // If we have a subject, revoke all tokens for that subject
+    else if let Some(subject) = &payload.subject {
+        // Create a dummy token with the subject
+        let revoked_token = crate::auth::revocation::RevokedToken {
+            jti: format!("revoked-{}-{}", subject, Uuid::new_v4()),
+            subject: subject.clone(),
+            issuer: Some(format!("federation:{}", federation_id)),
+            revoked_at: now,
+            reason: payload.reason.clone(),
+            revoked_by: auth.claims.sub.clone(),
+        };
+        
+        revoked = revocation_store.revoke_token(revoked_token);
+        revoked_subject = Some(subject.clone());
+    }
+    
+    // Log the revocation action
+    if revoked {
+        tracing::info!(
+            "Token revoked by {} for federation {}: jti={:?}, subject={:?}, reason={:?}",
+            auth.claims.sub,
+            federation_id,
+            revoked_jti,
+            revoked_subject,
+            payload.reason
+        );
+    }
+    
+    // Return the response
+    let response = crate::auth::revocation::RevokeTokenResponse {
+        revoked,
+        revoked_at: now,
+        jti: revoked_jti,
+        subject: revoked_subject,
+    };
+    
+    Ok(Json(response))
+}
+
+/// Rotate a JWT token (revoke old and issue new)
+/// This endpoint is only accessible by federation admins
+pub async fn rotate_token_handler(
+    State((db, _, jwt_config, revocation_store)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)>,
+    auth: AuthenticatedRequest,
+    AxumPath(federation_id): AxumPath<String>,
+    Json(payload): Json<crate::auth::revocation::RotateTokenRequest>,
+) -> Result<Json<crate::auth::TokenResponse>, AuthError> {
+    // Ensure the requesting user has federation admin role
+    crate::auth::ensure_federation_admin(auth.clone(), &federation_id).await?;
+    
+    // Verify that user isn't trying to grant access to federations they don't control
+    if let Some(fed_ids) = &payload.federation_ids {
+        for fed_id in fed_ids {
+            if fed_id != &federation_id {
+                return Err(AuthError::UnauthorizedOrgAccess);
+            }
+        }
+    }
+    
+    // First, revoke the old token
+    let revoked_token = crate::auth::revocation::RevokedToken {
+        jti: payload.current_jti.clone(),
+        subject: payload.subject.clone(),
+        issuer: Some(format!("federation:{}", federation_id)),
+        revoked_at: Utc::now(),
+        reason: payload.reason.clone().or(Some("Token rotation".to_string())),
+        revoked_by: auth.claims.sub.clone(),
+    };
+    
+    let revoked = revocation_store.revoke_token(revoked_token);
+    
+    if !revoked {
+        tracing::warn!("Failed to revoke token {} during rotation", payload.current_jti);
+        // Continue anyway since we're issuing a new token
+    }
+    
+    // Now, issue a new token
+    let token_request = crate::auth::TokenIssueRequest {
+        subject: payload.subject.clone(),
+        expires_in: payload.expires_in,
+        federation_ids: payload.federation_ids.clone(),
+        coop_ids: payload.coop_ids.clone(),
+        community_ids: payload.community_ids.clone(),
+        roles: payload.roles.clone(),
+    };
+    
+    let issuer = Some(format!("federation:{}", federation_id));
+    let token_response = issue_token(&token_request, issuer, &jwt_config)?;
+    
+    // Log the token rotation
+    tracing::info!(
+        "Token rotated by {} for subject {} in federation {}: old_jti={}, new_jti={:?}",
+        auth.claims.sub,
+        payload.subject,
+        federation_id,
+        payload.current_jti,
+        token_response.token_id
+    );
+    
+    Ok(Json(token_response))
+}
+
+/// Start periodic cleanup of expired revocations
+pub fn start_revocation_cleanup(revocation_store: Arc<dyn crate::auth::revocation::TokenRevocationStore>) {
+    use tokio::time::{interval, Duration};
+    
+    let cleanup_interval = Duration::from_secs(3600); // Once per hour
+    let retention_period = Duration::from_secs(86400 * 30); // 30 days
+    
+    tokio::spawn(async move {
+        let mut interval = interval(cleanup_interval);
+        
+        loop {
+            interval.tick().await;
+            
+            // Calculate the cutoff time (now - retention period)
+            let cutoff = Utc::now() - chrono::Duration::seconds(retention_period.as_secs() as i64);
+            
+            // Perform the cleanup
+            let removed = revocation_store.clear_expired_revocations(cutoff);
+            
+            if removed > 0 {
+                tracing::info!("Cleaned up {} expired token revocations", removed);
+            }
+        }
+    });
 }
