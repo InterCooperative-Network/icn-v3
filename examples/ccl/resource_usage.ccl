@@ -1,0 +1,81 @@
+// Resource Usage Tracking CCL Example
+// This demonstrates how resource usage can be tracked and authorized in ICN
+
+// Metadata
+title: "Resource Usage Example";
+description: "Demonstrates the resource economics system in ICN";
+author: "did:icn:example";
+created: "2023-11-01T12:00:00Z";
+version: "1.0.0";
+
+// Define resource quotas
+resources {
+  // CPU quota in abstract units (could be core-seconds, etc.)
+  cpu_quota: 1000;
+  
+  // Memory quota in KB
+  memory_quota: 5000;
+  
+  // IO quota in KB
+  io_quota: 10000;
+  
+  // Token quota (for specialized operations)
+  token_quota: 100;
+}
+
+// Execution instructions
+execution {
+  // First, check resource authorization before proceeding
+  if (check_resources()) {
+    log("Resource check passed, proceeding with execution");
+    
+    // CPU-intensive operation
+    log("Starting CPU-intensive operation");
+    perform_action("compute_hash", 50);  // Uses 50 units of CPU
+    
+    // Memory-intensive operation
+    log("Starting memory-intensive operation");
+    perform_action("store_large_dataset", 2000);  // Uses 2000KB of memory
+    
+    // IO-intensive operation
+    log("Starting IO-intensive operation");
+    perform_action("download_data", 5000);  // Uses 5000KB of IO
+    
+    // Token-based operation
+    log("Starting token-based operation");
+    perform_action("publish_result", 10);  // Uses 10 tokens
+    
+    // Record total resource usage
+    record_usage();
+  } else {
+    log("Resource check failed, cannot proceed with execution");
+  }
+}
+
+// Helper functions
+function check_resources() {
+  // Check if we have enough resources for our planned operations
+  let cpu_ok = check_resource_authorization(ResourceType.CPU, 50);
+  let memory_ok = check_resource_authorization(ResourceType.MEMORY, 2000);
+  let io_ok = check_resource_authorization(ResourceType.IO, 5000);
+  let token_ok = check_resource_authorization(ResourceType.TOKEN, 10);
+  
+  return cpu_ok && memory_ok && io_ok && token_ok;
+}
+
+function record_usage() {
+  // Record actual resource usage
+  record_resource_usage(ResourceType.CPU, 50);
+  record_resource_usage(ResourceType.MEMORY, 2000);
+  record_resource_usage(ResourceType.IO, 5000);
+  record_resource_usage(ResourceType.TOKEN, 10);
+  
+  log("Resource usage recorded successfully");
+}
+
+// Reporting
+reporting {
+  metrics: ["cpu_usage", "memory_usage", "io_usage", "token_usage"];
+  frequency: "per_execution";
+  store_history: true;
+} 

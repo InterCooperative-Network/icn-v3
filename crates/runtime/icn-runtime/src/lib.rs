@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
+use std::str::FromStr;
 
 // Import the context module
 mod context;
@@ -407,7 +408,7 @@ impl Runtime {
         // Set up the host environment in the store data
         let host_env = ConcreteHostEnvironment::new(
             Arc::new(self.context.clone()),
-            context.executor_did.parse().unwrap_or_default()
+            context.executor_did.parse().unwrap_or_else(|_| Did::from_str("did:icn:invalid").unwrap())
         );
         store.data_mut().set_host(host_env);
         
@@ -737,6 +738,18 @@ mod tests {
               (i32.const 0)  ;; ResourceType::Cpu = 0
               (i64.const 50)) ;; Amount = 50
             drop
+            
+            ;; Try to authorize Token usage (resource type 2)
+            (call $check_auth
+              (i32.const 2)  ;; ResourceType::Token = 2
+              (i64.const 10)) ;; Amount = 10
+            drop
+            
+            ;; Record Token usage
+            (call $record_usage
+              (i32.const 2)  ;; ResourceType::Token = 2
+              (i64.const 10)) ;; Amount = 10
+            drop
           )
           (export "_start" (func $start))
         )
@@ -747,19 +760,24 @@ mod tests {
         let module = Module::new(&engine, wat)?;
         
         // Create a policy that allows up to 1000 units of each resource type
-        let policy = ResourceAuthorizationPolicy::new_fixed_limit(1000);
+        let policy = ResourceAuthorizationPolicy {
+            max_cpu: 1000,
+            max_memory: 1000,
+            token_allowance: 1000,
+        };
         let economics = Arc::new(Economics::new(policy));
         
         // Create a runtime with the economics engine
         let storage = Arc::new(MockStorage::new());
         let context = RuntimeContext::builder()
-            .with_economics(economics)
+            .with_economics(economics.clone())
             .build();
         let runtime = Runtime::with_context(storage, context);
         
         // Create a VM context with a test DID
+        let test_did = "did:icn:test-user";
         let vm_context = VmContext {
-            executor_did: "did:icn:test".to_string(),
+            executor_did: test_did.to_string(),
             scope: None,
             epoch: None,
             code_cid: None,
@@ -770,16 +788,55 @@ mod tests {
         let result = runtime.execute_wasm(&module.serialize()?, vm_context)?;
         
         // Verify resource usage was recorded
-        let mut found_cpu_usage = false;
-        for (resource_type, amount) in &result.resource_usage {
-            if resource_type == "CPU" && *amount == 50 {
-                found_cpu_usage = true;
-                break;
-            }
-        }
+        let resource_ledger = runtime.context().resource_ledger.clone();
         
-        // Check that CPU usage was recorded
-        assert!(found_cpu_usage, "Expected CPU resource usage to be recorded");
+        // Check that CPU usage was recorded for the correct DID
+        let cpu_usage = economics.get_usage(
+            &Did::from_str(test_did).unwrap(),
+            ResourceType::Cpu,
+            &resource_ledger
+        ).await;
+        assert_eq!(cpu_usage, 50, "Expected 50 units of CPU resource usage");
+        
+        // Check that Token usage was recorded for the correct DID
+        let token_usage = economics.get_usage(
+            &Did::from_str(test_did).unwrap(),
+            ResourceType::Token,
+            &resource_ledger
+        ).await;
+        assert_eq!(token_usage, 10, "Expected 10 units of Token resource usage");
+        
+        // Create a second context with a different DID to verify resources are tracked separately
+        let test_did2 = "did:icn:another-user";
+        let vm_context2 = VmContext {
+            executor_did: test_did2.to_string(),
+            scope: None,
+            epoch: None,
+            code_cid: None,
+            resource_limits: None,
+        };
+        
+        // Execute the WASM module again with the second DID
+        let _ = runtime.execute_wasm(&module.serialize()?, vm_context2)?;
+        
+        // Verify that each DID has its own separate resource tracking
+        let cpu_usage1 = economics.get_usage(
+            &Did::from_str(test_did).unwrap(),
+            ResourceType::Cpu,
+            &resource_ledger
+        ).await;
+        let cpu_usage2 = economics.get_usage(
+            &Did::from_str(test_did2).unwrap(),
+            ResourceType::Cpu,
+            &resource_ledger
+        ).await;
+        
+        assert_eq!(cpu_usage1, 50, "First user's CPU usage should still be 50");
+        assert_eq!(cpu_usage2, 50, "Second user's CPU usage should be 50");
+        
+        // Get total CPU usage across all DIDs
+        let total_cpu = economics.get_total_usage(ResourceType::Cpu, &resource_ledger).await;
+        assert_eq!(total_cpu, 100, "Total CPU usage should be 100 (50 + 50)");
         
         Ok(())
     }
