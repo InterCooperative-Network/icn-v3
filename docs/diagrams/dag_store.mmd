@@ -1,0 +1,64 @@
+%%{init: {'theme': 'neutral'}}%%
+graph TD
+    %% Nodes
+    Client[Client]
+    Runtime[ICN Runtime]
+    RuntimeContext["RuntimeContext<br/><small>Contains DAG store reference</small>"]
+    SharedStore["SharedDagStore<br/><small>In-memory, thread-safe store</small>"]
+    DagStoreBatch["DagStoreBatch<br/><small>Transactional operations</small>"]
+    Proposals[Proposal DAG Nodes]
+    Votes[Vote DAG Nodes]
+    Executions[Execution DAG Nodes]
+    Replay[DAG Replay Verifier]
+    
+    %% Styles
+    classDef component fill:#e1f5fe,stroke:#0277bd,stroke-width:1px;
+    classDef storage fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px;
+    classDef process fill:#fff3e0,stroke:#e65100,stroke-width:1px;
+    classDef client fill:#f3e5f5,stroke:#6a1b9a,stroke-width:1px;
+    
+    %% Apply styles
+    class Client client;
+    class Runtime,RuntimeContext component;
+    class SharedStore,DagStoreBatch storage;
+    class Proposals,Votes,Executions storage;
+    class Replay process;
+    
+    %% Relationships
+    Client -->|"1. Submit governance actions"| Runtime
+    Runtime -->|"2. Access via dag_store() accessor"| RuntimeContext
+    RuntimeContext -->|"3. Holds reference to"| SharedStore
+    
+    SharedStore -->|"4. Begin transaction"| DagStoreBatch
+    DagStoreBatch -->|"5a. Stage changes"| DagStoreBatch
+    DagStoreBatch -->|"5b. Commit transaction"| SharedStore
+    DagStoreBatch -.->|"5c. Rollback on error"| SharedStore
+    
+    SharedStore -->|"6a. Insert"| Proposals
+    SharedStore -->|"6b. Insert"| Votes
+    SharedStore -->|"6c. Insert"| Executions
+    
+    Replay -->|"7. Re-execute actions"| SharedStore
+    Replay -.->|"8. Verify determinism"| Proposals
+    Replay -.->|"8. Verify determinism"| Votes
+    Replay -.->|"8. Verify determinism"| Executions
+    
+    %% Future expansion
+    subgraph "Future Database Backend"
+        Persistence[(Persistent DB)]
+    end
+    
+    SharedStore -.->|"Future: Persist to DB"| Persistence
+    
+    %% Legend
+    subgraph Legend
+        L1[Component]
+        L2[(Storage)]
+        L3>Process]
+        L4{{Client}}
+    end
+    
+    class L1 component;
+    class L2 storage;
+    class L3 process;
+    class L4 client; 
