@@ -8,12 +8,21 @@ use planetary_mesh::{
     Bid, ComputeRequirements, JobManifest, JobPriority, JobStatus, MeshNode, NodeCapability,
     PlanetaryMeshNode,
 };
+use reqwest::Client;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 // use icn_core_vm::ExecutionMetrics;
+
+/// Runtime API endpoint
+const RUNTIME_URL: &str = "http://localhost:8080";
+
+/// Create a new HTTP client
+async fn create_client() -> Result<Client> {
+    Ok(Client::new())
+}
 
 /// Command-line interface for ICN Planetary Mesh
 #[derive(Parser)]
@@ -123,6 +132,13 @@ enum Commands {
         /// Node location
         #[clap(long, default_value = "us-west")]
         location: String,
+    },
+
+    /// Anchor a receipt in the DAG
+    AnchorReceipt {
+        /// Path to receipt file (CBOR or JSON format)
+        #[clap(long, short)]
+        receipt: String,
     },
 }
 
@@ -735,6 +751,78 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
     Ok(())
 }
 
+async fn handle_mesh_subcommand(cmd: Commands) -> Result<()> {
+    match cmd {
+        Commands::CreateNode { name, memory, cpu, location } => {
+            create_node(&name, memory, cpu, &location).await?;
+        }
+        Commands::SubmitJob { .. } => {
+            submit_job(&cmd).await?;
+        }
+        Commands::ListNodes => {
+            list_nodes().await?;
+        }
+        Commands::GetBids { job_id } => {
+            get_bids(&job_id).await?;
+        }
+        Commands::JobStatus { job_id } => {
+            get_job_status(&job_id).await?;
+        }
+        Commands::AcceptBid { job_id, node_id } => {
+            accept_bid(&job_id, &node_id).await?;
+        }
+        Commands::Execute { wasm, output } => {
+            execute_local(wasm, output.as_deref()).await?;
+        }
+        Commands::AnchorReceipt { receipt } => {
+            // Read receipt file
+            let receipt_bytes = tokio::fs::read(&receipt).await?;
+            
+            // Determine file type based on extension
+            let receipt_obj = if receipt.ends_with(".cbor") {
+                // Deserialize from CBOR
+                serde_cbor::from_slice::<icn_mesh_receipts::ExecutionReceipt>(&receipt_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse CBOR receipt: {}", e))?
+            } else if receipt.ends_with(".json") {
+                // Deserialize from JSON
+                serde_json::from_slice::<icn_mesh_receipts::ExecutionReceipt>(&receipt_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse JSON receipt: {}", e))?
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Unsupported receipt format. Use .cbor or .json extension."
+                ));
+            };
+            
+            // Connect to runtime to anchor the receipt
+            let client = create_client().await?;
+            
+            // Convert receipt to CBOR for anchoring
+            let receipt_cbor = serde_cbor::to_vec(&receipt_obj)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize receipt: {}", e))?;
+            
+            // Call the runtime's anchor_receipt API
+            let response = client
+                .post(format!("{}/api/v1/receipts/anchor", RUNTIME_URL))
+                .header("Content-Type", "application/cbor")
+                .body(receipt_cbor)
+                .send()
+                .await?;
+            
+            if !response.status().is_success() {
+                let error = response.text().await?;
+                return Err(anyhow::anyhow!("Failed to anchor receipt: {}", error));
+            }
+            
+            // Parse response to get CID
+            let result: serde_json::Value = response.json().await?;
+            let cid = result["cid"].as_str().unwrap_or("unknown");
+            
+            println!("Receipt anchored with CID: {}", cid);
+            Ok(())
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -765,6 +853,9 @@ async fn main() -> Result<()> {
             location,
         } => {
             create_node(name, *memory, *cpu, location).await?;
+        }
+        Commands::AnchorReceipt { receipt } => {
+            handle_mesh_subcommand(Commands::AnchorReceipt { receipt }).await?;
         }
     }
 

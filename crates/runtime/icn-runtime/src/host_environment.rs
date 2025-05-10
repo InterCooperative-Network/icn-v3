@@ -1,7 +1,7 @@
 use crate::context::RuntimeContext;
 use icn_economics::ResourceType;
 use icn_identity::Did;
-use icn_mesh_receipts::ExecutionReceipt;
+use icn_mesh_receipts::{ExecutionReceipt, verify_receipt};
 use icn_types::dag::ReceiptNode;
 use serde_cbor;
 use std::sync::Arc;

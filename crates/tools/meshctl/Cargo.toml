@@ -10,15 +10,18 @@ anyhow = "1.0.75"
 thiserror = "1.0.50"
 serde = { version = "1.0.190", features = ["derive"] }
 serde_json = "1.0.108"
+serde_cbor = "0.11.2"
 log = "0.4.20"
 clap = { version = "4.4.7", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["full"] }
 icn-types = { path = "../../common/icn-types" }
 icn-identity-core = { path = "../../common/icn-identity-core" }
 icn-economics = { path = "../../common/icn-economics" }
+icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
 planetary-mesh = { path = "../../p2p/planetary-mesh" }
 uuid = { version = "1.5.0", features = ["v4"] }
 tempfile = "3.8.1"
 chrono = { version = "0.4.31", features = ["serde"] }
 colored = "2.0.4"
-icn-core-vm = { path = "../../runtime/icn-core-vm" } 
+icn-core-vm = { path = "../../runtime/icn-core-vm" }
+reqwest = { version = "0.11", features = ["json"] } 
