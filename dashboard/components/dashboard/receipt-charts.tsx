@@ -22,6 +22,7 @@ import {
 } from "../ui/card";
 import { ExecutionReceipt, ICNApi, getMockData } from "../../lib/api";
 import { useRealtimeEvent, RealtimeEvent } from "../../lib/realtime";
+import { FederationSelector } from "../ui/federation-selector";
 
 // Function to process receipts for visualization
 const processReceiptsForChart = (receipts: ExecutionReceipt[]) => {
@@ -96,6 +97,7 @@ const processReceiptsForChart = (receipts: ExecutionReceipt[]) => {
 
 export function ReceiptCharts() {
   const router = useRouter();
+  const [selectedFederation, setSelectedFederation] = useState<string>('global');
   const [receiptData, setReceiptData] = useState<{
     executorData: any[];
     timeSeriesData: any[];
@@ -103,32 +105,61 @@ export function ReceiptCharts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  // Subscribe to real-time receipt updates
-  const { data: newReceipts, lastUpdated, isConnected } = useRealtimeEvent<ExecutionReceipt>(
-    RealtimeEvent.RECEIPT_CREATED, 
+  // Subscribe to real-time receipt updates with federation scoping
+  const { 
+    data: newReceipts, 
+    lastUpdated, 
+    isConnected, 
+    federationId 
+  } = useRealtimeEvent<ExecutionReceipt>(
+    RealtimeEvent.RECEIPT_CREATED,
+    { 
+      federationId: selectedFederation,
+      // In a real app, you would get this from an auth service
+      authToken: selectedFederation !== 'global' ? 'your-jwt-token' : undefined
+    },
     []
   );
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Try to fetch from API first
-        const data = await ICNApi.getLatestReceipts(50).catch(() => {
-          // If API call fails, use mock data
-          return getMockData.latestReceipts();
-        });
-        
-        const processedData = processReceiptsForChart(data);
-        setReceiptData(processedData);
-      } catch (err) {
-        setError("Failed to fetch receipt data for charts");
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  // Handle federation selection
+  const handleFederationChange = (federation: string) => {
+    setSelectedFederation(federation);
+    setLoading(true);
+    
+    // Fetch data for the selected federation
+    fetchData(federation);
+  };
 
-    fetchData();
+  const fetchData = async (federation: string = 'global') => {
+    try {
+      // In a real implementation, you would pass the federation ID to the API
+      // Here we're just using the mock data for demonstration
+      const data = await ICNApi.getLatestReceipts(50).catch(() => {
+        return getMockData.latestReceipts();
+      });
+      
+      // Filter receipts by federation if not global
+      const filteredData = federation === 'global' 
+        ? data 
+        : data.filter((receipt: ExecutionReceipt) => 
+            // This assumes the receipt has a federation_id field
+            // You might need to adjust based on your actual data structure
+            (receipt as any).federation_id === federation || 
+            receipt.executor.includes(federation)
+          );
+      
+      const processedData = processReceiptsForChart(filteredData);
+      setReceiptData(processedData);
+    } catch (err) {
+      setError("Failed to fetch receipt data for charts");
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData(selectedFederation);
   }, []);
   
   // Update charts when new receipts come in via WebSocket
@@ -207,7 +238,7 @@ export function ReceiptCharts() {
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="pb-0">
         <CardTitle className="flex justify-between items-center">
           <span>Receipt Analytics</span>
           {lastUpdated && (
@@ -219,6 +250,12 @@ export function ReceiptCharts() {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        <FederationSelector 
+          onSelect={handleFederationChange} 
+          federations={['global', 'federation1', 'federation2']}
+          initialFederation={selectedFederation}
+        />
+        
         {loading ? (
           <div className="flex justify-center items-center h-40">
             <div className="text-slate-500">Loading...</div>

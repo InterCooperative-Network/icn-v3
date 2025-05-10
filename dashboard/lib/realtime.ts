@@ -2,8 +2,11 @@ import { io, Socket } from 'socket.io-client';
 import { useState, useEffect } from 'react';
 import { ExecutionReceipt, Token, TokenTransaction } from './api';
 
-// WebSocket connection URL - this should point to your WebSocket server
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8081';
+// Configuration with federation scoping
+export interface WebSocketConfig {
+  federationId?: string;  // Optional federation scope
+  authToken?: string;     // JWT token for auth
+}
 
 // Event types for the real-time updates
 export enum RealtimeEvent {
@@ -16,151 +19,197 @@ export enum RealtimeEvent {
 
 // Class to handle WebSocket connection and real-time updates
 class RealtimeService {
-  private socket: Socket | null = null;
-  private listeners: Map<string, Set<Function>> = new Map();
-  private connected: boolean = false;
-  private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 5;
-  
-  // Last update timestamps
+  private connections: Map<string, Socket> = new Map();
+  private listeners: Map<string, Map<string, Set<Function>>> = new Map();
   private lastUpdated: Map<string, Date> = new Map();
-
-  // Initialize and connect to WebSocket server
-  connect() {
-    if (this.socket) return;
-
-    this.socket = io(SOCKET_URL, {
-      reconnectionAttempts: this.maxReconnectAttempts,
+  
+  // Connect to a specific federation namespace
+  connect(config: WebSocketConfig = {}) {
+    const { federationId = 'global', authToken } = config;
+    
+    // Create a unique connection key
+    const connectionKey = `federation:${federationId}`;
+    
+    // Return if already connected
+    if (this.connections.has(connectionKey)) return;
+    
+    // Create socket URL - add federation as namespace
+    const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8081';
+    const namespaceUrl = `${SOCKET_URL}/${federationId}`;
+    
+    // Configure socket with auth if token exists
+    const socketOptions = {
+      reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      transports: ['websocket']
+      transports: ['websocket'],
+      auth: authToken ? { token: authToken } : undefined
+    };
+    
+    // Create new socket connection
+    const socket = io(namespaceUrl, socketOptions);
+    
+    // Set up event handlers
+    socket.on('connect', () => {
+      console.log(`Connected to federation: ${federationId}`);
     });
-
-    this.socket.on('connect', () => {
-      console.log('Connected to real-time updates');
-      this.connected = true;
-      this.reconnectAttempts = 0;
+    
+    socket.on('disconnect', () => {
+      console.log(`Disconnected from federation: ${federationId}`);
     });
-
-    this.socket.on('disconnect', () => {
-      console.log('Disconnected from real-time updates');
-      this.connected = false;
+    
+    socket.on('connect_error', (err) => {
+      console.warn(`Federation connection error (${federationId}):`, err);
     });
-
-    this.socket.on('connect_error', (err) => {
-      console.warn('WebSocket connection error:', err);
-      this.reconnectAttempts++;
-      
-      if (this.reconnectAttempts > this.maxReconnectAttempts) {
-        console.warn('Maximum reconnect attempts reached, falling back to polling');
-        this.socket?.disconnect();
-      }
-    });
-
-    // Set up listeners for different event types
+    
+    // Subscribe to all events for this federation
     Object.values(RealtimeEvent).forEach(eventType => {
-      this.socket?.on(eventType, (data) => {
-        this.lastUpdated.set(eventType, new Date());
-        const listeners = this.listeners.get(eventType);
-        if (listeners) {
-          listeners.forEach(callback => callback(data));
-        }
+      socket.on(eventType, (data) => {
+        this.lastUpdated.set(`${connectionKey}:${eventType}`, new Date());
+        
+        // Call all event listeners for this federation
+        if (!this.listeners.has(connectionKey)) return;
+        const federationListeners = this.listeners.get(connectionKey)!;
+        
+        if (!federationListeners.has(eventType)) return;
+        federationListeners.get(eventType)!.forEach(callback => callback(data));
       });
     });
+    
+    // Store the connection
+    this.connections.set(connectionKey, socket);
   }
-
-  // Disconnect from WebSocket server
-  disconnect() {
-    if (this.socket) {
-      this.socket.disconnect();
-      this.socket = null;
-      this.connected = false;
-    }
-  }
-
-  // Subscribe to an event type
-  subscribe(eventType: RealtimeEvent, callback: Function) {
-    if (!this.listeners.has(eventType)) {
-      this.listeners.set(eventType, new Set());
-    }
-    this.listeners.get(eventType)?.add(callback);
-
-    // Connect if not already connected
-    if (!this.socket) {
-      this.connect();
-    }
-
-    return () => this.unsubscribe(eventType, callback);
-  }
-
-  // Unsubscribe from an event type
-  unsubscribe(eventType: RealtimeEvent, callback: Function) {
-    const listeners = this.listeners.get(eventType);
-    if (listeners) {
-      listeners.delete(callback);
-      if (listeners.size === 0) {
-        this.listeners.delete(eventType);
+  
+  // Disconnect from specific federation or all
+  disconnect(federation: string = 'all') {
+    if (federation === 'all') {
+      // Disconnect all connections
+      this.connections.forEach(socket => socket.disconnect());
+      this.connections.clear();
+    } else {
+      // Disconnect specific federation
+      const connectionKey = `federation:${federation}`;
+      const socket = this.connections.get(connectionKey);
+      if (socket) {
+        socket.disconnect();
+        this.connections.delete(connectionKey);
       }
     }
-
-    // If no more listeners, disconnect
-    if (this.listeners.size === 0) {
-      this.disconnect();
+  }
+  
+  // Subscribe to an event for a specific federation
+  subscribe(eventType: RealtimeEvent, callback: Function, config: WebSocketConfig = {}) {
+    const { federationId = 'global' } = config;
+    const connectionKey = `federation:${federationId}`;
+    
+    // Initialize nested maps if needed
+    if (!this.listeners.has(connectionKey)) {
+      this.listeners.set(connectionKey, new Map());
+    }
+    
+    const federationListeners = this.listeners.get(connectionKey)!;
+    
+    if (!federationListeners.has(eventType)) {
+      federationListeners.set(eventType, new Set());
+    }
+    
+    federationListeners.get(eventType)!.add(callback);
+    
+    // Connect if not already connected
+    this.connect(config);
+    
+    // Return unsubscribe function
+    return () => this.unsubscribe(eventType, callback, { federationId });
+  }
+  
+  // Unsubscribe from events
+  unsubscribe(eventType: RealtimeEvent, callback: Function, config: WebSocketConfig = {}) {
+    const { federationId = 'global' } = config;
+    const connectionKey = `federation:${federationId}`;
+    
+    if (!this.listeners.has(connectionKey)) return;
+    
+    const federationListeners = this.listeners.get(connectionKey)!;
+    
+    if (!federationListeners.has(eventType)) return;
+    
+    const eventListeners = federationListeners.get(eventType)!;
+    eventListeners.delete(callback);
+    
+    // Clean up empty sets
+    if (eventListeners.size === 0) {
+      federationListeners.delete(eventType);
+    }
+    
+    // Disconnect if no more listeners for this federation
+    if (federationListeners.size === 0) {
+      this.listeners.delete(connectionKey);
+      this.disconnect(federationId);
     }
   }
-
-  // Get the last update time for an event type
-  getLastUpdated(eventType: RealtimeEvent): Date | null {
-    return this.lastUpdated.get(eventType) || null;
+  
+  // Check connection status for a federation
+  isConnected(federationId: string = 'global'): boolean {
+    const connectionKey = `federation:${federationId}`;
+    const socket = this.connections.get(connectionKey);
+    return socket?.connected || false;
   }
-
-  // Check if currently connected
-  isConnected(): boolean {
-    return this.connected;
+  
+  // Get last update time for a federation's event
+  getLastUpdated(eventType: RealtimeEvent, federationId: string = 'global'): Date | null {
+    const key = `federation:${federationId}:${eventType}`;
+    return this.lastUpdated.get(key) || null;
   }
 }
 
 // Create a singleton instance
 export const realtimeService = new RealtimeService();
 
-// React hook for subscribing to real-time events
+// React hook for subscribing to real-time events with federation support
 export function useRealtimeEvent<T>(
   eventType: RealtimeEvent,
+  config: WebSocketConfig = {},
   initialData: T[] = []
 ): {
   data: T[];
   lastUpdated: Date | null;
   isConnected: boolean;
+  federationId: string;
 } {
+  const { federationId = 'global', authToken } = config;
   const [data, setData] = useState<T[]>(initialData);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    // Update connection status when it changes
+    // Check connection status periodically
     const checkConnectionStatus = () => {
-      setIsConnected(realtimeService.isConnected());
-      setLastUpdated(realtimeService.getLastUpdated(eventType));
+      setIsConnected(realtimeService.isConnected(federationId));
+      setLastUpdated(realtimeService.getLastUpdated(eventType, federationId));
     };
 
-    // Subscribe to the event
-    const unsubscribe = realtimeService.subscribe(eventType, (newData: T) => {
-      setData(currentData => [newData, ...currentData]);
-      setLastUpdated(new Date());
-    });
+    // Subscribe to the event with federation config
+    const unsubscribe = realtimeService.subscribe(
+      eventType, 
+      (newData: T) => {
+        setData(currentData => [newData, ...currentData]);
+        setLastUpdated(new Date());
+      },
+      { federationId, authToken }
+    );
 
-    // Check connection status regularly
+    // Status check interval
     const statusInterval = setInterval(checkConnectionStatus, 5000);
     
     // Initial connection
-    realtimeService.connect();
+    realtimeService.connect({ federationId, authToken });
     checkConnectionStatus();
 
-    // Cleanup
+    // Cleanup on unmount
     return () => {
       unsubscribe();
       clearInterval(statusInterval);
     };
-  }, [eventType]);
+  }, [eventType, federationId, authToken]);
 
-  return { data, lastUpdated, isConnected };
+  return { data, lastUpdated, isConnected, federationId };
 } 
