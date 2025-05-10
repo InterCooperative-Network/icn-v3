@@ -1,215 +1,148 @@
-# Organization-Scoped Visibility and Authorization in ICN v3
+## Organization-Scoped Visibility and Authorization in ICN v3
 
 This document describes the organization-scoped visibility and authorization system in the ICN v3 platform.
 
 ## Organization Hierarchy
 
-The ICN platform uses a hierarchical organization structure:
+ICN uses three complementary organization types, each with distinct responsibilities:
 
-1. **Federation** - The top-level organization type that encompasses multiple cooperatives
-2. **Cooperative** - A mid-level organization that belongs to one or more federations and contains multiple communities
-3. **Community** - The smallest organization unit within a cooperative
+1. **Cooperative**
+   – **Economic engines** of the network.
+   – Manage production, trade, token issuance, and economic operations for their members.
+   – Can belong to one or more federations to enable cross-cooperative marketplaces.
 
-This hierarchy is used to control access to resources and data within the platform.
+2. **Community**
+   – **Governance and public-service bodies.**
+   – Responsible for policy-making, dispute resolution, public goods (education, healthcare, infrastructure).
+   – Operates within one cooperative, but may collaborate across cooperatives via federations.
+
+3. **Federation**
+   – **Coordination layer** between cooperatives and communities.
+   – Facilitates interoperability (economic, governance), shared infrastructure, cross-domain dispute resolution, and network-wide standards.
+   – Issues global credentials, mediates cross-coop transactions, and enforces multi-party governance.
 
 ## JWT-Based Authorization
 
-The platform uses JWT (JSON Web Tokens) for authorization with organization-scoped claims:
+All access in ICN is gated by JWTs carrying explicit organization scopes and roles:
 
-```json
+```jsonc
 {
-  "sub": "did:icn:user123",
-  "iss": "federation:fed1",
-  "exp": 1692086400,
-  "federation_ids": ["fed1", "fed2"],
-  "coop_ids": ["coop1", "coop2"],
-  "community_ids": ["comm1", "comm2"],
+  "sub": "did:icn:user123",                // User's DID
+  "iss": "did:icn:federation:alpha",       // Issuer federation DID
+  "exp": 1715370000,                       // Expiration timestamp
+  "federation_ids": ["alpha"],             // Federations the token covers
+  "coop_ids":       ["coop-econA"],        // Cooperatives (economic engines)
+  "community_ids":  ["comm-govX"],         // Communities (governance bodies)
   "roles": {
-    "fed1": ["federation_admin"],
-    "coop1": ["admin", "member"],
-    "comm1": ["member"]
+    "alpha":        ["federation_admin"],  // Federation-level coordinators
+    "coop-econA":   ["coop_operator"],     // Cooperative economic operators
+    "comm-govX":    ["community_official"] // Community governance officials
   }
 }
 ```
 
 ### Claims Explained
 
-- `sub`: The user's DID (Decentralized Identifier)
-- `iss`: The issuer of the token (typically a federation)
-- `exp`: Token expiration timestamp
-- `federation_ids`: List of federation IDs the user has access to
-- `coop_ids`: List of cooperative IDs the user has access to
-- `community_ids`: List of community IDs the user has access to
-- `roles`: Map of organization IDs to role lists
+* **`sub`**: User's Decentralized Identifier (DID).
+* **`iss`**: Token issuer (a federation DID).
+* **`exp`**: UNIX expiration time.
+* **`federation_ids`**: Federations the user may coordinate within.
+* **`coop_ids`**: Cooperatives whose economic operations they may drive.
+* **`community_ids`**: Communities whose governance they may influence.
+* **`roles`**: Map of org DID → role(s), e.g.:
 
-## Federation Token Management
+  * `federation_admin`: federation coordinators with authority to issue cross-coop policies
+  * `coop_operator`: manages token minting, transfers, and economic parameters within a coop
+  * `community_official`: governs public-service decisions and policy in a community
 
-Federations have the authority to manage JWT tokens for users, granting them specific organization scopes and roles.
+## Federation Token Issuance
 
-### Token Issuance Endpoint
+Only federation coordinators (`federation_admin`) may mint and issue JWTs to grant scoped access:
 
 ```
 POST /api/v1/federation/{federation_id}/tokens
 ```
 
 **Headers:**
-- `Authorization: Bearer {federation_admin_token}`
 
-**Request Body:**
+```
+Authorization: Bearer {federation_admin_token}
+```
+
+**Body:**
+
 ```json
 {
-  "subject": "did:icn:user123",
-  "expires_in": 86400,
-  "federation_ids": ["fed1"],
-  "coop_ids": ["coop1", "coop2"],
-  "community_ids": ["comm1"],
+  "subject":       "did:icn:user123",
+  "expires_in":    86400,
+  "federation_ids":["alpha"],
+  "coop_ids":      ["coop-econA", "coop-econB"],
+  "community_ids": ["comm-govX"],
   "roles": {
-    "coop1": ["member"],
-    "comm1": ["member"]
+    "coop-econA": ["coop_operator"],
+    "comm-govX":  ["community_official"]
   }
 }
 ```
 
-**Response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expires_at": 1692086400,
-  "token_id": "jti-7b22686f7374..."
-}
-```
+**Rules:**
 
-### Token Revocation Endpoint
-
-```
-POST /api/v1/federation/{federation_id}/tokens/revoke
-```
-
-**Headers:**
-- `Authorization: Bearer {federation_admin_token}`
-
-**Request Body:**
-```json
-{
-  "jti": "jti-7b22686f7374...",  // Either specify jti
-  "subject": "did:icn:user123",  // Or specify subject to revoke all their tokens
-  "reason": "Unauthorized access detected"
-}
-```
-
-**Response:**
-```json
-{
-  "revoked": true,
-  "revoked_at": 1692086400,
-  "jti": "jti-7b22686f7374...",
-  "subject": "did:icn:user123"
-}
-```
-
-### Token Rotation Endpoint
-
-Token rotation allows for refreshing a token with new scopes or expiration:
-
-```
-POST /api/v1/federation/{federation_id}/tokens/rotate
-```
-
-**Headers:**
-- `Authorization: Bearer {federation_admin_token}`
-
-**Request Body:**
-```json
-{
-  "current_jti": "jti-7b22686f7374...",
-  "subject": "did:icn:user123",
-  "expires_in": 86400,
-  "federation_ids": ["fed1"],
-  "coop_ids": ["coop1"],
-  "community_ids": ["comm1"],
-  "roles": {
-    "coop1": ["member"]
-  },
-  "reason": "Scope change"
-}
-```
-
-**Response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expires_at": 1692086400,
-  "token_id": "jti-9c33797d7f..."
-}
-```
-
-### Federation Admin Role
-
-To manage tokens, the requesting user must have:
-1. Access to the federation (their token must include the federation_id in the federation_ids claim)
-2. The "federation_admin" role for that federation
-
-### Token Management Rules
-
-1. A federation admin can only issue/revoke tokens that include their federation's ID
-2. Admins cannot grant access to federations they don't control
-3. Tokens must have an expiration date (default is 24 hours)
-4. Revoked tokens are added to a revocation list that is checked on each request
-5. The system periodically cleans up the revocation list (tokens older than 30 days)
+1. Must include the requesting federation's DID in `federation_ids`.
+2. Can only grant roles within that federation's scope.
+3. Default expiration is 24 hours.
 
 ## API Authorization Flow
 
-1. Client includes the JWT token in the `Authorization` header of each request: `Authorization: Bearer {token}`
-2. Server validates the token signature and expiration
-3. Server extracts organization scopes from the token claims
-4. API handlers check if the user has access to the requested resources based on:
-   - Organization membership (federation_ids, coop_ids, community_ids)
-   - Roles for specific operations
-5. Access is granted or denied based on the token's claims
+1. **Client** sends `Authorization: Bearer {jwt}` on each request.
+2. **Server** validates signature and `exp`.
+3. **Server** extracts `federation_ids`, `coop_ids`, `community_ids`, and `roles`.
+4. **Handlers** enforce that:
+
+   * Economic endpoints (e.g. token mint, transfer) require a matching `coop_id` + `coop_operator`.
+   * Governance endpoints (e.g. policy votes, public-service actions) require `community_id` + `community_official`.
+   * Coordination endpoints (e.g. cross-coop operations) require `federation_id` + `federation_admin`.
+5. **Access** is granted only if the token's claims cover the requested organizational scope and roles; otherwise HTTP 403.
 
 ## WebSocket Authentication
 
-WebSocket connections are also authenticated using JWT tokens:
+Real-time subscriptions also require JWTs:
 
-1. Client connects to WebSocket endpoint with token query parameter: `?token={jwt_token}`
-2. Server validates the token on connection
-3. Client can only subscribe to channels within their authorized organization scopes
+```
+ws://.../ws/org?token={jwt}
+```
+
+* On connect, the **token** is validated.
+* Subscription channels are then limited to orgs in `federation_ids`, `coop_ids`, or `community_ids`, according to the user's roles.
 
 ## Organization-Scoped Resources
 
-The following resources are organization-scoped:
+| Resource           | Scope Level                        |
+| ------------------ | ---------------------------------- |
+| Execution Receipts | Cooperative, Community             |
+| Token Balances     | Federation, Cooperative, Community |
+| Token Transactions | Federation, Cooperative, Community |
 
-1. **Execution Receipts** - Scoped to cooperatives and communities
-2. **Token Balances** - Scoped to federations, cooperatives, and communities
-3. **Token Transactions** - Scoped to federations, cooperatives, and communities
+Clients must supply `federation_id=…`, `coop_id=…`, or `community_id=…` query params matching their token scopes.
 
-Each resource can be queried with organization scope parameters, and users can only access resources within their authorized scopes.
+### Examples
 
-## Examples
+**Economic data in a coop:**
 
-### Accessing Cooperative Resources
-
-```
-GET /api/v1/receipts?coop_id=coop1
-Authorization: Bearer {token}
-```
-
-Only users with coop1 in their `coop_ids` claim can access these resources.
-
-### Accessing Federation-Level Statistics
-
-```
-GET /api/v1/stats/tokens?federation_id=fed1
-Authorization: Bearer {token}
+```http
+GET /api/v1/balances?coop_id=coop-econA
+Authorization: Bearer {jwt}
 ```
 
-Only users with fed1 in their `federation_ids` claim can access these statistics.
+**Governance data in a community:**
 
-## Implementation Notes
+```http
+GET /api/v1/receipts?community_id=comm-govX
+Authorization: Bearer {jwt}
+```
 
-The authorization system is implemented with careful consideration of performance and security:
+**Federation coordination stats:**
 
-1. JWT validation is performed for every API request
-2. Organization scope checks are efficient and optimized for frequent access patterns
-3. Role-based permissions are checked only for administrative operations
-4. Token issuance is limited to federation administrators to maintain security 
+```http
+GET /api/v1/stats/coops?federation_id=alpha
+Authorization: Bearer {jwt}
+``` 

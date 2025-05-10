@@ -116,13 +116,13 @@ impl ScopeClaims {
         self.federation_ids.contains(&federation_id.to_string())
     }
 
-    /// Check if the user has access to the specified cooperative
+    /// Check if the user has access to the specified cooperative (economic engine)
     pub fn has_coop_access(&self, coop_id: &str) -> bool {
         // You have access if the cooperative ID is in your allowed list
         self.coop_ids.contains(&coop_id.to_string())
     }
 
-    /// Check if the user has access to the specified community
+    /// Check if the user has access to the specified community (governance body)
     pub fn has_community_access(&self, community_id: &str) -> bool {
         // You have access if the community ID is in your allowed list
         self.community_ids.contains(&community_id.to_string())
@@ -166,6 +166,21 @@ impl ScopeClaims {
 
         true
     }
+    
+    /// Check if the user has economic operator role for a cooperative
+    pub fn has_coop_operator_role(&self, coop_id: &str) -> bool {
+        self.has_role(coop_id, ROLE_COOP_OPERATOR)
+    }
+    
+    /// Check if the user has community official role for governance actions
+    pub fn has_community_official_role(&self, community_id: &str) -> bool {
+        self.has_role(community_id, ROLE_COMMUNITY_OFFICIAL)
+    }
+    
+    /// Check if the user has federation admin role for coordination actions
+    pub fn has_federation_admin_role(&self, federation_id: &str) -> bool {
+        self.has_role(federation_id, ROLE_FEDERATION_ADMIN)
+    }
 }
 
 /// Authentication errors
@@ -192,6 +207,18 @@ pub enum AuthError {
     #[error("unauthorized organization access")]
     UnauthorizedOrgAccess,
     
+    #[error("missing required role for this operation")]
+    MissingRole,
+    
+    #[error("operation only available to cooperative operators")]
+    NotCoopOperator,
+    
+    #[error("operation only available to community officials")]
+    NotCommunityOfficial,
+    
+    #[error("operation only available to federation coordinators")]
+    NotFederationCoordinator,
+    
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -199,14 +226,18 @@ pub enum AuthError {
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            AuthError::MissingAuthHeader => (StatusCode::UNAUTHORIZED, "Missing authorization header"),
-            AuthError::InvalidTokenFormat => (StatusCode::BAD_REQUEST, "Invalid token format"),
+            AuthError::MissingAuthHeader => (StatusCode::UNAUTHORIZED, "Missing authorization header".to_string()),
+            AuthError::InvalidTokenFormat => (StatusCode::BAD_REQUEST, "Invalid token format".to_string()),
             AuthError::ValidationFailed(msg) => (StatusCode::UNAUTHORIZED, msg),
-            AuthError::MissingScope => (StatusCode::FORBIDDEN, "Missing required scope"),
-            AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired"),
-            AuthError::TokenRevoked => (StatusCode::FORBIDDEN, "Token has been revoked"),
-            AuthError::UnauthorizedOrgAccess => (StatusCode::FORBIDDEN, "Unauthorized organization access"),
-            AuthError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            AuthError::MissingScope => (StatusCode::FORBIDDEN, "Missing required organization scope".to_string()),
+            AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired".to_string()),
+            AuthError::TokenRevoked => (StatusCode::FORBIDDEN, "Token has been revoked".to_string()),
+            AuthError::UnauthorizedOrgAccess => (StatusCode::FORBIDDEN, "Unauthorized organization access".to_string()),
+            AuthError::MissingRole => (StatusCode::FORBIDDEN, "Missing required role for this operation".to_string()),
+            AuthError::NotCoopOperator => (StatusCode::FORBIDDEN, "This operation requires cooperative operator role".to_string()),
+            AuthError::NotCommunityOfficial => (StatusCode::FORBIDDEN, "This operation requires community official role".to_string()),
+            AuthError::NotFederationCoordinator => (StatusCode::FORBIDDEN, "This operation requires federation coordinator role".to_string()),
+            AuthError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Internal server error: {}", msg)),
         };
 
         // Create the response with the appropriate status code and message
@@ -363,6 +394,10 @@ pub struct TokenResponse {
 
 /// Federation admin role required to issue tokens
 pub const ROLE_FEDERATION_ADMIN: &str = "federation_admin";
+/// Cooperative operator role for economic operations
+pub const ROLE_COOP_OPERATOR: &str = "coop_operator";
+/// Community official role for governance actions
+pub const ROLE_COMMUNITY_OFFICIAL: &str = "community_official";
 
 /// Issue a new JWT token for a user with specified scopes
 pub fn issue_token(
@@ -410,9 +445,48 @@ pub async fn ensure_federation_admin(
     federation_id: &str,
 ) -> Result<AuthenticatedRequest, AuthError> {
     // Check if the user has federation admin role
-    if !auth.claims.has_federation_access(federation_id) || 
-       !auth.claims.has_role(federation_id, ROLE_FEDERATION_ADMIN) {
+    if !auth.claims.has_federation_access(federation_id) {
         return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    if !auth.claims.has_role(federation_id, ROLE_FEDERATION_ADMIN) {
+        return Err(AuthError::NotFederationCoordinator);
+    }
+    
+    Ok(auth)
+}
+
+/// Handler that ensures the requesting user has cooperative operator role
+pub async fn ensure_coop_operator(
+    auth: AuthenticatedRequest,
+    coop_id: &str,
+) -> Result<AuthenticatedRequest, AuthError> {
+    // Check if the user has cooperative access
+    if !auth.claims.has_coop_access(coop_id) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    // Check if they have the operator role
+    if !auth.claims.has_role(coop_id, ROLE_COOP_OPERATOR) {
+        return Err(AuthError::NotCoopOperator);
+    }
+    
+    Ok(auth)
+}
+
+/// Handler that ensures the requesting user has community official role
+pub async fn ensure_community_official(
+    auth: AuthenticatedRequest,
+    community_id: &str,
+) -> Result<AuthenticatedRequest, AuthError> {
+    // Check if the user has community access
+    if !auth.claims.has_community_access(community_id) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
+    
+    // Check if they have the official role
+    if !auth.claims.has_role(community_id, ROLE_COMMUNITY_OFFICIAL) {
+        return Err(AuthError::NotCommunityOfficial);
     }
     
     Ok(auth)

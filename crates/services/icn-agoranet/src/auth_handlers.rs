@@ -15,17 +15,17 @@ use crate::auth::{
 };
 
 /// Process a request to issue a new JWT token for a user with specific organization scopes
-/// This endpoint is only accessible by federation admins
+/// This endpoint is only accessible by federation coordinators with admin role
 pub async fn issue_jwt_token_handler(
     State((db, _, jwt_config)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>)>,
     auth: AuthenticatedRequest,
     AxumPath(federation_id): AxumPath<String>,
     Json(payload): Json<TokenIssueRequest>,
 ) -> Result<Json<TokenResponse>, AuthError> {
-    // Ensure the requesting user has federation admin role
+    // Ensure the requesting user has federation admin role as a coordinator
     ensure_federation_admin(auth, &federation_id).await?;
     
-    // Verify that user isn't trying to grant access to federations they don't control
+    // Verify that user isn't trying to grant access to federations they don't coordinate
     if let Some(fed_ids) = &payload.federation_ids {
         for fed_id in fed_ids {
             if fed_id != &federation_id {
@@ -35,14 +35,14 @@ pub async fn issue_jwt_token_handler(
     }
     
     // Get the federation issuer
-    let issuer = Some(format!("federation:{}", federation_id));
+    let issuer = Some(format!("did:icn:federation:{}", federation_id));
     
     // Issue the token
     let token_response = issue_token(&payload, issuer, &jwt_config)?;
     
     // Log token issuance action
     tracing::info!(
-        "JWT token issued for {} by federation admin, expiring at {}",
+        "JWT token issued for {} by federation coordinator, expiring at {}",
         payload.subject,
         token_response.expires_at
     );
@@ -51,14 +51,14 @@ pub async fn issue_jwt_token_handler(
 }
 
 /// Revoke a JWT token
-/// This endpoint is only accessible by federation admins
+/// This endpoint is only accessible by federation coordinators with admin role
 pub async fn revoke_token_handler(
     State((db, _, jwt_config, revocation_store)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn TokenRevocationStore>)>,
     auth: AuthenticatedRequest,
     AxumPath(federation_id): AxumPath<String>,
     Json(payload): Json<crate::auth::revocation::RevokeTokenRequest>,
 ) -> Result<Json<crate::auth::revocation::RevokeTokenResponse>, AuthError> {
-    // Ensure the requesting user has federation admin role
+    // Ensure the requesting user has federation admin role as a coordinator
     ensure_federation_admin(auth.clone(), &federation_id).await?;
     
     // We need either a jti or a subject to revoke
@@ -76,7 +76,7 @@ pub async fn revoke_token_handler(
         let revoked_token = crate::auth::revocation::RevokedToken {
             jti: jti.clone(),
             subject: payload.subject.clone().unwrap_or_else(|| "unknown".to_string()),
-            issuer: Some(format!("federation:{}", federation_id)),
+            issuer: Some(format!("did:icn:federation:{}", federation_id)),
             revoked_at: now,
             reason: payload.reason.clone(),
             revoked_by: auth.claims.sub.clone(),
@@ -91,7 +91,7 @@ pub async fn revoke_token_handler(
         let revoked_token = crate::auth::revocation::RevokedToken {
             jti: format!("revoked-{}-{}", subject, Uuid::new_v4()),
             subject: subject.clone(),
-            issuer: Some(format!("federation:{}", federation_id)),
+            issuer: Some(format!("did:icn:federation:{}", federation_id)),
             revoked_at: now,
             reason: payload.reason.clone(),
             revoked_by: auth.claims.sub.clone(),
@@ -104,7 +104,7 @@ pub async fn revoke_token_handler(
     // Log the revocation action
     if revoked {
         tracing::info!(
-            "Token revoked by {} for federation {}: jti={:?}, subject={:?}, reason={:?}",
+            "Token revoked by federation coordinator {} for federation {}: jti={:?}, subject={:?}, reason={:?}",
             auth.claims.sub,
             federation_id,
             revoked_jti,
@@ -125,17 +125,17 @@ pub async fn revoke_token_handler(
 }
 
 /// Rotate a JWT token (revoke old and issue new)
-/// This endpoint is only accessible by federation admins
+/// This endpoint is only accessible by federation coordinators with admin role
 pub async fn rotate_token_handler(
     State((db, _, jwt_config, revocation_store)): State<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn TokenRevocationStore>)>,
     auth: AuthenticatedRequest,
     AxumPath(federation_id): AxumPath<String>,
     Json(payload): Json<crate::auth::revocation::RotateTokenRequest>,
 ) -> Result<Json<TokenResponse>, AuthError> {
-    // Ensure the requesting user has federation admin role
+    // Ensure the requesting user has federation admin role as a coordinator
     ensure_federation_admin(auth.clone(), &federation_id).await?;
     
-    // Verify that user isn't trying to grant access to federations they don't control
+    // Verify that user isn't trying to grant access to federations they don't coordinate
     if let Some(fed_ids) = &payload.federation_ids {
         for fed_id in fed_ids {
             if fed_id != &federation_id {
@@ -148,7 +148,7 @@ pub async fn rotate_token_handler(
     let revoked_token = crate::auth::revocation::RevokedToken {
         jti: payload.current_jti.clone(),
         subject: payload.subject.clone(),
-        issuer: Some(format!("federation:{}", federation_id)),
+        issuer: Some(format!("did:icn:federation:{}", federation_id)),
         revoked_at: Utc::now(),
         reason: payload.reason.clone().or(Some("Token rotation".to_string())),
         revoked_by: auth.claims.sub.clone(),
@@ -171,12 +171,12 @@ pub async fn rotate_token_handler(
         roles: payload.roles.clone(),
     };
     
-    let issuer = Some(format!("federation:{}", federation_id));
+    let issuer = Some(format!("did:icn:federation:{}", federation_id));
     let token_response = issue_token(&token_request, issuer, &jwt_config)?;
     
     // Log the token rotation
     tracing::info!(
-        "Token rotated by {} for subject {} in federation {}: old_jti={}, new_jti={:?}",
+        "Token rotated by federation coordinator {} for subject {} in federation {}: old_jti={}, new_jti={:?}",
         auth.claims.sub,
         payload.subject,
         federation_id,

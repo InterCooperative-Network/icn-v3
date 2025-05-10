@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 use chrono::{DateTime, Duration};
 use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::models::*; // Added ApiError import
@@ -1035,8 +1036,37 @@ pub async fn get_token_stats_handler(
 }
 
 // Health check handler
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Service is healthy")
+    )
+)]
 pub async fn health_check_handler() -> StatusCode {
     StatusCode::OK
+}
+
+/// Query parameters for receipt statistics
+#[derive(Debug, Deserialize)]
+pub struct GetReceiptStatsQuery {
+    /// Federation ID to filter by
+    pub federation_id: Option<String>,
+    /// Cooperative ID to filter by
+    pub coop_id: Option<String>,
+    /// Community ID to filter by
+    pub community_id: Option<String>,
+}
+
+/// Query parameters for token statistics
+#[derive(Debug, Deserialize)]
+pub struct GetTokenStatsQuery {
+    /// Federation ID to filter by
+    pub federation_id: Option<String>,
+    /// Cooperative ID to filter by
+    pub coop_id: Option<String>,
+    /// Community ID to filter by
+    pub community_id: Option<String>,
 }
 
 /// Endpoint for accessing execution receipts with authorization
@@ -1054,13 +1084,11 @@ pub async fn get_receipts_authorized(
         return Err(AuthError::UnauthorizedOrgAccess);
     }
     
-    // Access granted, retrieve the receipts
-    let receipts = db.get_receipts(
-        params.coop_id.as_deref(),
-        params.community_id.as_deref(),
-        params.limit,
-        params.offset,
-    ).await;
+    // Access granted, retrieve the receipts using filter_receipts
+    let store = db.read()
+        .map_err(|_| AuthError::Internal("Failed to acquire read lock".to_string()))?;
+    
+    let receipts = store.filter_receipts(&params);
     
     Ok(Json(receipts))
 }
@@ -1081,11 +1109,10 @@ pub async fn get_token_balances_authorized(
     }
     
     // Access granted, retrieve the token balances
-    let balances = db.get_token_balances(
-        params.coop_id.as_deref(),
-        params.community_id.as_deref(),
-        params.did.as_deref(),
-    ).await;
+    let store = db.read()
+        .map_err(|_| AuthError::Internal("Failed to acquire read lock".to_string()))?;
+    
+    let balances = store.filter_token_balances(&params);
     
     Ok(Json(balances))
 }
@@ -1096,42 +1123,30 @@ pub async fn get_token_transactions_authorized(
     Query(params): Query<GetTokenTransactionsQuery>,
     State(db): State<Db>,
 ) -> Result<Json<Vec<TokenTransaction>>, AuthError> {
-    // Collect all organization IDs from query params to check access permissions
-    let federation_id = None; // We don't have federation_id in the model yet
-    let coop_ids = [
-        params.from_coop_id.as_deref(),
-        params.to_coop_id.as_deref(),
-    ].iter().filter_map(|&id| id).collect::<Vec<_>>();
+    // Check if the user has access to the requested organization scope
+    if !auth.claims.has_org_scope_access(
+        None, // We don't have federation_id in QueryParams yet
+        params.coop_id.as_deref(),
+        params.community_id.as_deref(),
+    ) {
+        return Err(AuthError::UnauthorizedOrgAccess);
+    }
     
-    let community_ids = [
-        params.from_community_id.as_deref(),
-        params.to_community_id.as_deref(),
-    ].iter().filter_map(|&id| id).collect::<Vec<_>>();
-    
-    // Check if the user has access to ALL requested organization scopes
-    for &coop_id in &coop_ids {
-        if !auth.claims.has_coop_access(coop_id) {
-            return Err(AuthError::UnauthorizedOrgAccess);
+    // For economic operations in cooperatives, we need the operator role
+    if let Some(coop_id) = &params.coop_id {
+        // For pure cooperative operations, require the operator role
+        if params.community_id.is_none() {
+            if !auth.claims.has_coop_operator_role(coop_id) {
+                return Err(AuthError::NotCoopOperator);
+            }
         }
     }
     
-    for &community_id in &community_ids {
-        if !auth.claims.has_community_access(community_id) {
-            return Err(AuthError::UnauthorizedOrgAccess);
-        }
-    }
+    // Filter transactions based on query parameters
+    let store = db.read()
+        .map_err(|_| AuthError::Internal("Failed to acquire read lock".to_string()))?;
     
-    // Access granted, retrieve the token transactions
-    let transactions = db.get_token_transactions(
-        params.from_did.as_deref(),
-        params.to_did.as_deref(),
-        params.from_coop_id.as_deref(),
-        params.from_community_id.as_deref(),
-        params.to_coop_id.as_deref(),
-        params.to_community_id.as_deref(),
-        params.limit,
-        params.offset,
-    ).await;
+    let transactions = store.filter_token_transactions(&params);
     
     Ok(Json(transactions))
 }
@@ -1141,10 +1156,10 @@ pub async fn get_receipt_stats_authorized(
     auth: AuthenticatedRequest,
     Query(params): Query<GetReceiptStatsQuery>,
     State(db): State<Db>,
-) -> Result<Json<Value>, AuthError> {
+) -> Result<Json<ReceiptStatsResponse>, AuthError> {
     // Check if the user has access to the requested organization scope
     if !auth.claims.has_org_scope_access(
-        None, // We don't have federation_id in the model yet
+        params.federation_id.as_deref(),
         params.coop_id.as_deref(),
         params.community_id.as_deref(),
     ) {
@@ -1152,12 +1167,21 @@ pub async fn get_receipt_stats_authorized(
     }
     
     // Access granted, retrieve the receipt statistics
-    let stats = db.get_receipt_stats(
-        params.coop_id.as_deref(),
-        params.community_id.as_deref(),
-    ).await;
+    let store = db.read()
+        .map_err(|_| AuthError::Internal("Failed to acquire read lock".to_string()))?;
     
-    Ok(Json(stats))
+    let stats = store.get_receipt_stats(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref()
+    );
+    
+    let response = ReceiptStatsResponse {
+        stats,
+        coop_id: params.coop_id,
+        community_id: params.community_id,
+    };
+    
+    Ok(Json(response))
 }
 
 /// Endpoint for accessing token statistics with authorization
@@ -1165,10 +1189,10 @@ pub async fn get_token_stats_authorized(
     auth: AuthenticatedRequest,
     Query(params): Query<GetTokenStatsQuery>,
     State(db): State<Db>,
-) -> Result<Json<Value>, AuthError> {
+) -> Result<Json<TokenStatsResponse>, AuthError> {
     // Check if the user has access to the requested organization scope
     if !auth.claims.has_org_scope_access(
-        None, // We don't have federation_id in the model yet
+        params.federation_id.as_deref(),
         params.coop_id.as_deref(),
         params.community_id.as_deref(),
     ) {
@@ -1176,12 +1200,21 @@ pub async fn get_token_stats_authorized(
     }
     
     // Access granted, retrieve the token statistics
-    let stats = db.get_token_stats(
-        params.coop_id.as_deref(),
-        params.community_id.as_deref(),
-    ).await;
+    let store = db.read()
+        .map_err(|_| AuthError::Internal("Failed to acquire read lock".to_string()))?;
     
-    Ok(Json(stats))
+    let stats = store.get_token_stats(
+        params.coop_id.as_deref(),
+        params.community_id.as_deref()
+    );
+    
+    let response = TokenStatsResponse {
+        stats,
+        coop_id: params.coop_id,
+        community_id: params.community_id,
+    };
+    
+    Ok(Json(response))
 }
 
 /// Process a request to issue a new JWT token for a user with specific organization scopes

@@ -34,6 +34,9 @@ use crate::auth_handlers::{
     issue_jwt_token_handler, revoke_token_handler, rotate_token_handler,
     start_revocation_cleanup
 };
+use crate::org_handlers::{
+    process_token_transfer, process_community_governance_action
+};
 use crate::models::{
     GetProposalsQuery,
     GetThreadsQuery,
@@ -60,7 +63,7 @@ use crate::auth::{JwtConfig, revocation::InMemoryRevocationStore};
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        crate::handlers::api_health,
+        crate::handlers::health_check_handler,
         crate::handlers::create_thread_handler,
         crate::handlers::get_threads_handler,
         crate::handlers::get_thread_detail_handler,
@@ -104,13 +107,16 @@ pub fn create_app(store: Db) -> Router {
     let revocation_store = Arc::new(InMemoryRevocationStore::new()) as Arc<dyn crate::auth::revocation::TokenRevocationStore>;
     
     // Start the revocation cleanup process
-    crate::handlers::start_revocation_cleanup(revocation_store.clone());
+    start_revocation_cleanup(revocation_store.clone());
     
     // Start the WebSocket simulation if the simulation flag is set
     if std::env::var("ENABLE_WS_SIMULATION").is_ok() {
         tracing::info!("Starting WebSocket simulation mode");
         ws_state.clone().start_simulation();
     }
+    
+    // Create the main application state
+    let app_state = (store, ws_state, jwt_config, revocation_store);
     
     // Create the main router with all routes
     let app = Router::new()
@@ -122,7 +128,7 @@ pub fn create_app(store: Db) -> Router {
         .route("/proposals/:proposal_id", get(get_proposal_detail_handler))
         .route("/proposals/:proposal_id/votes", get(get_proposal_votes_handler))
         .route("/votes", post(cast_vote_handler))
-        .nest("/api/v1", api_v1_routes()) // Nest API v1 routes under /api/v1
+        .nest("/api/v1", api_v1_routes(app_state.clone())) // Nest API v1 routes under /api/v1
         .merge(websocket_routes()) // Merge WebSocket routes
         .layer(
             ServiceBuilder::new()
@@ -134,13 +140,13 @@ pub fn create_app(store: Db) -> Router {
                 )
                 .layer(TraceLayer::new_for_http())
         )
-        .with_state((store, ws_state, jwt_config, revocation_store));
+        .with_state(app_state);
     
     app
 }
 
-/// Create API v1 routes (placeholder for future expansion)
-fn api_v1_routes() -> Router<(Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)> {
+/// Create API v1 routes
+fn api_v1_routes(state: (Db, crate::websocket::WebSocketState, Arc<JwtConfig>, Arc<dyn crate::auth::revocation::TokenRevocationStore>)) -> Router {
     Router::new()
         .route("/health", get(health_check_handler))
         // Organization-scoped authorized routes
@@ -149,8 +155,13 @@ fn api_v1_routes() -> Router<(Db, crate::websocket::WebSocketState, Arc<JwtConfi
         .route("/tokens/transactions", get(get_token_transactions_authorized))
         .route("/stats/receipts", get(get_receipt_stats_authorized))
         .route("/stats/tokens", get(get_token_stats_authorized))
-        // Federation-specific routes for authorization management
+        // Federation coordination routes
         .route("/federation/:federation_id/tokens", post(issue_jwt_token_handler))
         .route("/federation/:federation_id/tokens/revoke", post(revoke_token_handler))
         .route("/federation/:federation_id/tokens/rotate", post(rotate_token_handler))
+        // Economic operation routes (cooperative scoped)
+        .route("/coop/:coop_id/transfer", post(process_token_transfer))
+        // Governance routes (community scoped)
+        .route("/community/:community_id/governance", post(process_community_governance_action))
+        .with_state(state)
 }
