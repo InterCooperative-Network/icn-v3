@@ -1,5 +1,5 @@
 use icn_ccl_dsl::{
-    ActionHandler, ActionStep, Anchor, DslModule, MeteredAction, Proposal, Role as DslAstRole,
+    ActionHandler, ActionStep, Anchor, DslModule, IfExpr, MeteredAction, Proposal, Role as DslAstRole,
     Rule as DslRule, RuleValue as DslValue, RangeRule,
 };
 use icn_ccl_parser::{CclParser, Rule};
@@ -43,19 +43,21 @@ struct Lowerer;
 impl Lowerer {
     fn lower(&self, pairs: Pairs<'_, Rule>) -> Result<Vec<DslModule>, LowerError> {
         let mut modules = Vec::new();
-
+        eprintln!("[Lowerer::lower] Starting to process ccl_root_pair children.");
         for pair in pairs {
+            eprintln!("[Lowerer::lower] Top-level pair from ccl_root. Rule: {:?}, Str:\n{}", pair.as_rule(), pair.as_str());
             match pair.as_rule() {
                 Rule::statement => {
-                    // statement -> inner definition(s)
+                    eprintln!("[Lowerer::lower] Matched Rule::statement. Iterating inner...");
                     for inner in pair.into_inner() {
-                        // Pass a mutable reference to modules
+                        eprintln!("[Lowerer::lower] Inner of statement for dispatch. Rule: {:?}, Str:\n{}", inner.as_rule(), inner.as_str());
                         self.dispatch_def(&mut modules, inner)?;
                     }
                 }
-                // Handle cases where a definition might not be wrapped in a statement,
-                // or for rules like EOI that are direct children of ccl_root_pair.into_inner()
-                _ => self.dispatch_def(&mut modules, pair)?,
+                _ => {
+                    eprintln!("[Lowerer::lower] Top-level pair is not Rule::statement (e.g. EOI). Rule: {:?}", pair.as_rule());
+                    self.dispatch_def(&mut modules, pair)?;
+                }
             }
         }
         Ok(modules)
@@ -66,6 +68,7 @@ impl Lowerer {
         modules: &mut Vec<DslModule>,
         pair: Pair<'_, Rule>,
     ) -> Result<(), LowerError> {
+        eprintln!("[Lowerer::dispatch_def] Received for dispatch. Rule: {:?}, Str:\n{}", pair.as_rule(), pair.as_str());
         match pair.as_rule() {
             Rule::proposal_def => {
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
@@ -74,6 +77,10 @@ impl Lowerer {
                 modules.push(DslModule::Proposal(self.lower_election(pair)?));
             }
             Rule::budget_def => {
+                modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
+            }
+            Rule::bylaws_def => {
+                eprintln!("[Lowerer::dispatch_def] Matched Rule::bylaws_def. Calling lower_proposal.");
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
             }
             Rule::roles_def => {
@@ -121,12 +128,7 @@ impl Lowerer {
 
             Rule::EOI => {} // EOI will be the last item from ccl_root_pair.into_inner()
             _other => {
-                // Avoid transmuting a Pair that might be 'static if it came from the top level
-                // For now, let's create a new owned Pair for the error if it's not proposal_def or EOI/SOI
-                // A better approach would be to ensure all handled rules are exhaustive or make Unhandled take Pair<'_, Rule>
-                // but that requires changing LowerError and its usage.
-                // For simplicity in this step, we create an owned string representation for the error.
-                // This is a simplification; a robust solution would handle lifetimes carefully.
+                eprintln!("[Lowerer::dispatch_def] Unhandled rule: {:?}", _other);
                 return Err(LowerError::Unhandled(unsafe { std::mem::transmute(pair) }));
             }
         }
@@ -198,19 +200,23 @@ impl Lowerer {
     ) -> Result<(String, Vec<DslRule>), LowerError> {
         let mut description_body = String::new();
         let mut dsl_rules = Vec::<DslRule>::new();
+        eprintln!("[lower_block_common_fields] Processing block: {:#?}", block_pair.as_span());
 
         if block_pair.as_rule() == Rule::block {
             for statement_pair in block_pair.into_inner() {
+                eprintln!("[lower_block_common_fields] Iterating statement_pair. Rule: {:?}, Str: {}", statement_pair.as_rule(), statement_pair.as_str());
                 if statement_pair.as_rule() == Rule::statement {
                     if let Some(inner_def_pair) = statement_pair.into_inner().next() {
+                        eprintln!("[lower_block_common_fields] Got inner_def_pair. Rule: {:?}, Str: {}", inner_def_pair.as_rule(), inner_def_pair.as_str());
                         match inner_def_pair.as_rule() {
                             Rule::any_statement => {
-                                let mut field_parts = inner_def_pair.into_inner();
+                                let mut field_parts = inner_def_pair.clone().into_inner(); // Clone for logging if needed
                                 let key_pair_opt = field_parts.next();
                                 let value_outer_pair_opt = field_parts.next();
 
                                 if let Some(key_pair) = key_pair_opt {
                                     let key_str = key_pair.as_str().trim_matches('"');
+                                    eprintln!("[lower_block_common_fields] any_statement key: {}", key_str);
 
                                     if let Some(value_outer_pair) = value_outer_pair_opt {
                                         // value_outer_pair is the (value | block | identifier) part of any_statement
@@ -274,6 +280,16 @@ impl Lowerer {
                                 dsl_rules.push(DslRule {
                                     key,
                                     value: DslValue::Range(Box::new(range_rule_data)),
+                                });
+                            }
+                            Rule::if_statement => {
+                                let if_expr_data = self.lower_if_statement(inner_def_pair)?;
+                                // Create a key for the if statement, e.g., based on its condition or a counter
+                                // For now, using a generic key placeholder
+                                let key = format!("if_condition_{}", dsl_rules.len()); // Simple unique key
+                                dsl_rules.push(DslRule {
+                                    key,
+                                    value: DslValue::If(Box::new(if_expr_data)),
                                 });
                             }
                             _ => { /* Other definitions in statement. Ignored for common fields. */ }
@@ -368,6 +384,63 @@ impl Lowerer {
             start: start_val,
             end: end_val,
             rules: rules_for_range,
+        })
+    }
+
+    fn lower_if_statement(&self, pair: Pair<'_, Rule>) -> Result<IfExpr, LowerError> {
+        // pair is Rule::if_statement = { "if" ~ comparison_expression ~ block ~ ("else" ~ block)? }
+        let original_span = pair.as_span();
+        let mut inner_pairs = pair.into_inner();
+
+        let comparison_expr_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "If statement missing condition".to_string() },
+            original_span,
+        )))?;
+        let condition_raw = comparison_expr_pair.as_str().to_string();
+
+        let then_block_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "If statement missing 'then' block".to_string() },
+            original_span,
+        )))?;
+
+        if then_block_pair.as_rule() != Rule::block {
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: format!("Expected block for 'then' branch, found {:?}", then_block_pair.as_rule()) },
+                then_block_pair.as_span(),
+            )));
+        }
+        let (_then_desc, then_rules) = self.lower_block_common_fields(then_block_pair)?;
+
+        let mut else_rules = None;
+        // If there's another pair after the 'then' block, it must be the 'else' block.
+        // The "else" keyword itself is consumed by Pest and doesn't appear as a separate pair here.
+        if let Some(else_block_pair) = inner_pairs.next() {
+            if else_block_pair.as_rule() == Rule::block {
+                let (_else_desc, rules) = self.lower_block_common_fields(else_block_pair)?;
+                else_rules = Some(rules);
+            } else {
+                // This is an error: if something follows the 'then' block, it must be a block (for 'else')
+                return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError { 
+                        message: format!("Expected block for 'else' branch, found {:?}", else_block_pair.as_rule()) 
+                    },
+                    else_block_pair.as_span(),
+                )));
+            }
+        }
+
+        // Ensure there are no more tokens after the optional else block
+        if inner_pairs.next().is_some() {
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: "Unexpected tokens after if-statement's else block".to_string() },
+                original_span, // Or a more specific span from the unexpected token if available
+            )));
+        }
+
+        Ok(IfExpr {
+            condition_raw,
+            then_rules,
+            else_rules,
         })
     }
 

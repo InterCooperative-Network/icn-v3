@@ -290,54 +290,29 @@ lto = true
 
 #[cfg(test)]
 mod tests {
-    // use super::codegen::compile_ccl_to_wasm; // Commented out problematic import
-    // use icn_ccl_parser::CclParser; // Unused
-    // use icn_types::{CoOutput, Principal, TrustlogClaim, DetachedJws, DidMethod, ResourceType, ResourceConstraint, ResourceName, ResourceId, SignatureAlgorithm, TrustlogAnchorContraints, TrustlogIdConstraints}; // Commented out problematic imports
-    // use std::fs; // Unused in new test context
-    // use std::path::Path; // Unused in new test context
-    // use tempfile::NamedTempFile; // Unused in new test context
-    // use base64::engine::general_purpose; // Will be handled by adding base64 dep
-    // use base64::Engine; // Will be handled by adding base64 dep
-    // use uuid::Uuid; // Unused in new test context
+    use super::*;
     use crate::lower::lower_str;
+    use insta::assert_json_snapshot;
 
-    // Commenting out the old test that uses many of the problematic imports for now
-    // to focus on getting the new `lower_str` test to work.
-    /*
-    #[test]
-    fn test_dsl_generation() {
-        let compiler = CclCompiler::new().unwrap();
-        let ccl_source = r#"
-            proposal "Example Governance" {
-                action anchor_data("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi");
-            }
-        "#;
-        let result = compiler.compile_to_wasm(ccl_source);
-        assert!(result.is_ok());
-        let wasm_bytes = result.unwrap();
-        // Basic check, ensure it's not empty and looks like WASM
-        assert!(!wasm_bytes.is_empty());
-        assert_eq!(&wasm_bytes[0..4], b"\0asm"); // WASM magic number
-
-        // Placeholder for more detailed verification of the WASM output
-        // For example, using wasmparser or wasmtime to inspect/validate the module
-        let temp_file = NamedTempFile::new().unwrap();
-        fs::write(temp_file.path(), &wasm_bytes).unwrap();
-        println!("WASM written to: {}", temp_file.path().display());
-    }
-    */
+    const ELECTION_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/election.ccl");
+    const BUDGET_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/budget.ccl");
+    const BYLAWS_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/bylaws.ccl");
 
     #[test]
     fn election_template_lowers() {
-        let ccl_source = include_str!("../../icn-ccl-parser/templates/election.ccl");
-        let dsl_modules = lower_str(ccl_source).unwrap();
-        insta::assert_json_snapshot!("election_template_lowers", dsl_modules);
+        let dsl_modules = lower_str(ELECTION_CCL_STR).unwrap();
+        assert_json_snapshot!(dsl_modules);
     }
 
     #[test]
     fn budget_template_lowers() {
-        let ccl_source = include_str!("../../icn-ccl-parser/templates/budget.ccl");
-        let dsl_modules = lower_str(ccl_source).unwrap();
-        insta::assert_json_snapshot!("budget_template_lowers", dsl_modules);
+        let dsl_modules = lower_str(BUDGET_CCL_STR).unwrap();
+        assert_json_snapshot!(dsl_modules);
+    }
+
+    #[test]
+    fn bylaws_template_lowers() {
+        let dsl_modules = lower_str(BYLAWS_CCL_STR).unwrap();
+        assert_json_snapshot!(dsl_modules);
     }
 }

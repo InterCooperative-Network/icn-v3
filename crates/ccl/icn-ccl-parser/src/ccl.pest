@@ -45,6 +45,7 @@ statement = {
     anchor_data |
     perform_metered_action |
     budget_def |
+    bylaws_def |
     allocations_def |
     spending_rules_def |
     reporting_def |
@@ -82,6 +83,9 @@ perform_metered_action = { "perform_metered_action" ~ block }
 
 // Budget definition
 budget_def = { "budget" ~ string_literal ~ block }
+
+// Bylaws definition
+bylaws_def = { "bylaws" ~ string_literal ~ block }
 
 // Allocations definition
 allocations_def = { "allocations" ~ block }

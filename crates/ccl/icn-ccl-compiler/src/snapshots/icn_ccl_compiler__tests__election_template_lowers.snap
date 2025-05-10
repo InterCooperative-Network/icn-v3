@@ -26,6 +26,19 @@ expression: dsl_modules
         {
           "key": "term_length",
           "value": "365d"
+        },
+        {
+          "key": "requirements",
+          "value": [
+            {
+              "key": "membership_duration",
+              "value": "180d"
+            },
+            {
+              "key": "standing",
+              "value": "good"
+            }
+          ]
         }
       ]
     }
@@ -38,6 +51,19 @@ expression: dsl_modules
         {
           "key": "term_length",
           "value": "365d"
+        },
+        {
+          "key": "requirements",
+          "value": [
+            {
+              "key": "membership_duration",
+              "value": "365d"
+            },
+            {
+              "key": "standing",
+              "value": "good"
+            }
+          ]
         }
       ]
     }
@@ -50,6 +76,19 @@ expression: dsl_modules
         {
           "key": "term_length",
           "value": "180d"
+        },
+        {
+          "key": "requirements",
+          "value": [
+            {
+              "key": "membership_duration",
+              "value": "90d"
+            },
+            {
+              "key": "standing",
+              "value": "good"
+            }
+          ]
         }
       ]
     }

@@ -121,6 +121,8 @@ pub enum RuleValue {
     Map(Vec<Rule>),
     /// A range rule, typically for numeric thresholds.
     Range(Box<RangeRule>),
+    /// An if-expression, for conditional rules.
+    If(Box<IfExpr>),
 }
 
 /// Represents a rule defining a numeric range and associated sub-rules.
@@ -132,6 +134,17 @@ pub struct RangeRule {
     pub end: f64,
     /// Sub-rules that apply within this range.
     pub rules: Vec<Rule>,
+}
+
+/// Represents an if-expression with a condition and corresponding rule blocks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IfExpr {
+    /// The raw condition string (e.g., "proposal.type == "bylaw_change"").
+    pub condition_raw: String,
+    /// Rules to be applied if the condition is true.
+    pub then_rules: Vec<Rule>,
+    /// Optional rules to be applied if the condition is false.
+    pub else_rules: Option<Vec<Rule>>,
 }
 
 /// Represents a handler for a specific event, containing a sequence of actions.
