@@ -23,6 +23,7 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use uuid::Uuid;
 use std::time;
 use std::env;
+use std::collections::HashMap;
 
 // Database URL for the test database
 const TEST_DB_URL: &str = "postgres://postgres:postgres@localhost:5432/icn_ledger_test";
@@ -36,62 +37,96 @@ const TEST_FEDERATION_ID: &str = "test_federation";
 // Test roles
 const FEDERATION_ADMIN_ROLE: &str = "federation_admin";
 
-/// Setup function to initialize the database for testing
-async fn setup_test_db() -> PgPool {
+/// Setup function to initialize a unique test database schema
+async fn setup_test_db() -> (PgPool, String) {
+    // Generate a unique schema name using UUID
+    let schema_name = format!("test_{}", Uuid::new_v4().simple());
+    
     // Create a connection pool to the PostgreSQL database
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(3)
         .connect(TEST_DB_URL)
         .await
         .expect("Failed to connect to test database");
     
-    // Drop all tables from previous test runs
-    sqlx::query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    // Create a unique schema for this test
+    sqlx::query(&format!("CREATE SCHEMA {}", schema_name))
         .execute(&pool)
         .await
-        .expect("Failed to reset database schema");
+        .expect("Failed to create test schema");
+        
+    // Set the search path to use this schema
+    sqlx::query(&format!("SET search_path TO {}", schema_name))
+        .execute(&pool)
+        .await
+        .expect("Failed to set search path");
     
-    // Run migrations to create tables
+    // Run migrations within this schema
     sqlx::migrate!("./src/ledger/migrations")
         .run(&pool)
         .await
         .expect("Failed to run migrations");
     
-    pool
+    // Store schema name in the connection
+    sqlx::query(&format!("SET app.test_schema = '{}'", schema_name))
+        .execute(&pool)
+        .await
+        .expect("Failed to set schema metadata");
+    
+    (pool, schema_name)
+}
+
+/// Cleanup function to drop the schema after test completion
+async fn cleanup_test_db(pool: &PgPool, schema_name: &str) {
+    // Drop the schema and all its objects
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", schema_name))
+        .execute(pool)
+        .await
+        .expect("Failed to drop test schema");
 }
 
 /// Initialize the ledger store for testing
-async fn create_test_ledger_store() -> PostgresLedgerStore {
-    let pool = setup_test_db().await;
-    PostgresLedgerStore::new(pool)
+async fn create_test_ledger_store() -> (PostgresLedgerStore, PgPool, String) {
+    let (pool, schema_name) = setup_test_db().await;
+    
+    // Set search path for this connection
+    sqlx::query(&format!("SET search_path TO {}", schema_name))
+        .execute(&pool)
+        .await
+        .expect("Failed to set search path");
+    
+    (PostgresLedgerStore::new(pool.clone()), pool, schema_name)
 }
 
 /// Create a test app with the PostgreSQL ledger store
-async fn create_test_app() -> (String, JoinHandle<()>, Db, Arc<JwtConfig>, Arc<WebSocketState>) {
+async fn create_test_app() -> (String, JoinHandle<()>, Db, Arc<JwtConfig>, Arc<WebSocketState>, PgPool, String) {
     // Create the ledger store
-    let ledger_store = Arc::new(create_test_ledger_store().await);
+    let (ledger_store, pool, schema_name) = create_test_ledger_store().await;
     
     // Initialize in-memory store with the ledger
     let mut store = icn_agoranet::handlers::InMemoryStore::new();
-    store.set_ledger(ledger_store);
+    store.set_ledger(Arc::new(ledger_store));
     let db: Db = Arc::new(RwLock::new(store));
     
     // Initialize WebSocket state
     let ws_state = Arc::new(WebSocketState::new());
     
     // Initialize JWT config
-    let jwt_config = Arc::new(JwtConfig::new(JWT_SECRET.to_string()));
+    let jwt_config = Arc::new(JwtConfig {
+        secret_key: JWT_SECRET.to_string(),
+        issuer: Some("test_issuer".to_string()),
+        audience: None,
+        validation: jsonwebtoken::Validation::default(),
+    });
     
     // Create a token revocation store
     let revocation_store = Arc::new(icn_agoranet::auth::revocation::InMemoryRevocationStore::new());
     
+    // Create the app state tuple
+    let app_state = (db.clone(), ws_state.clone(), jwt_config.clone(), revocation_store);
+    
     // Create the app
-    let app = create_app(
-        db.clone(),
-        ws_state.clone(),
-        jwt_config.clone(),
-        revocation_store,
-    );
+    let app = create_app(app_state);
     
     // Start the server on a random port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -105,7 +140,7 @@ async fn create_test_app() -> (String, JoinHandle<()>, Db, Arc<JwtConfig>, Arc<W
     // Wait for the server to start
     tokio::time::sleep(time::Duration::from_millis(100)).await;
     
-    (server_url, handle, db, jwt_config, ws_state)
+    (server_url, handle, db, jwt_config, ws_state, pool, schema_name)
 }
 
 /// Create a JWT token for testing
@@ -117,20 +152,46 @@ fn create_test_token(
     community_id: Option<String>,
     jwt_config: &JwtConfig,
 ) -> String {
+    // Create roles map
+    let mut roles_map = HashMap::new();
+    
+    // Add federation roles if federation ID is provided
+    if let Some(ref fed_id) = federation_id {
+        roles_map.insert(fed_id.clone(), roles.clone());
+    }
+    
+    // Add cooperative roles if cooperative ID is provided
+    if let Some(ref cid) = coop_id {
+        roles_map.insert(cid.clone(), roles.clone());
+    }
+    
+    // Add community roles if community ID is provided
+    if let Some(ref cmid) = community_id {
+        roles_map.insert(cmid.clone(), roles.clone());
+    }
+    
+    // Prepare federation IDs, coop IDs, community IDs
+    let federation_ids = federation_id.into_iter().collect::<Vec<_>>();
+    let coop_ids = coop_id.into_iter().collect::<Vec<_>>();
+    let community_ids = community_id.into_iter().collect::<Vec<_>>();
+    
     // Create claims
-    let mut claims = Claims {
+    let claims = Claims {
         sub: subject.to_string(),
-        roles,
+        iss: Some("test_issuer".to_string()),
+        aud: None,
         exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
-        iat: Utc::now().timestamp() as usize,
-        iss: "test_issuer".to_string(),
-        federation_id,
-        cooperative_id: coop_id,
-        community_id: community_id,
+        iat: Some(Utc::now().timestamp() as usize),
+        nbf: None,
+        jti: Some(Uuid::new_v4().to_string()),
+        federation_ids,
+        coop_ids,
+        community_ids,
+        roles: roles_map,
     };
     
     // Create JWT
-    create_jwt(&claims, &jwt_config.secret)
+    create_jwt(&claims, &jwt_config.secret_key)
         .expect("Failed to create JWT token")
 }
 
@@ -139,8 +200,8 @@ async fn init_test_data(db: &Db) {
     // Access the store
     let store = db.read().unwrap();
     
-    // Get the ledger
-    let ledger = store.ledger.clone().unwrap();
+    // Get the ledger using the getter method
+    let ledger = store.get_ledger().unwrap();
     
     // Release the read lock
     drop(store);
@@ -193,7 +254,7 @@ async fn test_websocket_transfer_events() {
     }
     
     // Setup
-    let (server_url, handle, db, jwt_config, ws_state) = create_test_app().await;
+    let (server_url, handle, db, jwt_config, ws_state, pool, schema_name) = create_test_app().await;
     init_test_data(&db).await;
     
     // Extract the server hostname and port for WebSocket connection
@@ -316,4 +377,5 @@ async fn test_websocket_transfer_events() {
     // Clean up
     ws_stream.send(Message::Close(None)).await.expect("Failed to close WebSocket");
     handle.abort();
+    cleanup_test_db(&pool, &schema_name).await;
 } 
