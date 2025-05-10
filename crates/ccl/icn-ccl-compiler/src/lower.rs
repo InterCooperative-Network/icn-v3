@@ -86,24 +86,28 @@ impl Lowerer {
                     } else {
                         // This case should ideally be prevented by the grammar if roles_def strictly expects a block.
                         // If it can occur, it's an unexpected structure.
-                        return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                            pest::error::ErrorVariant::CustomError {
-                                message: format!(
-                                    "Expected block within roles_def, found {:?}",
-                                    block_pair.as_rule()
-                                ),
-                            },
-                            block_pair.as_span(),
-                        ))));
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: format!(
+                                        "Expected block within roles_def, found {:?}",
+                                        block_pair.as_rule()
+                                    ),
+                                },
+                                block_pair.as_span(),
+                            ),
+                        )));
                     }
                 } else {
                     // roles_def was empty or did not contain a block, also an error.
-                    return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError {
-                            message: "roles_def is empty or missing a block".to_string(),
-                        },
-                        pair_span, // Use the stored span
-                    ))));
+                    return Err(LowerError::Parse(Box::new(
+                        pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError {
+                                message: "roles_def is empty or missing a block".to_string(),
+                            },
+                            pair_span, // Use the stored span
+                        ),
+                    )));
                 }
             }
             Rule::actions_def => {
@@ -190,16 +194,18 @@ impl Lowerer {
         })?;
 
         if role_block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!(
-                        "Expected block for role '{}', found {:?}"#,
-                        role_name,
-                        role_block_pair.as_rule()
-                    ),
-                },
-                role_block_pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block for role '{}', found {:?}",
+                            role_name,
+                            role_block_pair.as_rule()
+                        ),
+                    },
+                    role_block_pair.as_span(),
+                ),
+            )));
         }
 
         let (description, attributes) = self.lower_block_common_fields(role_block_pair)?;
@@ -479,18 +485,26 @@ impl Lowerer {
                     }
 
                     let fn_call_map_rules = vec![
-                        DslRule { key: "function_name".to_string(), value: DslValue::String(fn_name) },
-                        DslRule { key: "args".to_string(), value: DslValue::Map(named_args_rules) },
+                        DslRule {
+                            key: "function_name".to_string(),
+                            value: DslValue::String(fn_name),
+                        },
+                        DslRule {
+                            key: "args".to_string(),
+                            value: DslValue::Map(named_args_rules),
+                        },
                     ];
                     Ok(DslValue::Map(fn_call_map_rules))
                 } else {
-                    Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError {
-                            message: "Invalid function call structure: missing function name"#
-                                .to_string(),
-                        },
-                        original_fn_call_span,
-                    ))))
+                    Err(LowerError::Parse(Box::new(
+                        pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError {
+                                message: "Invalid function call structure: missing function name"
+                                    .to_string(),
+                            },
+                            original_fn_call_span,
+                        ),
+                    )))
                 }
             }
             Rule::range_value => {
@@ -557,15 +571,17 @@ impl Lowerer {
         })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!(
-                        "Expected block in range statement, found {:?}"#,
-                        block_pair.as_rule()
-                    ),
-                },
-                block_pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block in range statement, found {:?}",
+                            block_pair.as_rule()
+                        ),
+                    },
+                    block_pair.as_span(),
+                ),
+            )));
         }
 
         // The description part from lower_block_common_fields is not used for RangeRule's sub-rules.
@@ -603,15 +619,17 @@ impl Lowerer {
         })?;
 
         if then_block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!(
-                        "Expected block for 'then' branch, found {:?}"#,
-                        then_block_pair.as_rule()
-                    ),
-                },
-                then_block_pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block for 'then' branch, found {:?}",
+                            then_block_pair.as_rule()
+                        ),
+                    },
+                    then_block_pair.as_span(),
+                ),
+            )));
         }
         let (_then_desc, then_rules) = self.lower_block_common_fields(then_block_pair)?;
 
@@ -624,26 +642,30 @@ impl Lowerer {
                 else_rules = Some(rules);
             } else {
                 // This is an error: if something follows the 'then' block, it must be a block (for 'else')
-                return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError {
-                        message: format!(
-                            "Expected block for 'else' branch, found {:?}"#,
-                            else_block_pair.as_rule()
-                        ),
-                    },
-                    else_block_pair.as_span(),
-                ))));
+                return Err(LowerError::Parse(Box::new(
+                    pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: format!(
+                                "Expected block for 'else' branch, found {:?}",
+                                else_block_pair.as_rule()
+                            ),
+                        },
+                        else_block_pair.as_span(),
+                    ),
+                )));
             }
         }
 
         // Ensure there are no more tokens after the optional else block
         if inner_pairs.next().is_some() {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: "Unexpected tokens after if-statement's else block".to_string(),
-                },
-                original_span, // Or a more specific span from the unexpected token if available
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "Unexpected tokens after if-statement's else block".to_string(),
+                    },
+                    original_span, // Or a more specific span from the unexpected token if available
+                ),
+            )));
         }
 
         Ok(IfExpr {
@@ -809,20 +831,22 @@ impl Lowerer {
                 pest::error::ErrorVariant::CustomError {
                     message: "actions_def is missing a block".to_string(),
                 },
-                pair_span, 
+                pair_span,
             )))
         })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!(
-                        "Expected block within actions_def, found {:?}",
-                        block_pair.as_rule()
-                    ),
-                },
-                block_pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block within actions_def, found {:?}",
+                            block_pair.as_rule()
+                        ),
+                    },
+                    block_pair.as_span(),
+                ),
+            )));
         }
 
         for statement_pair_outer in block_pair.into_inner() {
@@ -860,16 +884,18 @@ impl Lowerer {
                         })?;
 
                         if steps_block_pair.as_rule() != Rule::block {
-                            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                                pest::error::ErrorVariant::CustomError {
-                                    message: format!(
-                                        "Expected block for action_def event '{}', found {:?}"#,
-                                        event,
-                                        steps_block_pair.as_rule()
-                                    ),
-                                },
-                                steps_block_pair.as_span(),
-                            ))));
+                            return Err(LowerError::Parse(Box::new(
+                                pest::error::Error::new_from_span(
+                                    pest::error::ErrorVariant::CustomError {
+                                        message: format!(
+                                            "Expected block for action_def event '{}', found {:?}",
+                                            event,
+                                            steps_block_pair.as_rule()
+                                        ),
+                                    },
+                                    steps_block_pair.as_span(),
+                                ),
+                            )));
                         }
 
                         let mut steps = Vec::new();
@@ -922,15 +948,17 @@ impl Lowerer {
         })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!(
-                        "Expected block in mint_token, found {:?}"#,
-                        block_pair.as_rule()
-                    ),
-                },
-                block_pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block in mint_token, found {:?}",
+                            block_pair.as_rule()
+                        ),
+                    },
+                    block_pair.as_span(),
+                ),
+            )));
         }
 
         let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
@@ -979,12 +1007,14 @@ impl Lowerer {
 
         if resource_type.is_empty() {
             // It's an error if type is not specified for mint_token
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: "mint_token requires a 'type' field".to_string(),
-                },
-                block_pair_span, // Use stored span
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "mint_token requires a 'type' field".to_string(),
+                    },
+                    block_pair_span, // Use stored span
+                ),
+            )));
         }
 
         Ok(MeteredAction {
@@ -1008,15 +1038,17 @@ impl Lowerer {
         })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!(
-                        "Expected block in anchor_data, found {:?}"#,
-                        block_pair.as_rule()
-                    ),
-                },
-                block_pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block in anchor_data, found {:?}",
+                            block_pair.as_rule()
+                        ),
+                    },
+                    block_pair.as_span(),
+                ),
+            )));
         }
 
         let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
@@ -1089,16 +1121,18 @@ impl Lowerer {
                 _ => {
                     // This might happen if the grammar for a _def rule is more complex than expected
                     // or if a _def rule doesn't strictly follow string_literal? ~ block or just block.
-                    return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError {
-                            message: format!(
-                                "Unexpected rule {:?} inside generic section {}",
-                                inner_pair.as_rule(),
-                                kind
-                            ),
-                        },
-                        inner_pair.as_span(),
-                    ))));
+                    return Err(LowerError::Parse(Box::new(
+                        pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError {
+                                message: format!(
+                                    "Unexpected rule {:?} inside generic section {}",
+                                    inner_pair.as_rule(),
+                                    kind
+                                ),
+                            },
+                            inner_pair.as_span(),
+                        ),
+                    )));
                 }
             }
         }
@@ -1107,12 +1141,14 @@ impl Lowerer {
             let (_description, rules) = self.lower_block_common_fields(block_pair)?;
             Ok(GenericSection { kind, title, rules })
         } else {
-            Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!("Generic section type '{}' missing main block"#, kind),
-                },
-                original_pair_span,
-            ))))
+            Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!("Generic section type '{}' missing main block", kind),
+                    },
+                    original_pair_span,
+                ),
+            )))
         }
     }
 }
