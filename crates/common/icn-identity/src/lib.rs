@@ -8,8 +8,10 @@
 
 mod did;
 mod keypair;
+mod vc;
 #[cfg(test)]
 mod tests;
 
 pub use did::{Did, DidError};
-pub use keypair::{KeyPair, Signature}; 
+pub use keypair::{KeyPair, Signature};
+pub use vc::{VerifiableCredential, SignedCredential, CredentialError, Proof}; 

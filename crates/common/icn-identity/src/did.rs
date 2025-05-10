@@ -1,6 +1,7 @@
 use multibase::{Base, decode};
 use thiserror::Error;
 use std::str::FromStr;
+use serde::{Deserialize, Serialize};
 
 // Ed25519 public key multicodec prefix
 const ED25519_MULTICODEC_PREFIX: u8 = 0xed;
@@ -17,7 +18,7 @@ pub enum DidError {
 /// A W3C-compatible Decentralized Identifier.
 ///
 /// Currently supports **`did:key:z…`** for Ed25519 public keys.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Did(String);
 
 impl Did {

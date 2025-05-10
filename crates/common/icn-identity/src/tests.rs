@@ -1,4 +1,4 @@
-use crate::{Did, KeyPair};
+use crate::{Did, KeyPair, VerifiableCredential};
 
 #[test]
 fn did_round_trip_ed25519() {
@@ -42,4 +42,44 @@ trait ErrOrNone<T, E> {
 }
 impl<T, E> ErrOrNone<T, E> for Result<T, E> {
     fn is_err_or_none(self) -> bool { self.is_err() }
+}
+
+// VC Tests
+#[test]
+fn vc_sign_and_verify() {
+    let kp = KeyPair::generate();
+    let vc = VerifiableCredential {
+        context: vec!["https://www.w3.org/2018/credentials/v1".into()],
+        types: vec!["VerifiableCredential".into()],
+        issuer: kp.did.clone(),
+        issuance_date: chrono::Utc::now(),
+        credential_subject: serde_json::json!({"hello": "world"}),
+        proof: None,
+    };
+
+    let signed = vc.sign(&kp).unwrap();
+    assert!(signed.verify(&kp.pk).is_ok());
+
+    // Tamper
+    let mut tampered = signed.clone();
+    tampered.vc.credential_subject = serde_json::json!({"hello": "evil"});
+    assert!(tampered.verify(&kp.pk).is_err());
+}
+
+#[test]
+fn canonical_bytes_stable() {
+    let kp = KeyPair::generate();
+    let vc1 = VerifiableCredential {
+        context: vec!["https://www.w3.org/2018/credentials/v1".into()],
+        types: vec!["VC".into()],
+        issuer: kp.did.clone(),
+        issuance_date: chrono::Utc::now(),
+        credential_subject: serde_json::json!({"x": 1, "y": 2}),
+        proof: None,
+    };
+    let vc2 = vc1.clone();
+
+    let b1 = vc1.canonical_bytes().unwrap();
+    let b2 = vc2.canonical_bytes().unwrap();
+    assert_eq!(b1, b2, "deterministic serialization failed");
 } 
