@@ -18,7 +18,7 @@ function_call_args = { (value ~ ("," ~ value)*)? }
 function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
 
 // Value types
-value = { function_call | general_identifier | string_literal | duration | number | boolean | array | object }
+value = { string_literal | duration | number | boolean | function_call | array | object | general_identifier }
 array = { "[" ~ (value ~ ("," ~ value)*)? ~ ","? ~ "]" }
 object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
 object_pair = { (string_literal | identifier) ~ ":" ~ value }

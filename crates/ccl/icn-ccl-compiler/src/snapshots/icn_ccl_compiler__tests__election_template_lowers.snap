@@ -99,13 +99,38 @@ expression: dsl_modules
       "steps": [
         {
           "Metered": {
-            "resource_type": "token",
-            "amount": 0
+            "resource_type": "nomination_receipt",
+            "amount": 1,
+            "recipient": "ctx.nominee_id",
+            "data": [
+              {
+                "key": "role",
+                "value": "ctx.role"
+              },
+              {
+                "key": "nominated_at",
+                "value": [
+                  {
+                    "key": "function_name",
+                    "value": "timestamp"
+                  },
+                  {
+                    "key": "args",
+                    "value": []
+                  }
+                ]
+              },
+              {
+                "key": "election_id",
+                "value": "ctx.election_id"
+              }
+            ]
           }
         },
         {
           "Anchor": {
-            "payload_cid": "bafy...placeholder"
+            "data_reference": "map_content_placeholder_[Rule { key: \"nominee\", value: String(\"ctx.nominee_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"nominators\", value: String(\"ctx.nominators\") }, Rule { key: \"confirmed\", value: Boolean(true) }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: List([]) }]) }]",
+            "path": "governance/elections/nominations"
           }
         }
       ]
@@ -117,8 +142,32 @@ expression: dsl_modules
       "steps": [
         {
           "Metered": {
-            "resource_type": "token",
-            "amount": 0
+            "resource_type": "vote_receipt",
+            "amount": 1,
+            "recipient": "ctx.voter_id",
+            "data": [
+              {
+                "key": "election_id",
+                "value": "ctx.election_id"
+              },
+              {
+                "key": "voted_at",
+                "value": [
+                  {
+                    "key": "function_name",
+                    "value": "timestamp"
+                  },
+                  {
+                    "key": "args",
+                    "value": []
+                  }
+                ]
+              },
+              {
+                "key": "vote_hash",
+                "value": "ctx.vote_hash"
+              }
+            ]
           }
         }
       ]
@@ -130,13 +179,33 @@ expression: dsl_modules
       "steps": [
         {
           "Metered": {
-            "resource_type": "token",
-            "amount": 0
+            "resource_type": "role_credential",
+            "amount": 1,
+            "recipient": "ctx.elected_members",
+            "data": [
+              {
+                "key": "role",
+                "value": "ctx.role"
+              },
+              {
+                "key": "term_start",
+                "value": "ctx.term_start"
+              },
+              {
+                "key": "term_end",
+                "value": "ctx.term_end"
+              },
+              {
+                "key": "election_id",
+                "value": "ctx.election_id"
+              }
+            ]
           }
         },
         {
           "Anchor": {
-            "payload_cid": "bafy...placeholder"
+            "data_reference": "map_content_placeholder_[Rule { key: \"election_id\", value: String(\"ctx.election_id\") }, Rule { key: \"role\", value: String(\"ctx.role\") }, Rule { key: \"elected_members\", value: String(\"ctx.elected_members\") }, Rule { key: \"vote_count\", value: String(\"ctx.vote_count\") }, Rule { key: \"quorum_reached\", value: String(\"ctx.quorum_reached\") }, Rule { key: \"timestamp\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: List([]) }]) }]",
+            "path": "governance/elections/results"
           }
         }
       ]

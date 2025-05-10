@@ -43,19 +43,14 @@ struct Lowerer;
 impl Lowerer {
     fn lower(&self, pairs: Pairs<'_, Rule>) -> Result<Vec<DslModule>, LowerError> {
         let mut modules = Vec::new();
-        eprintln!("[Lowerer::lower] Starting to process ccl_root_pair children.");
         for pair in pairs {
-            eprintln!("[Lowerer::lower] Top-level pair from ccl_root. Rule: {:?}, Str:\n{}", pair.as_rule(), pair.as_str());
             match pair.as_rule() {
                 Rule::statement => {
-                    eprintln!("[Lowerer::lower] Matched Rule::statement. Iterating inner...");
                     for inner in pair.into_inner() {
-                        eprintln!("[Lowerer::lower] Inner of statement for dispatch. Rule: {:?}, Str:\n{}", inner.as_rule(), inner.as_str());
                         self.dispatch_def(&mut modules, inner)?;
                     }
                 }
                 _ => {
-                    eprintln!("[Lowerer::lower] Top-level pair is not Rule::statement (e.g. EOI). Rule: {:?}", pair.as_rule());
                     self.dispatch_def(&mut modules, pair)?;
                 }
             }
@@ -68,7 +63,6 @@ impl Lowerer {
         modules: &mut Vec<DslModule>,
         pair: Pair<'_, Rule>,
     ) -> Result<(), LowerError> {
-        eprintln!("[Lowerer::dispatch_def] Received for dispatch. Rule: {:?}, Str:\n{}", pair.as_rule(), pair.as_str());
         match pair.as_rule() {
             Rule::proposal_def => {
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
@@ -80,7 +74,6 @@ impl Lowerer {
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
             }
             Rule::bylaws_def => {
-                eprintln!("[Lowerer::dispatch_def] Matched Rule::bylaws_def. Calling lower_proposal.");
                 modules.push(DslModule::Proposal(self.lower_proposal(pair)?));
             }
             Rule::roles_def => {
@@ -128,7 +121,6 @@ impl Lowerer {
 
             Rule::EOI => {} // EOI will be the last item from ccl_root_pair.into_inner()
             _other => {
-                eprintln!("[Lowerer::dispatch_def] Unhandled rule: {:?}", _other);
                 return Err(LowerError::Unhandled(unsafe { std::mem::transmute(pair) }));
             }
         }
@@ -200,14 +192,10 @@ impl Lowerer {
     ) -> Result<(String, Vec<DslRule>), LowerError> {
         let mut description_body = String::new();
         let mut dsl_rules = Vec::<DslRule>::new();
-        eprintln!("[lower_block_common_fields] Processing block: {:#?}", block_pair.as_span());
-
         if block_pair.as_rule() == Rule::block {
             for statement_pair in block_pair.into_inner() {
-                eprintln!("[lower_block_common_fields] Iterating statement_pair. Rule: {:?}, Str: {}", statement_pair.as_rule(), statement_pair.as_str());
                 if statement_pair.as_rule() == Rule::statement {
                     if let Some(inner_def_pair) = statement_pair.into_inner().next() {
-                        eprintln!("[lower_block_common_fields] Got inner_def_pair. Rule: {:?}, Str: {}", inner_def_pair.as_rule(), inner_def_pair.as_str());
                         match inner_def_pair.as_rule() {
                             Rule::any_statement => {
                                 let mut field_parts = inner_def_pair.clone().into_inner(); // Clone for logging if needed
@@ -216,10 +204,8 @@ impl Lowerer {
 
                                 if let Some(key_pair) = key_pair_opt {
                                     let key_str = key_pair.as_str().trim_matches('"');
-                                    eprintln!("[lower_block_common_fields] any_statement key: {}", key_str);
 
                                     if let Some(value_outer_pair) = value_outer_pair_opt {
-                                        // value_outer_pair is the (value | block | identifier) part of any_statement
                                         match value_outer_pair.as_rule() {
                                             Rule::value => {
                                                 if let Some(value_inner_pair) = value_outer_pair.into_inner().next() {
@@ -241,17 +227,13 @@ impl Lowerer {
                                                 // else: Rule::value was empty, ignore for now
                                             }
                                             Rule::block => {
-                                                // Recursive call to process the nested block
                                                 let (_nested_desc, nested_rules) = self.lower_block_common_fields(value_outer_pair)?;
-                                                // If the nested block produced a description, it's ignored here.
-                                                // The key_str gets a DslValue::Map of the rules from the nested block.
                                                 dsl_rules.push(DslRule {
                                                     key: key_str.to_string(),
                                                     value: DslValue::Map(nested_rules),
                                                 });
                                             }
                                             Rule::general_identifier => {
-                                                // Treat general_identifier as a string value for the rule
                                                 dsl_rules.push(DslRule {
                                                     key: key_str.to_string(),
                                                     value: DslValue::String(value_outer_pair.as_str().to_string()),
@@ -315,6 +297,8 @@ impl Lowerer {
                     )))
             }
             Rule::boolean => {
+                // The grammar for boolean is `boolean = { "true" | "false" }`
+                // so `as_str()` will give "true" or "false".
                 value_pair.as_str().parse::<bool>().map(DslValue::Boolean)
                     .map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
                         pest::error::ErrorVariant::CustomError { message: format!("Invalid boolean: {}", e) },
@@ -337,7 +321,76 @@ impl Lowerer {
                 }
                 Ok(DslValue::List(elements))
             }
-            // TODO: Rule::object, Rule::general_identifier (if not handled as string above), Rule::function_call
+            Rule::general_identifier => {
+                Ok(DslValue::String(value_pair.as_str().to_string()))
+            }
+            Rule::object => {
+                // object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
+                // object_pair = { (string_literal | identifier) ~ ":" ~ value }
+                // This is effectively a block of key-value assignments, similar to a Rule::block
+                // but specific to the `value` context. We can reuse lower_block_common_fields logic
+                // by treating the object_pair items as if they were statements inside a block.
+                // lower_block_common_fields expects a Rule::block, which contains Rule::statement(s),
+                // and each Rule::statement contains the actual definition (like any_statement or a specific_def).
+                // Here, Rule::object contains Rule::object_pair(s).
+                // Each object_pair has identifier/string_literal (key) and Rule::value (value).
+
+                let mut dsl_rules = Vec::new();
+                for kv_pair in value_pair.into_inner() { // kv_pair is Rule::object_pair
+                    if kv_pair.as_rule() == Rule::object_pair {
+                        let mut inner_kv = kv_pair.into_inner();
+                        let key_obj_pair = inner_kv.next();
+                        let value_obj_pair = inner_kv.next();
+
+                        if let (Some(k_pair), Some(v_rule_container_pair)) = (key_obj_pair, value_obj_pair) {
+                            // k_pair is string_literal or identifier
+                            // v_rule_container_pair is Rule::value, its inner is the actual value type
+                            let key_str = k_pair.as_str().trim_matches('"').to_string();
+                            if let Some(actual_v_pair) = v_rule_container_pair.into_inner().next() {
+                                dsl_rules.push(DslRule {
+                                    key: key_str,
+                                    value: self.lower_value_rule(actual_v_pair)?,
+                                });
+                            }
+                        }
+                    }
+                }
+                Ok(DslValue::Map(dsl_rules))
+            }
+            Rule::function_call => {
+                // function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
+                // function_call_args = { (value ~ ("," ~ value)*)? }
+                // For MVP, let's represent it as a map: { "function_name": "name", "args": [DslValue, ...] }
+                let original_fn_call_span = value_pair.as_span(); // Get span for error reporting
+                let mut inner_fc_pairs = value_pair.into_inner();
+                let fn_name_pair = inner_fc_pairs.next();
+                let fn_args_container_pair = inner_fc_pairs.next(); // This is Rule::function_call_args
+
+                if let Some(name_p) = fn_name_pair {
+                    let fn_name = name_p.as_str().to_string();
+                    let mut dsl_args = Vec::new();
+
+                    if let Some(args_p) = fn_args_container_pair {
+                        for arg_value_rule_pair in args_p.into_inner() { // arg_value_rule_pair is Rule::value
+                            if let Some(actual_arg_pair) = arg_value_rule_pair.into_inner().next() {
+                                dsl_args.push(self.lower_value_rule(actual_arg_pair)?);
+                            }
+                        }
+                    }
+                    
+                    let mut fn_call_map_rules = Vec::new();
+                    fn_call_map_rules.push(DslRule { key: "function_name".to_string(), value: DslValue::String(fn_name) });
+                    fn_call_map_rules.push(DslRule { key: "args".to_string(), value: DslValue::List(dsl_args) });
+                    Ok(DslValue::Map(fn_call_map_rules))
+                } else {
+                    Err(LowerError::Parse(pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: "Invalid function call structure: missing function name".to_string(),
+                        },
+                        original_fn_call_span, // Use the original span of the function_call pair
+                    )))
+                }
+            }
             _ => Ok(DslValue::String(format!("UNPROCESSED_VALUE_RULE_{:?}_{}", value_pair.as_rule(), value_pair.as_str()))), // Placeholder
         }
     }
@@ -446,7 +499,7 @@ impl Lowerer {
 
     fn lower_proposal(&self, pair: Pair<'_, Rule>) -> Result<Proposal, LowerError> {
         let pair_span = pair.as_span();
-        let mut proposal_specific_pairs = pair.into_inner(); // These are specific to proposal_def
+        let mut proposal_specific_pairs = pair.into_inner();
 
         let title = proposal_specific_pairs
             .next()
@@ -536,25 +589,23 @@ impl Lowerer {
 
         for statement_pair_outer in block_pair.into_inner() { // Iterates statements in actions block
             let outer_rule = statement_pair_outer.as_rule();
-            let _outer_span = statement_pair_outer.as_span(); // Used only in commented-out eprintln
-            // eprintln!("[lower_actions] Processing statement_pair_outer: {:?}, rule: {:?}", _outer_span, outer_rule);
-
+            let _outer_span = statement_pair_outer.as_span(); 
             if outer_rule == Rule::statement {
                 if let Some(on_pair) = statement_pair_outer.into_inner().next() { 
                     let on_pair_rule = on_pair.as_rule();
-                    let _on_pair_span_for_log = on_pair.as_span(); // Used only in commented-out eprintln
+                    let _on_pair_span_for_log = on_pair.as_span(); 
                     if on_pair_rule == Rule::action_def {
-                        let _on_pair_span = on_pair.as_span(); // Renamed from on_pair_span, not used after eprintln removal
+                        let on_action_def_span = on_pair.as_span(); 
                         let mut inner_action_def_pairs = on_pair.into_inner();
                         let event_name_pair = inner_action_def_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
                             pest::error::ErrorVariant::CustomError { message: "action_def missing event name (string_literal)".to_string() },
-                            _on_pair_span, // Use stored span
+                            on_action_def_span, 
                         )))?;
                         let event = event_name_pair.as_str().trim_matches('"').to_owned();
 
                         let steps_block_pair = inner_action_def_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
                             pest::error::ErrorVariant::CustomError { message: format!("action_def for event '{}' missing block", event) },
-                            _on_pair_span, // Use stored span
+                            on_action_def_span, 
                         )))?;
 
                         if steps_block_pair.as_rule() != Rule::block {
@@ -569,9 +620,7 @@ impl Lowerer {
                         let mut steps = Vec::new();
                         for step_statement_pair_outer in steps_block_pair.into_inner() { 
                             let step_outer_rule = step_statement_pair_outer.as_rule();
-                            let _step_outer_span = step_statement_pair_outer.as_span(); // Used only in commented-out eprintln
-                            // eprintln!("[lower_actions] Processing step_statement_pair_outer: {:?}, rule: {:?}", _step_outer_span, step_outer_rule);
-
+                            let _step_outer_span = step_statement_pair_outer.as_span(); 
                             if step_outer_rule == Rule::statement {
                                 if let Some(step_pair) = step_statement_pair_outer.into_inner().next() { 
                                     match step_pair.as_rule() {
@@ -586,42 +635,156 @@ impl Lowerer {
                                             ));
                                         }
                                         Rule::perform_metered_action => {
+                                            // TODO: Implement lowering for perform_metered_action
                                         }
                                         _ => {
+                                            // Other statement types within an action_def block are ignored for now
                                         }
                                     }
                                 }
                             }
                         }
                         handlers.push(DslModule::ActionHandler(ActionHandler { event, steps }));
-                    } else {
-                        // eprintln!("[lower_actions] Expected Rule::action_def, got: {:?}. Span: {:?}", on_pair_rule, _on_pair_span_for_log);
-                    }
-                } else {
-                     // eprintln!("[lower_actions] statement_pair_outer (rule: {:?}) had no inner on_pair. Span: {:?}", outer_rule, _outer_span);
-                }
-            } else {
-                // eprintln!("[lower_actions] Expected Rule::statement for on_pair container, got: {:?}. Span: {:?}", outer_rule, _outer_span);
-            }
+                    } 
+                } 
+            } 
         }
         Ok(handlers)
     }
 
-    fn lower_mint_token(&self, _pair: Pair<'_, Rule>) -> Result<MeteredAction, LowerError> {
-        // _pair is Rule::mint_token = { "mint_token" ~ block }
-        // For MVP, just returning placeholder.
+    fn lower_mint_token(&self, pair: Pair<'_, Rule>) -> Result<MeteredAction, LowerError> {
+        // pair is Rule::mint_token = { "mint_token" ~ block }
+        let original_pair_span = pair.as_span(); // Get span before moving pair
+        let block_pair = pair.into_inner().next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "mint_token missing block".to_string() },
+            original_pair_span, // Use original span
+        )))?;
+
+        if block_pair.as_rule() != Rule::block {
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: format!("Expected block in mint_token, found {:?}", block_pair.as_rule()) },
+                block_pair.as_span(),
+            )));
+        }
+        
+        let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
+        let (_description, rules) = self.lower_block_common_fields(block_pair)?;
+
+        let mut resource_type = String::new();
+        let mut recipient: Option<String> = None;
+        let mut amount: u64 = 1; // Default amount for minting
+        let mut data: Option<Vec<DslRule>> = None;
+
+        for rule in rules {
+            match rule.key.as_str() {
+                "type" => {
+                    if let DslValue::String(s) = rule.value {
+                        resource_type = s;
+                    } else {
+                        // Handle error or log: type should be a string
+                    }
+                }
+                "recipient" | "recipients" => { // Handle both singular and plural
+                    if let DslValue::String(s) = rule.value { // Assumes recipient is a string (identifier)
+                        recipient = Some(s);
+                    } else {
+                        // Handle error or log: recipient should be a string
+                    }
+                }
+                "amount" => {
+                    if let DslValue::Number(n) = rule.value {
+                        amount = n as u64; // Consider potential precision loss or error handling
+                    } else {
+                        // Handle error or log: amount should be a number
+                    }
+                }
+                "data" => {
+                    if let DslValue::Map(map_rules) = rule.value {
+                        data = Some(map_rules);
+                    } else {
+                        // Handle error or log: data should be a map (block)
+                    }
+                }
+                _ => { /* Ignore other fields for now */ }
+            }
+        }
+        
+        if resource_type.is_empty() {
+            // It's an error if type is not specified for mint_token
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: "mint_token requires a 'type' field".to_string() },
+                block_pair_span, // Use stored span
+            )));
+        }
+
         Ok(MeteredAction {
-            resource_type: "token".into(), // Placeholder
-            amount: 0,                     // Placeholder, TODO: parse from block
+            resource_type,
+            amount,
+            recipient,
+            data,
         })
     }
 
-    fn lower_anchor_data(&self, _pair: Pair<'_, Rule>) -> Result<Anchor, LowerError> {
-        // _pair is Rule::anchor_data = { "anchor_data" ~ block }
-        // For MVP, just returning placeholder.
+    fn lower_anchor_data(&self, pair: Pair<'_, Rule>) -> Result<Anchor, LowerError> {
+        // pair is Rule::anchor_data = { "anchor_data" ~ block }
+        let original_pair_span = pair.as_span(); // Get span before moving pair
+        let block_pair = pair.into_inner().next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+            pest::error::ErrorVariant::CustomError { message: "anchor_data missing block".to_string() },
+            original_pair_span, // Use original span
+        )))?;
+
+        if block_pair.as_rule() != Rule::block {
+             return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: format!("Expected block in anchor_data, found {:?}", block_pair.as_rule()) },
+                block_pair.as_span(),
+            )));
+        }
+
+        let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
+        let (_description, rules) = self.lower_block_common_fields(block_pair)?;
+
+        let mut data_reference = String::new();
+        let mut path: Option<String> = None;
+
+        for rule in rules {
+            match rule.key.as_str() {
+                "path" => {
+                    if let DslValue::String(s) = rule.value {
+                        path = Some(s);
+                    } // else: path should be string, consider error/logging
+                }
+                "data" | "payload_cid" => { 
+                    match rule.value {
+                        DslValue::String(s) => {
+                            data_reference = s;
+                        }
+                        DslValue::Map(map_rules) => {
+                            // For now, serialize the map to a placeholder string.
+                            // In the future, this might involve hashing the content or a more structured representation.
+                            data_reference = format!("map_content_placeholder_{:?}", map_rules);
+                        }
+                        // Handle other DslValue types if necessary, or error
+                        _ => { 
+                            // Could set to a generic placeholder or error out
+                            // For now, let's try to make a string representation to avoid panic
+                            data_reference = format!("unhandled_data_type_placeholder_{:?}", rule.value);
+                        }
+                    }
+                }
+                _ => { /* Ignore other fields */ }
+            }
+        }
+
+        if data_reference.is_empty() {
+             return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError { message: "anchor_data requires a 'data' or 'payload_cid' field that yields a reference string or map".to_string() },
+                block_pair_span, // Use stored span
+            )));
+        }
+
         Ok(Anchor {
-            // The Anchor struct in DSL only has payload_cid
-            payload_cid: "bafy...placeholder".into(), // Placeholder, TODO: parse from block
+            data_reference,
+            path,
         })
     }
 } 

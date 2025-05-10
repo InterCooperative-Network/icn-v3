@@ -32,13 +32,46 @@ expression: dsl_modules
       "steps": [
         {
           "Metered": {
-            "resource_type": "token",
-            "amount": 0
+            "resource_type": "expense_receipt",
+            "amount": 1,
+            "recipient": "ctx.submitter_id",
+            "data": [
+              {
+                "key": "expense_id",
+                "value": "ctx.expense_id"
+              },
+              {
+                "key": "amount",
+                "value": "ctx.amount"
+              },
+              {
+                "key": "category",
+                "value": "ctx.category"
+              },
+              {
+                "key": "approved_at",
+                "value": [
+                  {
+                    "key": "function_name",
+                    "value": "timestamp"
+                  },
+                  {
+                    "key": "args",
+                    "value": []
+                  }
+                ]
+              },
+              {
+                "key": "approvers",
+                "value": "ctx.approvers"
+              }
+            ]
           }
         },
         {
           "Anchor": {
-            "payload_cid": "bafy...placeholder"
+            "data_reference": "map_content_placeholder_[Rule { key: \"id\", value: String(\"ctx.expense_id\") }, Rule { key: \"details\", value: String(\"ctx.expense_details\") }, Rule { key: \"status\", value: String(\"approved\") }, Rule { key: \"approved_at\", value: Map([Rule { key: \"function_name\", value: String(\"timestamp\") }, Rule { key: \"args\", value: List([]) }]) }]",
+            "path": "finance/expenses"
           }
         }
       ]
@@ -50,8 +83,32 @@ expression: dsl_modules
       "steps": [
         {
           "Metered": {
-            "resource_type": "token",
-            "amount": 0
+            "resource_type": "budget_proposal",
+            "amount": 1,
+            "recipient": "ctx.proposer_id",
+            "data": [
+              {
+                "key": "proposal_id",
+                "value": "ctx.proposal_id"
+              },
+              {
+                "key": "proposed_at",
+                "value": [
+                  {
+                    "key": "function_name",
+                    "value": "timestamp"
+                  },
+                  {
+                    "key": "args",
+                    "value": []
+                  }
+                ]
+              },
+              {
+                "key": "total_amount",
+                "value": "ctx.total_amount"
+              }
+            ]
           }
         }
       ]

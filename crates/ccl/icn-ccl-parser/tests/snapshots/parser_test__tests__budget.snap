@@ -885,23 +885,13 @@ expression: pairs_debug_string
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: general_identifier,
+                                                                                        rule: boolean,
                                                                                         span: Span {
                                                                                             str: "true",
                                                                                             start: 709,
                                                                                             end: 713,
                                                                                         },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "true",
-                                                                                                    start: 709,
-                                                                                                    end: 713,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
+                                                                                        inner: [],
                                                                                     },
                                                                                 ],
                                                                             },

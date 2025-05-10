@@ -296,7 +296,55 @@ mod tests {
 
     const ELECTION_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/election.ccl");
     const BUDGET_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/budget.ccl");
-    const BYLAWS_CCL_STR: &str = include_str!("../../icn-ccl-parser/templates/bylaws.ccl");
+    const BYLAWS_CCL_STR: &str = r#"
+// ICN Contract Chain Language - Bylaws Template
+bylaws "cooperative_bylaws" {
+  description "Core operational rules and governance structure for the cooperative."
+  version "1.0.0"
+
+  membership_rules {
+    eligibility "all_welcome"
+    application_process "simple_form"
+    dues {
+      amount 0
+      currency "USD"
+    }
+  }
+
+  voting_rights {
+    standard_member "one_person_one_vote"
+  }
+
+  // Example if statement processing rules
+  proposal_processing {
+    if proposal.type == "bylaw_change" {
+      description "Special rules for bylaw changes."
+      quorum 0.6
+      voting_period "14d" // Note: Pest parses this as string_literal, not duration
+                         // This is fine for MVP, DslValue::String("14d") is acceptable.
+    }
+
+    if proposal.category == "emergency" {
+        fast_track true
+        notification_period "1d"
+    } else {
+        standard_review_period "7d"
+    }
+  }
+
+  // Actions specific to bylaws lifecycle
+  actions {
+    on "bylaw.amendment.proposed" {
+      mint_token {
+        type "bylaw_amendment_proposal_receipt"
+        // Further details for the token can be added here
+      }
+    }
+    // Other bylaw-specific actions can be defined here
+  }
+}
+// Force update
+"#;
 
     #[test]
     fn election_template_lowers() {

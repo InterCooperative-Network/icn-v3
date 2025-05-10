@@ -1336,23 +1336,13 @@ expression: pairs_debug_string
                                                                                                         },
                                                                                                         inner: [
                                                                                                             Pair {
-                                                                                                                rule: general_identifier,
+                                                                                                                rule: boolean,
                                                                                                                 span: Span {
                                                                                                                     str: "true",
                                                                                                                     start: 1645,
                                                                                                                     end: 1649,
                                                                                                                 },
-                                                                                                                inner: [
-                                                                                                                    Pair {
-                                                                                                                        rule: identifier,
-                                                                                                                        span: Span {
-                                                                                                                            str: "true",
-                                                                                                                            start: 1645,
-                                                                                                                            end: 1649,
-                                                                                                                        },
-                                                                                                                        inner: [],
-                                                                                                                    },
-                                                                                                                ],
+                                                                                                                inner: [],
                                                                                                             },
                                                                                                         ],
                                                                                                     },
@@ -1448,23 +1438,13 @@ expression: pairs_debug_string
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: general_identifier,
+                                                                                        rule: boolean,
                                                                                         span: Span {
                                                                                             str: "true",
                                                                                             start: 1747,
                                                                                             end: 1751,
                                                                                         },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "true",
-                                                                                                    start: 1747,
-                                                                                                    end: 1751,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
+                                                                                        inner: [],
                                                                                     },
                                                                                 ],
                                                                             },
@@ -1593,23 +1573,13 @@ expression: pairs_debug_string
                                                                                 },
                                                                                 inner: [
                                                                                     Pair {
-                                                                                        rule: general_identifier,
+                                                                                        rule: boolean,
                                                                                         span: Span {
                                                                                             str: "true",
                                                                                             start: 1831,
                                                                                             end: 1835,
                                                                                         },
-                                                                                        inner: [
-                                                                                            Pair {
-                                                                                                rule: identifier,
-                                                                                                span: Span {
-                                                                                                    str: "true",
-                                                                                                    start: 1831,
-                                                                                                    end: 1835,
-                                                                                                },
-                                                                                                inner: [],
-                                                                                            },
-                                                                                        ],
+                                                                                        inner: [],
                                                                                     },
                                                                                 ],
                                                                             },
@@ -3460,23 +3430,13 @@ expression: pairs_debug_string
                                                                                                                                 },
                                                                                                                                 inner: [
                                                                                                                                     Pair {
-                                                                                                                                        rule: general_identifier,
+                                                                                                                                        rule: boolean,
                                                                                                                                         span: Span {
                                                                                                                                             str: "true",
                                                                                                                                             start: 3296,
                                                                                                                                             end: 3300,
                                                                                                                                         },
-                                                                                                                                        inner: [
-                                                                                                                                            Pair {
-                                                                                                                                                rule: identifier,
-                                                                                                                                                span: Span {
-                                                                                                                                                    str: "true",
-                                                                                                                                                    start: 3296,
-                                                                                                                                                    end: 3300,
-                                                                                                                                                },
-                                                                                                                                                inner: [],
-                                                                                                                                            },
-                                                                                                                                        ],
+                                                                                                                                        inner: [],
                                                                                                                                     },
                                                                                                                                 ],
                                                                                                                             },

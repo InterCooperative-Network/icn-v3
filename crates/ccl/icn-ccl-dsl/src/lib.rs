@@ -72,17 +72,23 @@ pub enum VoteStance {
 /// Data anchoring request (will call `host_anchor_to_dag`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Anchor {
-    /// CID of the payload to anchor.
-    pub payload_cid: String,
+    /// A reference to the data to be anchored, can be a CID or other identifier.
+    pub data_reference: String,
+    /// Optional path for where the data is anchored, e.g., a namespace or directory.
+    pub path: Option<String>,
 }
 
 /// Execution metering (resource consumption).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeteredAction {
-    /// Type of resource being consumed.
+    /// Type of resource being consumed or minted.
     pub resource_type: String,
-    /// Amount of resource consumed.
+    /// Amount of resource, if applicable (defaults to 1 for minting if not specified).
     pub amount: u64,
+    /// Optional recipient for the minted resource or action.
+    pub recipient: Option<String>,
+    /// Optional structured data associated with the action.
+    pub data: Option<Vec<Rule>>,
 }
 
 /// Represents a role definition.
