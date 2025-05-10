@@ -4,6 +4,7 @@ mod tests {
     use pest::Parser;
     use std::fs;
     use std::path::Path;
+    use insta::assert_snapshot;
 
     #[test]
     fn test_bylaws_template_parsing() {
@@ -33,12 +34,24 @@ mod tests {
             .unwrap_or_else(|_| panic!("Failed to read template file: {}", full_path.display()));
 
         // Test basic parsing with Pest
-        let parsed = CclParser::parse(Rule::ccl, &content);
-        assert!(parsed.is_ok(), "Failed to parse: {:?}", parsed.err());
+        let parsed_result = CclParser::parse(Rule::ccl, &content);
+        assert!(parsed_result.is_ok(), "Failed to parse: {:?}", parsed_result.err());
+        
+        let successful_parse = parsed_result.unwrap(); // Unwrap once
+
+        // Snapshot testing for the parse tree
+        let pairs_for_snapshot = successful_parse.clone().collect::<Vec<_>>(); // Clone Pairs for snapshotting
+
+        let snapshot_name = Path::new(template_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown_template");
+        
+        let pairs_debug_string = format!("{:#?}", pairs_for_snapshot);
+        assert_snapshot!(snapshot_name, pairs_debug_string);
 
         // Count the number of rules matched
-        let rules: Vec<_> = parsed.unwrap().collect();
-        println!("Successfully parsed {} rules", rules.len());
+        println!("Successfully parsed {} rules", pairs_for_snapshot.len());
 
         // Try to find some specific constructs
         let constructs = ["mint_token", "anchor_data", "perform_metered_action"];

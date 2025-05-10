@@ -19,6 +19,7 @@ clap = { version = "4.4.7", features = ["derive"] }
 [dev-dependencies]
 criterion = "0.4"
 pretty_assertions = "1.3"
+insta = "1.34.0"
 
 # [[bin]]
 # name = "ccl-parser"
