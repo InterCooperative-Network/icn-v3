@@ -1,5 +1,6 @@
 use crate::{policy::ResourceAuthorizationPolicy, types::ResourceType};
 use icn_identity::Did;
+use icn_types::org::{CooperativeId, CommunityId};
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -13,10 +14,14 @@ pub enum EconomicsError {
     InsufficientFunds,
 }
 
-/// Represents a key for the resource ledger, combining DID and resource type
+/// Represents a key for the resource ledger, combining DID, organization scope, and resource type
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct LedgerKey {
     pub did: String,
+    /// Optional cooperative ID that this ledger entry is associated with
+    pub coop_id: Option<String>,
+    /// Optional community ID that this ledger entry is associated with
+    pub community_id: Option<String>,
     pub resource_type: ResourceType,
 }
 
@@ -27,8 +32,16 @@ pub struct Economics {
 impl Economics {
     pub fn new(policy: ResourceAuthorizationPolicy) -> Self { Self { policy } }
 
-    pub fn authorize(&self, caller: &Did, rt: ResourceType, amt: u64) -> i32 {
-        debug!("Authorizing {} units of {:?} for {}", amt, rt, caller);
+    pub fn authorize(
+        &self,
+        caller: &Did,
+        coop_id: Option<&CooperativeId>,
+        community_id: Option<&CommunityId>,
+        rt: ResourceType,
+        amt: u64
+    ) -> i32 {
+        debug!("Authorizing {} units of {:?} for {} (coop: {:?}, community: {:?})",
+              amt, rt, caller, coop_id, community_id);
         if self.policy.authorized(rt, amt) { 
             0 
         } else { 
@@ -40,14 +53,19 @@ impl Economics {
     pub fn record(
         &self,
         caller: &Did,
+        coop_id: Option<&CooperativeId>,
+        community_id: Option<&CommunityId>,
         rt: ResourceType,
         amt: u64,
         ledger: &RwLock<HashMap<LedgerKey, u64>>,
     ) -> i32 {
-        debug!("Recording {} units of {:?} for {}", amt, rt, caller);
+        debug!("Recording {} units of {:?} for {} (coop: {:?}, community: {:?})",
+              amt, rt, caller, coop_id, community_id);
         let mut l = ledger.blocking_write();
         let key = LedgerKey {
             did: caller.to_string(),
+            coop_id: coop_id.map(|c| c.to_string()),
+            community_id: community_id.map(|c| c.to_string()),
             resource_type: rt,
         };
         *l.entry(key).or_insert(0) += amt;
@@ -59,6 +77,8 @@ impl Economics {
     pub fn mint(
         &self,
         recipient: &Did,
+        coop_id: Option<&CooperativeId>,
+        community_id: Option<&CommunityId>,
         rt: ResourceType,
         amt: u64,
         ledger: &RwLock<HashMap<LedgerKey, u64>>,
@@ -69,24 +89,30 @@ impl Economics {
             return -3;
         }
         
-        debug!("Minting {} tokens for {}", amt, recipient);
+        debug!("Minting {} tokens for {} (coop: {:?}, community: {:?})",
+              amt, recipient, coop_id, community_id);
         let mut l = ledger.blocking_write();
         let key = LedgerKey {
             did: recipient.to_string(),
+            coop_id: coop_id.map(|c| c.to_string()),
+            community_id: community_id.map(|c| c.to_string()),
             resource_type: rt,
         };
         
         // Get the current usage and subtract the amount (minting reduces usage)
+        // In our token model, lower usage means more tokens
         let current = l.entry(key.clone()).or_insert(0);
         
-        // Check for overflow
+        // Check for overflow - ensure usage doesn't go negative
         if *current < amt {
             *current = 0;
         } else {
             *current -= amt;
         }
         
-        debug!("New token balance for {}: {}", recipient, *current);
+        let token_max: u64 = 100; // Maximum token allowance
+        let available_tokens = token_max.saturating_sub(*current);
+        debug!("New token balance for {}: {} tokens (usage: {})", recipient, available_tokens, *current);
         0
     }
     
@@ -99,7 +125,11 @@ impl Economics {
     pub fn transfer(
         &self,
         sender: &Did,
+        sender_coop_id: Option<&CooperativeId>,
+        sender_community_id: Option<&CommunityId>,
         recipient: &Did,
+        recipient_coop_id: Option<&CooperativeId>,
+        recipient_community_id: Option<&CommunityId>,
         rt: ResourceType,
         amt: u64,
         ledger: &RwLock<HashMap<LedgerKey, u64>>,
@@ -116,22 +146,33 @@ impl Economics {
         // Create keys for sender and recipient
         let sender_key = LedgerKey {
             did: sender.to_string(),
+            coop_id: sender_coop_id.map(|c| c.to_string()),
+            community_id: sender_community_id.map(|c| c.to_string()),
             resource_type: rt,
         };
         
         let recipient_key = LedgerKey {
             did: recipient.to_string(),
+            coop_id: recipient_coop_id.map(|c| c.to_string()),
+            community_id: recipient_community_id.map(|c| c.to_string()),
             resource_type: rt,
         };
         
-        // Check if sender has sufficient balance (remember: lower usage means more tokens)
+        // In our token model, a usage of 0 means full tokens, and higher usage means fewer tokens
         // Get the current usage for the sender
         let sender_usage = *l.get(&sender_key).unwrap_or(&0);
         
-        // If sender doesn't have enough tokens (usage is too high), return error
-        if sender_usage < amt {
-            debug!("Insufficient funds: sender {} has usage {}, cannot transfer {}", 
-                  sender, sender_usage, amt);
+        // Check if the sender has enough tokens (represented by available headroom)
+        // The amount must be able to fit in the sender's available "usage headroom"
+        // For example: if someone has a usage of 80, they have 20 tokens available to transfer
+        // If someone has a usage of 0, they have 100 tokens available (assuming 100 is the max)
+        let token_max: u64 = 100; // Maximum token allowance
+        let available_tokens = token_max.saturating_sub(sender_usage);
+        
+        // If sender doesn't have enough available tokens, return insufficient funds
+        if available_tokens < amt {
+            debug!("Insufficient funds: sender {} has usage {} (available tokens: {}), cannot transfer {}", 
+                  sender, sender_usage, available_tokens, amt);
             return -1; // Insufficient funds
         }
         
@@ -141,7 +182,8 @@ impl Economics {
         // Decrease recipient's usage (increasing their token balance)
         let recipient_usage = *l.get(&recipient_key).unwrap_or(&0);
         
-        // Check for overflow
+        // Check for overflow - ensure recipient's usage doesn't go negative
+        // Decreasing usage means giving tokens to the recipient
         let new_recipient_usage = if recipient_usage < amt {
             0
         } else {
@@ -157,10 +199,19 @@ impl Economics {
     }
     
     /// Get the usage of a specific resource type for a specific DID
-    pub async fn get_usage(&self, caller: &Did, rt: ResourceType, ledger: &RwLock<HashMap<LedgerKey, u64>>) -> u64 {
+    pub async fn get_usage(
+        &self,
+        caller: &Did,
+        coop_id: Option<&CooperativeId>,
+        community_id: Option<&CommunityId>,
+        rt: ResourceType,
+        ledger: &RwLock<HashMap<LedgerKey, u64>>
+    ) -> u64 {
         let l = ledger.read().await;
         let key = LedgerKey {
             did: caller.to_string(),
+            coop_id: coop_id.map(|c| c.to_string()),
+            community_id: community_id.map(|c| c.to_string()),
             resource_type: rt,
         };
         *l.get(&key).unwrap_or(&0)
@@ -171,6 +222,40 @@ impl Economics {
         let l = ledger.read().await;
         l.iter()
             .filter(|(k, _)| k.resource_type == rt)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+    
+    /// Get the total usage of a specific resource type for a cooperative
+    pub async fn get_cooperative_usage(
+        &self,
+        coop_id: &CooperativeId,
+        rt: ResourceType,
+        ledger: &RwLock<HashMap<LedgerKey, u64>>
+    ) -> u64 {
+        let l = ledger.read().await;
+        l.iter()
+            .filter(|(k, _)| {
+                k.resource_type == rt && 
+                k.coop_id.as_ref().map_or(false, |cid| cid == &coop_id.to_string())
+            })
+            .map(|(_, v)| *v)
+            .sum()
+    }
+    
+    /// Get the total usage of a specific resource type for a community
+    pub async fn get_community_usage(
+        &self,
+        community_id: &CommunityId,
+        rt: ResourceType,
+        ledger: &RwLock<HashMap<LedgerKey, u64>>
+    ) -> u64 {
+        let l = ledger.read().await;
+        l.iter()
+            .filter(|(k, _)| {
+                k.resource_type == rt && 
+                k.community_id.as_ref().map_or(false, |cid| cid == &community_id.to_string())
+            })
             .map(|(_, v)| *v)
             .sum()
     }

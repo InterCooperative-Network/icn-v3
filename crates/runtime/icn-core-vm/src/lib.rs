@@ -94,6 +94,12 @@ pub struct HostContext {
 
     /// Job submissions from this execution
     pub job_submissions: Arc<Mutex<Vec<JobSubmission>>>,
+    
+    /// Optional organization context: cooperative ID
+    pub coop_id: Option<icn_types::org::CooperativeId>,
+    
+    /// Optional organization context: community ID
+    pub community_id: Option<icn_types::org::CommunityId>,
 }
 
 /// A job submission from a WASM module
@@ -123,7 +129,22 @@ impl Default for HostContext {
             anchored_cids: Arc::new(Mutex::new(Vec::new())),
             resource_usage: Arc::new(Mutex::new(Vec::new())),
             job_submissions: Arc::new(Mutex::new(Vec::new())),
+            coop_id: None,
+            community_id: None,
         }
+    }
+}
+
+impl HostContext {
+    /// Add organization context to this host context
+    pub fn with_organization(
+        mut self,
+        coop_id: Option<icn_types::org::CooperativeId>,
+        community_id: Option<icn_types::org::CommunityId>,
+    ) -> Self {
+        self.coop_id = coop_id;
+        self.community_id = community_id;
+        self
     }
 }
 

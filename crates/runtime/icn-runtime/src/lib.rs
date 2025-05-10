@@ -69,6 +69,12 @@ pub struct VmContext {
 
     /// Resource limits
     pub resource_limits: Option<ResourceLimits>,
+    
+    /// Optional cooperative ID that this execution is associated with
+    pub coop_id: Option<String>,
+    
+    /// Optional community ID that this execution is associated with
+    pub community_id: Option<String>,
 }
 
 /// Result of a WASM execution
@@ -291,6 +297,8 @@ impl Runtime {
             epoch: None,
             code_cid: Some(proposal.wasm_cid.clone()),
             resource_limits: None,
+            coop_id: None,
+            community_id: None,
         };
 
         // Execute the WASM module in governance context
@@ -554,7 +562,16 @@ impl Runtime {
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
     fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
         // Create a HostContext with default values
-        let host_context = HostContext::default();
+        let mut host_context = HostContext::default();
+        
+        // Convert string coop_id and community_id to proper types if present
+        let coop_id = vm_context.coop_id.map(|id| icn_types::org::CooperativeId::new(id));
+        let community_id = vm_context.community_id.map(|id| icn_types::org::CommunityId::new(id));
+        
+        // Set organization IDs if present
+        if coop_id.is_some() || community_id.is_some() {
+            host_context = host_context.with_organization(coop_id, community_id);
+        }
         
         // Return the configured host context
         host_context
@@ -723,6 +740,8 @@ mod tests {
             epoch: Some("2023-01-01".to_string()),
             code_cid: Some("test-cid".to_string()),
             resource_limits: None,
+            coop_id: None,
+            community_id: None,
         };
 
         // Execute the WASM module
@@ -811,6 +830,8 @@ mod tests {
             epoch: None,
             code_cid: None,
             resource_limits: None,
+            coop_id: None,
+            community_id: None,
         };
         
         // Execute the WASM module
@@ -822,6 +843,8 @@ mod tests {
         // Check that CPU usage was recorded for the correct DID
         let cpu_usage = economics.get_usage(
             &Did::from_str(test_did).unwrap(),
+            None,
+            None,
             ResourceType::Cpu,
             &resource_ledger
         ).await;
@@ -830,12 +853,14 @@ mod tests {
         // Check that Token usage was recorded for the correct DID
         let token_usage = economics.get_usage(
             &Did::from_str(test_did).unwrap(),
+            None,
+            None,
             ResourceType::Token,
             &resource_ledger
         ).await;
         assert_eq!(token_usage, 10, "Expected 10 units of Token resource usage");
         
-        // Create a second context with a different DID to verify resources are tracked separately
+        // Create a second context with a different DID and cooperative/community
         let test_did2 = "did:icn:another-user";
         let vm_context2 = VmContext {
             executor_did: test_did2.to_string(),
@@ -843,19 +868,29 @@ mod tests {
             epoch: None,
             code_cid: None,
             resource_limits: None,
+            coop_id: Some("coop-123".to_string()),
+            community_id: Some("community-456".to_string()),
         };
         
-        // Execute the WASM module again with the second DID
+        // Execute the WASM module again with the second DID and organization context
         let _ = runtime.execute_wasm(&module.serialize()?, vm_context2)?;
         
         // Verify that each DID has its own separate resource tracking
         let cpu_usage1 = economics.get_usage(
             &Did::from_str(test_did).unwrap(),
+            None,
+            None,
             ResourceType::Cpu,
             &resource_ledger
         ).await;
+        
+        let coop_id = icn_types::org::CooperativeId::new("coop-123");
+        let community_id = icn_types::org::CommunityId::new("community-456");
+        
         let cpu_usage2 = economics.get_usage(
             &Did::from_str(test_did2).unwrap(),
+            Some(&coop_id),
+            Some(&community_id),
             ResourceType::Cpu,
             &resource_ledger
         ).await;
@@ -866,6 +901,22 @@ mod tests {
         // Get total CPU usage across all DIDs
         let total_cpu = economics.get_total_usage(ResourceType::Cpu, &resource_ledger).await;
         assert_eq!(total_cpu, 100, "Total CPU usage should be 100 (50 + 50)");
+        
+        // Get cooperative-specific usage
+        let coop_cpu = economics.get_cooperative_usage(
+            &coop_id,
+            ResourceType::Cpu,
+            &resource_ledger
+        ).await;
+        assert_eq!(coop_cpu, 50, "Cooperative CPU usage should be 50");
+        
+        // Get community-specific usage
+        let community_cpu = economics.get_community_usage(
+            &community_id,
+            ResourceType::Cpu,
+            &resource_ledger
+        ).await;
+        assert_eq!(community_cpu, 50, "Community CPU usage should be 50");
         
         Ok(())
     }
