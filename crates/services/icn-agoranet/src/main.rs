@@ -2,23 +2,24 @@ use axum::{
     routing::{get, post},
     Router,
 };
-// use icn_agoranet::app::create_app; // Removed unused import
-use icn_agoranet::handlers::Db;
-use icn_agoranet::websocket::WebSocketState;
+use icn_agoranet::{
+    app::create_app, 
+    auth, 
+    handlers::{InMemoryStore, Db}, 
+    websocket::WebSocketState,
+    metrics,
+    transfers,
+    ledger,
+};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
-// use tower_http::trace::TraceLayer; // Removed unused import
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 // Import models and handlers from the crate
 // use icn_agoranet::models::*; // No longer needed directly here
-use icn_agoranet::handlers::InMemoryStore;
-use icn_agoranet::ledger::{self, LedgerStore, PostgresLedgerStore};
-use std::env;
-mod auth;
 mod auth_handlers;
 mod error;
 mod app;
@@ -89,6 +90,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Initialize metrics recorder
+    let metrics_handle = metrics::setup_metrics_recorder();
+    
+    // Setup metrics exporter
+    let metrics_addr = env::var("METRICS_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:9091".to_string())
+        .parse::<SocketAddr>()
+        .expect("Invalid metrics address");
+    
+    let _metrics_task = metrics::spawn_metrics_exporter(metrics_handle.clone(), metrics_addr);
+    tracing::info!("Prometheus metrics available at http://{}/metrics", metrics_addr);
+
     // Get PostgreSQL connection string from environment variable
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
         // Default connection string for local development
@@ -96,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Initialize the ledger store
-    let ledger_store: Arc<dyn LedgerStore + Send + Sync> = match env::var("USE_POSTGRES").unwrap_or_else(|_| "true".to_string()).as_str() {
+    let ledger_store: Arc<dyn ledger::LedgerStore + Send + Sync> = match env::var("USE_POSTGRES").unwrap_or_else(|_| "true".to_string()).as_str() {
         "true" => {
             // Create PostgreSQL ledger store
             tracing::info!("Initializing PostgreSQL ledger store");
@@ -140,99 +153,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize JWT configuration
     let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "icn-debug-secret-key".to_string());
-    let jwt_config = Arc::new(auth::JwtConfig::new(jwt_secret));
+    let jwt_config = Arc::new(auth::JwtConfig {
+        secret_key: jwt_secret,
+        issuer: Some("icn-agoranet".to_string()),
+        audience: None,
+        validation: jsonwebtoken::Validation::default(),
+    });
     
     // Initialize token revocation store
-    let token_revocation_store: Arc<dyn auth::TokenRevocationStore> = 
-        Arc::new(auth::InMemoryTokenRevocationStore::new());
-
-    // Build the REST API router
-    let rest_api = Router::new()
-        .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
-        .route("/health", get(icn_agoranet::handlers::health_check_handler))
-        // Threads routes
-        .route(
-            "/threads",
-            get(icn_agoranet::handlers::get_threads_handler)
-                .post(icn_agoranet::handlers::create_thread_handler),
-        )
-        .route(
-            "/threads/:id",
-            get(icn_agoranet::handlers::get_thread_detail_handler),
-        )
-        // Proposals routes
-        .route(
-            "/proposals",
-            get(icn_agoranet::handlers::get_proposals_handler)
-                .post(icn_agoranet::handlers::create_proposal_handler),
-        )
-        .route(
-            "/proposals/:id",
-            get(icn_agoranet::handlers::get_proposal_detail_handler),
-        )
-        // Votes routes
-        .route("/votes", post(icn_agoranet::handlers::cast_vote_handler))
-        .route(
-            "/proposals/:proposal_id/votes",
-            get(icn_agoranet::handlers::get_proposal_votes_handler),
-        )
-        // Organization-scoped receipts routes
-        .route(
-            "/receipts",
-            get(icn_agoranet::handlers::get_receipts_handler),
-        )
-        .route(
-            "/receipts/:cid",
-            get(icn_agoranet::handlers::get_receipt_detail_handler),
-        )
-        .route(
-            "/receipts/stats",
-            get(icn_agoranet::handlers::get_receipt_stats_handler),
-        )
-        // Organization-scoped token routes
-        .route(
-            "/tokens/balances",
-            get(icn_agoranet::handlers::get_token_balances_handler),
-        )
-        .route(
-            "/tokens/transactions",
-            get(icn_agoranet::handlers::get_token_transactions_handler),
-        )
-        .route(
-            "/tokens/stats",
-            get(icn_agoranet::handlers::get_token_stats_handler),
-        )
-        // Ledger routes
-        .route(
-            "/federations/:federation_id/transfers",
-            post(icn_agoranet::handlers::process_transfer_handler)
-                .get(icn_agoranet::handlers::query_transfers),
-        )
-        .route(
-            "/federations/:federation_id/batch-transfers",
-            post(icn_agoranet::handlers::batch_transfer_handler),
-        )
-        .route(
-            "/federations/:federation_id/ledger-stats",
-            get(icn_agoranet::handlers::get_federation_ledger_stats),
-        )
-        .layer(cors.clone())
-        .with_state((db.clone(), ws_state.clone(), jwt_config.clone(), token_revocation_store.clone()));
+    let token_revocation_store = Arc::new(auth::revocation::InMemoryRevocationStore::new()) as Arc<dyn auth::revocation::TokenRevocationStore>;
     
-    // Combine REST API with WebSocket routes
-    let app = rest_api.merge(
-        icn_agoranet::websocket::websocket_routes()
-            .layer(cors)
-            .with_state((db, ws_state, jwt_config, token_revocation_store))
-    );
+    // Create state tuple
+    let app_state = (db, ws_state, jwt_config, token_revocation_store);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8787));
-    tracing::info!("listening on {}", addr);
-    tracing::info!("Swagger UI available at http://{}/docs", addr);
-    tracing::info!("WebSocket API available at ws://{}/ws", addr);
-    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
-        .await
-        .unwrap();
+    // Get server address from env var
+    let address = env::var("LISTEN_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8787".to_string())
+        .parse::<SocketAddr>()
+        .expect("Failed to parse listen address");
+
+    // Start the server
+    tracing::info!("Starting server on {}", address);
+    axum::serve(
+        tokio::net::TcpListener::bind(address).await?,
+        create_app(app_state),
+    )
+    .await?;
 
     Ok(())
 }

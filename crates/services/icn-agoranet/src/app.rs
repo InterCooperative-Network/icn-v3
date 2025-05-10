@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::{
     routing::{get, post},
     Router,
+    response::{Html, IntoResponse},
 };
 use tower::ServiceBuilder;
 use tower_http::{
@@ -66,8 +67,16 @@ use crate::models::{
     TransferRequest,
     TransferResponse,
 };
-use crate::websocket::websocket_routes;
-use crate::auth::{JwtConfig, revocation::InMemoryRevocationStore};
+use crate::websocket::{websocket_routes, WebSocketState};
+use crate::auth::{JwtConfig, revocation::{TokenRevocationStore, InMemoryRevocationStore}};
+
+/// Type alias for the Axum application state
+pub type AppState = (
+    Db,
+    Arc<WebSocketState>,
+    Arc<JwtConfig>,
+    Arc<dyn TokenRevocationStore>,
+);
 
 /// API documentation
 #[derive(OpenApi)]
@@ -96,10 +105,6 @@ use crate::auth::{JwtConfig, revocation::InMemoryRevocationStore};
             crate::models::Transfer,
             crate::models::TransferRequest,
             crate::models::TransferResponse,
-            crate::handlers::BatchTransferResponse,
-            crate::handlers::TransferQuery,
-            crate::handlers::LedgerStats,
-            crate::handlers::TransferError,
         ),
     ),
     tags(
@@ -114,62 +119,60 @@ use crate::auth::{JwtConfig, revocation::InMemoryRevocationStore};
 struct ApiDoc;
 
 /// Create the Axum application with all routes
-pub fn create_app(store: Db) -> Router {
+pub fn create_app(app_state: AppState) -> Router {
     // Define the API documentation for OpenAPI
     let openapi = ApiDoc::openapi();
     
-    // Create a JWT config for auth
-    let jwt_config = Arc::new(JwtConfig::default());
+    // Extract components from the app state
+    let (db, ws_state, jwt_config, token_revocation_store) = app_state.clone();
     
-    // Create the WebSocket state
-    let ws_state = crate::websocket::WebSocketState::new();
+    // Create WebSocket router with its own state
+    let ws_router = websocket_routes()
+        .with_state((db.clone(), ws_state.clone(), jwt_config.clone()));
     
-    // Create a token revocation store
-    let revocation_store = Arc::new(InMemoryRevocationStore::new()) as Arc<dyn crate::auth::revocation::TokenRevocationStore>;
-    
-    // Start the revocation cleanup process
-    start_revocation_cleanup(revocation_store.clone());
-    
-    // Start the WebSocket simulation if the simulation flag is set
-    if std::env::var("ENABLE_WS_SIMULATION").is_ok() {
-        tracing::info!("Starting WebSocket simulation mode");
-        ws_state.clone().start_simulation();
-    }
-    
-    // Create the main application state
-    let app_state = (store, ws_state, jwt_config, revocation_store);
-    
-    // Create the main router with all routes
-    let app = Router::new()
+    // Create main API router with the full state
+    let api_router = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))
+        // Health and general APIs
         .route("/health", get(health_check_handler))
+        .route("/api/v1/health", get(health_check_handler))
+        
+        // Forum/Discussion APIs
         .route("/threads", post(create_thread_handler).get(get_threads_handler))
         .route("/threads/:thread_id", get(get_thread_detail_handler))
         .route("/proposals", post(create_proposal_handler).get(get_proposals_handler))
         .route("/proposals/:proposal_id", get(get_proposal_detail_handler))
         .route("/proposals/:proposal_id/votes", get(get_proposal_votes_handler))
         .route("/votes", post(cast_vote_handler))
-        .route("/api/v1/health", get(health_check_handler))
+        
         // Organization-scoped authorized routes
         .route("/api/v1/receipts", get(get_receipts_authorized))
         .route("/api/v1/tokens/balances", get(get_token_balances_authorized))
         .route("/api/v1/tokens/transactions", get(get_token_transactions_authorized))
         .route("/api/v1/stats/receipts", get(get_receipt_stats_authorized))
         .route("/api/v1/stats/tokens", get(get_token_stats_authorized))
+        
         // Federation coordination routes
         .route("/api/v1/federation/:federation_id/tokens", post(issue_jwt_token_handler))
         .route("/api/v1/federation/:federation_id/tokens/revoke", post(revoke_token_handler))
         .route("/api/v1/federation/:federation_id/tokens/rotate", post(rotate_token_handler))
-        // Add cross-entity transfer endpoints with state
+        
+        // Cross-entity transfer endpoints
         .route("/api/v1/federation/:federation_id/transfers", post(process_entity_transfer))
         .route("/api/v1/federation/:federation_id/transfers/batch", post(process_batch_transfers))
         .route("/api/v1/federation/:federation_id/transfers/query", get(query_transfers))
         .route("/api/v1/federation/:federation_id/ledger/stats", get(get_federation_ledger_stats))
+        
         // Economic operation routes (cooperative scoped)
         .route("/api/v1/coop/:coop_id/transfer", post(process_token_transfer))
+        
         // Governance routes (community scoped)
         .route("/api/v1/community/:community_id/governance", post(process_community_governance_action))
-        .merge(websocket_routes()) // Merge WebSocket routes
+        
+        // Monitoring routes
+        .route("/internal/metrics-ui", get(metrics_dashboard_handler))
+        
+        // Common middleware
         .layer(
             ServiceBuilder::new()
                 .layer(
@@ -182,5 +185,51 @@ pub fn create_app(store: Db) -> Router {
         )
         .with_state(app_state);
     
-    app
+    // Merge the API and WebSocket routers
+    api_router.merge(ws_router)
+}
+
+/// Handler for the metrics dashboard UI
+async fn metrics_dashboard_handler() -> impl IntoResponse {
+    // Provide a basic HTML page that embeds the metrics from the exporter
+    let html = r#"
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ICN Agoranet Metrics Dashboard</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+            h1 { color: #333; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            .metrics-frame { width: 100%; height: 800px; border: 1px solid #ddd; }
+            .refresh { margin-bottom: 10px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>ICN Agoranet Metrics Dashboard</h1>
+            <div class="refresh">
+                <button onclick="document.getElementById('metrics-frame').src = 'http://localhost:9091/metrics'">
+                    Refresh Metrics
+                </button>
+                <span id="last-refresh"></span>
+            </div>
+            <iframe id="metrics-frame" class="metrics-frame" src="http://localhost:9091/metrics"></iframe>
+        </div>
+        <script>
+            // Auto-refresh every 5 seconds
+            setInterval(() => {
+                document.getElementById('metrics-frame').src = 'http://localhost:9091/metrics';
+                document.getElementById('last-refresh').textContent = 
+                    'Last refreshed: ' + new Date().toLocaleTimeString();
+            }, 5000);
+            
+            document.getElementById('last-refresh').textContent = 
+                'Last refreshed: ' + new Date().toLocaleTimeString();
+        </script>
+    </body>
+    </html>
+    "#;
+    
+    Html(html)
 }

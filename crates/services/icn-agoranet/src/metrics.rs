@@ -38,7 +38,7 @@ pub fn setup_metrics_recorder() -> PrometheusHandle {
     let builder = builder
         .set_buckets_for_metric(
             Matcher::Full("icn_agoranet_transfer_latency_seconds".to_string()),
-            vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+            &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
         )
         .unwrap();
     
@@ -126,10 +126,12 @@ pub fn update_resource_gauge(
     // Add additional labels
     all_labels.extend(labels);
     
+    // Create a label map for the gauge
+    let label_map: std::collections::HashMap<&str, &str> = all_labels.into_iter().collect();
+    
     // Record the gauge value with all specified dimensions
     metrics::gauge!(
         format!("{}_{}", METRICS_PREFIX, metric_name),
-        all_labels.into_iter().collect()
-    )
-    .set(value as f64);
+        &label_map
+    ).set(value as f64);
 } 

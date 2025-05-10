@@ -1,0 +1,101 @@
+groups:
+  - name: icn_agoranet_alerts
+    rules:
+    # High Latency Alerts
+    - alert: ICNLedgerHighLatency
+      expr: histogram_quantile(0.95, sum(rate(icn_agoranet_transfer_latency_seconds_bucket[5m])) by (le, operation, federation)) > 0.5
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High ledger operation latency detected"
+        description: "95th percentile latency for {{ $labels.operation }} in federation {{ $labels.federation }} exceeds 500ms"
+        
+    - alert: ICNLedgerCriticalLatency
+      expr: histogram_quantile(0.95, sum(rate(icn_agoranet_transfer_latency_seconds_bucket[5m])) by (le, operation, federation)) > 1.0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Critical ledger operation latency detected"
+        description: "95th percentile latency for {{ $labels.operation }} in federation {{ $labels.federation }} exceeds 1s"
+    
+    # Error Rate Alerts
+    - alert: ICNLedgerErrorRateHigh
+      expr: sum(rate(icn_agoranet_operations_total{status="error"}[5m])) by (operation, federation) / sum(rate(icn_agoranet_operations_total[5m])) by (operation, federation) > 0.05
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High error rate for ledger operations"
+        description: "Error rate for {{ $labels.operation }} in federation {{ $labels.federation }} exceeds 5%"
+    
+    - alert: ICNLedgerErrorRateCritical
+      expr: sum(rate(icn_agoranet_operations_total{status="error"}[5m])) by (operation, federation) / sum(rate(icn_agoranet_operations_total[5m])) by (operation, federation) > 0.15
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Critical error rate for ledger operations"
+        description: "Error rate for {{ $labels.operation }} in federation {{ $labels.federation }} exceeds 15%"
+    
+    # Balance Anomaly Alerts
+    - alert: ICNLedgerBalanceAnomaly
+      expr: deriv(icn_agoranet_federation_volume_total[1h]) > 10000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Unusual transfer volume detected"
+        description: "Unusual transfer volume growth detected for federation {{ $labels.federation }}"
+    
+    # Operation Throughput Alerts
+    - alert: ICNLedgerLowThroughput
+      expr: rate(icn_agoranet_operations_total{status="success"}[5m]) < 0.1
+      for: 30m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Low operation throughput detected"
+        description: "Operation throughput for {{ $labels.operation }} in federation {{ $labels.federation }} is below expected baseline"
+    
+    # Entity Count Anomaly
+    - alert: ICNLedgerEntityCountAnomaly
+      expr: deriv(icn_agoranet_entities_count[1h]) > 100
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Unusual entity creation rate detected"
+        description: "Entity creation rate for type {{ $labels.entity_type }} in federation {{ $labels.federation }} is abnormally high"
+
+  - name: icn_agoranet_system_alerts
+    rules:
+    # System Resource Alerts
+    - alert: ICNHighCPUUsage
+      expr: rate(process_cpu_seconds_total{job="icn-agoranet"}[1m]) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage detected"
+        description: "ICN Agoranet instance is using more than 80% CPU for 5 minutes"
+    
+    - alert: ICNHighMemoryUsage
+      expr: process_resident_memory_bytes{job="icn-agoranet"} / node_memory_MemTotal_bytes > 0.9
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage detected"
+        description: "ICN Agoranet instance is using more than 90% of available memory"
+    
+    # API Availability Alerts
+    - alert: ICNAPIEndpointDown
+      expr: sum(up{job="icn-agoranet"}) by (instance) == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "API endpoint is down"
+        description: "ICN Agoranet API endpoint {{ $labels.instance }} is down" 
