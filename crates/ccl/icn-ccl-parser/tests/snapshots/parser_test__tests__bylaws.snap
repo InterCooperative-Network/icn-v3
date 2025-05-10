@@ -2351,7 +2351,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"proposal.approved\" {\n    if proposal.type == \"bylaw_change\" {\n      mint_token {\n        type \"governance_receipt\"\n        recipients proposal.voters\n        data {\n          proposal_id: proposal.id,\n          approved_at: timestamp()\n        }\n      }\n      \n      anchor_data {\n        path \"governance/bylaws\"\n        data proposal.content\n      }\n    }\n  }",
                                                     start: 1782,
@@ -2359,16 +2359,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 1782,
-                                                            end: 1784,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"proposal.approved\"",
                                                             start: 1785,
@@ -2376,23 +2367,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"proposal.approved\"",
-                                                                    start: 1785,
-                                                                    end: 1804,
+                                                                    str: "proposal.approved",
+                                                                    start: 1786,
+                                                                    end: 1803,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "proposal.approved",
-                                                                            start: 1786,
-                                                                            end: 1803,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -2518,28 +2499,19 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "mint_token {\n        type \"governance_receipt\"\n        recipients proposal.voters\n        data {\n          proposal_id: proposal.id,\n          approved_at: timestamp()\n        }\n      }\n      \n      ",
+                                                                                            str: "mint_token {\n        type \"governance_receipt\"\n        recipients proposal.voters\n        data {\n          proposal_id: proposal.id,\n          approved_at: timestamp()\n        }\n      }",
                                                                                             start: 1854,
-                                                                                            end: 2053,
+                                                                                            end: 2039,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
-                                                                                                rule: any_statement,
+                                                                                                rule: mint_token,
                                                                                                 span: Span {
-                                                                                                    str: "mint_token {\n        type \"governance_receipt\"\n        recipients proposal.voters\n        data {\n          proposal_id: proposal.id,\n          approved_at: timestamp()\n        }\n      }\n      \n      ",
+                                                                                                    str: "mint_token {\n        type \"governance_receipt\"\n        recipients proposal.voters\n        data {\n          proposal_id: proposal.id,\n          approved_at: timestamp()\n        }\n      }",
                                                                                                     start: 1854,
-                                                                                                    end: 2053,
+                                                                                                    end: 2039,
                                                                                                 },
                                                                                                 inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "mint_token",
-                                                                                                            start: 1854,
-                                                                                                            end: 1864,
-                                                                                                        },
-                                                                                                        inner: [],
-                                                                                                    },
                                                                                                     Pair {
                                                                                                         rule: block,
                                                                                                         span: Span {
@@ -2827,28 +2799,19 @@ expression: pairs_debug_string
                                                                                     Pair {
                                                                                         rule: statement,
                                                                                         span: Span {
-                                                                                            str: "anchor_data {\n        path \"governance/bylaws\"\n        data proposal.content\n      }\n    ",
+                                                                                            str: "anchor_data {\n        path \"governance/bylaws\"\n        data proposal.content\n      }",
                                                                                             start: 2053,
-                                                                                            end: 2142,
+                                                                                            end: 2137,
                                                                                         },
                                                                                         inner: [
                                                                                             Pair {
-                                                                                                rule: any_statement,
+                                                                                                rule: anchor_data,
                                                                                                 span: Span {
-                                                                                                    str: "anchor_data {\n        path \"governance/bylaws\"\n        data proposal.content\n      }\n    ",
+                                                                                                    str: "anchor_data {\n        path \"governance/bylaws\"\n        data proposal.content\n      }",
                                                                                                     start: 2053,
-                                                                                                    end: 2142,
+                                                                                                    end: 2137,
                                                                                                 },
                                                                                                 inner: [
-                                                                                                    Pair {
-                                                                                                        rule: identifier,
-                                                                                                        span: Span {
-                                                                                                            str: "anchor_data",
-                                                                                                            start: 2053,
-                                                                                                            end: 2064,
-                                                                                                        },
-                                                                                                        inner: [],
-                                                                                                    },
                                                                                                     Pair {
                                                                                                         rule: block,
                                                                                                         span: Span {
@@ -3000,7 +2963,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"member.added\" {\n    mint_token {\n      type \"membership\"\n      recipient ctx.member_id\n      data {\n        joined_at: timestamp(),\n        initial_role: \"member\"\n      }\n    }\n    \n    perform_metered_action {\n      action \"welcome\"\n      args {\n        member_id: ctx.member_id,\n        welcome_message: \"Welcome to the cooperative!\"\n      }\n    }\n  }",
                                                     start: 2153,
@@ -3008,16 +2971,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 2153,
-                                                            end: 2155,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"member.added\"",
                                                             start: 2156,
@@ -3025,23 +2979,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"member.added\"",
-                                                                    start: 2156,
-                                                                    end: 2170,
+                                                                    str: "member.added",
+                                                                    start: 2157,
+                                                                    end: 2169,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "member.added",
-                                                                            start: 2157,
-                                                                            end: 2169,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -3056,28 +3000,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "mint_token {\n      type \"membership\"\n      recipient ctx.member_id\n      data {\n        joined_at: timestamp(),\n        initial_role: \"member\"\n      }\n    }\n    \n    ",
+                                                                    str: "mint_token {\n      type \"membership\"\n      recipient ctx.member_id\n      data {\n        joined_at: timestamp(),\n        initial_role: \"member\"\n      }\n    }",
                                                                     start: 2177,
-                                                                    end: 2343,
+                                                                    end: 2333,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: mint_token,
                                                                         span: Span {
-                                                                            str: "mint_token {\n      type \"membership\"\n      recipient ctx.member_id\n      data {\n        joined_at: timestamp(),\n        initial_role: \"member\"\n      }\n    }\n    \n    ",
+                                                                            str: "mint_token {\n      type \"membership\"\n      recipient ctx.member_id\n      data {\n        joined_at: timestamp(),\n        initial_role: \"member\"\n      }\n    }",
                                                                             start: 2177,
-                                                                            end: 2343,
+                                                                            end: 2333,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "mint_token",
-                                                                                    start: 2177,
-                                                                                    end: 2187,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -3365,28 +3300,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "perform_metered_action {\n      action \"welcome\"\n      args {\n        member_id: ctx.member_id,\n        welcome_message: \"Welcome to the cooperative!\"\n      }\n    }\n  ",
+                                                                    str: "perform_metered_action {\n      action \"welcome\"\n      args {\n        member_id: ctx.member_id,\n        welcome_message: \"Welcome to the cooperative!\"\n      }\n    }",
                                                                     start: 2343,
-                                                                    end: 2509,
+                                                                    end: 2506,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: perform_metered_action,
                                                                         span: Span {
-                                                                            str: "perform_metered_action {\n      action \"welcome\"\n      args {\n        member_id: ctx.member_id,\n        welcome_message: \"Welcome to the cooperative!\"\n      }\n    }\n  ",
+                                                                            str: "perform_metered_action {\n      action \"welcome\"\n      args {\n        member_id: ctx.member_id,\n        welcome_message: \"Welcome to the cooperative!\"\n      }\n    }",
                                                                             start: 2343,
-                                                                            end: 2509,
+                                                                            end: 2506,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "perform_metered_action",
-                                                                                    start: 2343,
-                                                                                    end: 2365,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {

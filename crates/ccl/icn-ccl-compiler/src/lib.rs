@@ -329,8 +329,15 @@ mod tests {
 
     #[test]
     fn election_template_lowers() {
-        let src = include_str!("../../icn-ccl-parser/templates/election.ccl");
-        let ast = lower_str(src).expect("should lower");
-        insta::assert_snapshot!(serde_json::to_string_pretty(&ast).unwrap());
+        let ccl_source = include_str!("../../icn-ccl-parser/templates/election.ccl");
+        let dsl_modules = lower_str(ccl_source).unwrap();
+        insta::assert_json_snapshot!("election_template_lowers", dsl_modules);
+    }
+
+    #[test]
+    fn budget_template_lowers() {
+        let ccl_source = include_str!("../../icn-ccl-parser/templates/budget.ccl");
+        let dsl_modules = lower_str(ccl_source).unwrap();
+        insta::assert_json_snapshot!("budget_template_lowers", dsl_modules);
     }
 }

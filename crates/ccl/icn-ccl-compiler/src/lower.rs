@@ -1,4 +1,7 @@
-use icn_ccl_dsl::{DslModule, Proposal, Role as DslAstRole, Rule as DslRule, RuleValue as DslValue};
+use icn_ccl_dsl::{
+    ActionHandler, ActionStep, Anchor, DslModule, MeteredAction, Proposal, Role as DslAstRole,
+    Rule as DslRule, RuleValue as DslValue,
+};
 use icn_ccl_parser::{CclParser, Rule};
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
@@ -97,10 +100,12 @@ impl Lowerer {
                     )));
                 }
             }
+            Rule::actions_def => {
+                modules.extend(self.lower_actions(pair)?);
+            }
             // Top-level definitions from election.ccl and other templates - no-op for now
             Rule::process_def |
             Rule::vacancies_def |
-            Rule::actions_def |
             Rule::organization_def |
             Rule::governance_def |
             Rule::membership_def |
@@ -305,5 +310,120 @@ impl Lowerer {
             created_at: 0,
             rules, // Use passed in rules
         }
+    }
+
+    fn lower_actions(&self, pair: Pair<'_, Rule>) -> Result<Vec<DslModule>, LowerError> {
+        let mut handlers = Vec::new();
+        let pair_span = pair.as_span();
+        let block_pair = pair.into_inner().next().ok_or_else(|| {
+            LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "actions_def is missing a block".to_string(),
+                },
+                pair_span, // Use stored span
+            ))
+        })?;
+
+        if block_pair.as_rule() != Rule::block {
+            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!(
+                        "Expected block within actions_def, found {:?}",
+                        block_pair.as_rule()
+                    ),
+                },
+                block_pair.as_span(),
+            )));
+        }
+
+        for statement_pair_outer in block_pair.into_inner() { // Iterates statements in actions block
+            let outer_rule = statement_pair_outer.as_rule();
+            let _outer_span = statement_pair_outer.as_span(); // Used only in commented-out eprintln
+            // eprintln!("[lower_actions] Processing statement_pair_outer: {:?}, rule: {:?}", _outer_span, outer_rule);
+
+            if outer_rule == Rule::statement {
+                if let Some(on_pair) = statement_pair_outer.into_inner().next() { 
+                    let on_pair_rule = on_pair.as_rule();
+                    let _on_pair_span_for_log = on_pair.as_span(); // Used only in commented-out eprintln
+                    if on_pair_rule == Rule::action_def {
+                        let _on_pair_span = on_pair.as_span(); // Renamed from on_pair_span, not used after eprintln removal
+                        let mut inner_action_def_pairs = on_pair.into_inner();
+                        let event_name_pair = inner_action_def_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError { message: "action_def missing event name (string_literal)".to_string() },
+                            _on_pair_span, // Use stored span
+                        )))?;
+                        let event = event_name_pair.as_str().trim_matches('"').to_owned();
+
+                        let steps_block_pair = inner_action_def_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError { message: format!("action_def for event '{}' missing block", event) },
+                            _on_pair_span, // Use stored span
+                        )))?;
+
+                        if steps_block_pair.as_rule() != Rule::block {
+                             return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: format!("Expected block for action_def event '{}', found {:?}", event, steps_block_pair.as_rule()),
+                                },
+                                steps_block_pair.as_span(),
+                            )));
+                        }
+
+                        let mut steps = Vec::new();
+                        for step_statement_pair_outer in steps_block_pair.into_inner() { 
+                            let step_outer_rule = step_statement_pair_outer.as_rule();
+                            let _step_outer_span = step_statement_pair_outer.as_span(); // Used only in commented-out eprintln
+                            // eprintln!("[lower_actions] Processing step_statement_pair_outer: {:?}, rule: {:?}", _step_outer_span, step_outer_rule);
+
+                            if step_outer_rule == Rule::statement {
+                                if let Some(step_pair) = step_statement_pair_outer.into_inner().next() { 
+                                    match step_pair.as_rule() {
+                                        Rule::mint_token => {
+                                            steps.push(ActionStep::Metered(
+                                                self.lower_mint_token(step_pair)?,
+                                            ));
+                                        }
+                                        Rule::anchor_data => {
+                                            steps.push(ActionStep::Anchor(
+                                                self.lower_anchor_data(step_pair)?,
+                                            ));
+                                        }
+                                        Rule::perform_metered_action => {
+                                        }
+                                        _ => {
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        handlers.push(DslModule::ActionHandler(ActionHandler { event, steps }));
+                    } else {
+                        // eprintln!("[lower_actions] Expected Rule::action_def, got: {:?}. Span: {:?}", on_pair_rule, _on_pair_span_for_log);
+                    }
+                } else {
+                     // eprintln!("[lower_actions] statement_pair_outer (rule: {:?}) had no inner on_pair. Span: {:?}", outer_rule, _outer_span);
+                }
+            } else {
+                // eprintln!("[lower_actions] Expected Rule::statement for on_pair container, got: {:?}. Span: {:?}", outer_rule, _outer_span);
+            }
+        }
+        Ok(handlers)
+    }
+
+    fn lower_mint_token(&self, _pair: Pair<'_, Rule>) -> Result<MeteredAction, LowerError> {
+        // _pair is Rule::mint_token = { "mint_token" ~ block }
+        // For MVP, just returning placeholder.
+        Ok(MeteredAction {
+            resource_type: "token".into(), // Placeholder
+            amount: 0,                     // Placeholder, TODO: parse from block
+        })
+    }
+
+    fn lower_anchor_data(&self, _pair: Pair<'_, Rule>) -> Result<Anchor, LowerError> {
+        // _pair is Rule::anchor_data = { "anchor_data" ~ block }
+        // For MVP, just returning placeholder.
+        Ok(Anchor {
+            // The Anchor struct in DSL only has payload_cid
+            payload_cid: "bafy...placeholder".into(), // Placeholder, TODO: parse from block
+        })
     }
 } 

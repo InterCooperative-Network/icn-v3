@@ -40,6 +40,10 @@ statement = {
     governance_def |
     membership_def |
     actions_def |
+    action_def |
+    mint_token |
+    anchor_data |
+    perform_metered_action |
     budget_def |
     allocations_def |
     spending_rules_def |

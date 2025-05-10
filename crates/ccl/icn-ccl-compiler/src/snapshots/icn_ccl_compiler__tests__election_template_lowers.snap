@@ -1,6 +1,6 @@
 ---
 source: crates/ccl/icn-ccl-compiler/src/lib.rs
-expression: "serde_json::to_string_pretty(&ast).unwrap()"
+expression: dsl_modules
 ---
 [
   {
@@ -50,6 +50,55 @@ expression: "serde_json::to_string_pretty(&ast).unwrap()"
         {
           "key": "term_length",
           "value": "180d"
+        }
+      ]
+    }
+  },
+  {
+    "ActionHandler": {
+      "event": "nomination.confirmed",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        },
+        {
+          "Anchor": {
+            "payload_cid": "bafy...placeholder"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "ActionHandler": {
+      "event": "vote.cast",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "ActionHandler": {
+      "event": "election.completed",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        },
+        {
+          "Anchor": {
+            "payload_cid": "bafy...placeholder"
+          }
         }
       ]
     }

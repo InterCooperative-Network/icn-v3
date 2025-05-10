@@ -3327,7 +3327,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"expense.approved\" {\n    mint_token {\n      type \"expense_receipt\"\n      recipient ctx.submitter_id\n      data {\n        expense_id: ctx.expense_id,\n        amount: ctx.amount,\n        category: ctx.category,\n        approved_at: timestamp(),\n        approvers: ctx.approvers\n      }\n    }\n    \n    anchor_data {\n      path \"finance/expenses\"\n      data {\n        id: ctx.expense_id,\n        details: ctx.expense_details,\n        status: \"approved\",\n        approved_at: timestamp()\n      }\n    }\n    \n    perform_metered_action {\n      action \"update_budget_allocation\"\n      args {\n        category: ctx.category,\n        amount: ctx.amount,\n        operation: \"subtract\"\n      }\n    }\n  }",
                                                     start: 2272,
@@ -3335,16 +3335,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 2272,
-                                                            end: 2274,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"expense.approved\"",
                                                             start: 2275,
@@ -3352,23 +3343,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"expense.approved\"",
-                                                                    start: 2275,
-                                                                    end: 2293,
+                                                                    str: "expense.approved",
+                                                                    start: 2276,
+                                                                    end: 2292,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "expense.approved",
-                                                                            start: 2276,
-                                                                            end: 2292,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -3383,28 +3364,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "mint_token {\n      type \"expense_receipt\"\n      recipient ctx.submitter_id\n      data {\n        expense_id: ctx.expense_id,\n        amount: ctx.amount,\n        category: ctx.category,\n        approved_at: timestamp(),\n        approvers: ctx.approvers\n      }\n    }\n    \n    ",
+                                                                    str: "mint_token {\n      type \"expense_receipt\"\n      recipient ctx.submitter_id\n      data {\n        expense_id: ctx.expense_id,\n        amount: ctx.amount,\n        category: ctx.category,\n        approved_at: timestamp(),\n        approvers: ctx.approvers\n      }\n    }",
                                                                     start: 2300,
-                                                                    end: 2574,
+                                                                    end: 2564,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: mint_token,
                                                                         span: Span {
-                                                                            str: "mint_token {\n      type \"expense_receipt\"\n      recipient ctx.submitter_id\n      data {\n        expense_id: ctx.expense_id,\n        amount: ctx.amount,\n        category: ctx.category,\n        approved_at: timestamp(),\n        approvers: ctx.approvers\n      }\n    }\n    \n    ",
+                                                                            str: "mint_token {\n      type \"expense_receipt\"\n      recipient ctx.submitter_id\n      data {\n        expense_id: ctx.expense_id,\n        amount: ctx.amount,\n        category: ctx.category,\n        approved_at: timestamp(),\n        approvers: ctx.approvers\n      }\n    }",
                                                                             start: 2300,
-                                                                            end: 2574,
+                                                                            end: 2564,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "mint_token",
-                                                                                    start: 2300,
-                                                                                    end: 2310,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -3836,28 +3808,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "anchor_data {\n      path \"finance/expenses\"\n      data {\n        id: ctx.expense_id,\n        details: ctx.expense_details,\n        status: \"approved\",\n        approved_at: timestamp()\n      }\n    }\n    \n    ",
+                                                                    str: "anchor_data {\n      path \"finance/expenses\"\n      data {\n        id: ctx.expense_id,\n        details: ctx.expense_details,\n        status: \"approved\",\n        approved_at: timestamp()\n      }\n    }",
                                                                     start: 2574,
-                                                                    end: 2781,
+                                                                    end: 2771,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: anchor_data,
                                                                         span: Span {
-                                                                            str: "anchor_data {\n      path \"finance/expenses\"\n      data {\n        id: ctx.expense_id,\n        details: ctx.expense_details,\n        status: \"approved\",\n        approved_at: timestamp()\n      }\n    }\n    \n    ",
+                                                                            str: "anchor_data {\n      path \"finance/expenses\"\n      data {\n        id: ctx.expense_id,\n        details: ctx.expense_details,\n        status: \"approved\",\n        approved_at: timestamp()\n      }\n    }",
                                                                             start: 2574,
-                                                                            end: 2781,
+                                                                            end: 2771,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "anchor_data",
-                                                                                    start: 2574,
-                                                                                    end: 2585,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -4183,28 +4146,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "perform_metered_action {\n      action \"update_budget_allocation\"\n      args {\n        category: ctx.category,\n        amount: ctx.amount,\n        operation: \"subtract\"\n      }\n    }\n  ",
+                                                                    str: "perform_metered_action {\n      action \"update_budget_allocation\"\n      args {\n        category: ctx.category,\n        amount: ctx.amount,\n        operation: \"subtract\"\n      }\n    }",
                                                                     start: 2781,
-                                                                    end: 2965,
+                                                                    end: 2962,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: perform_metered_action,
                                                                         span: Span {
-                                                                            str: "perform_metered_action {\n      action \"update_budget_allocation\"\n      args {\n        category: ctx.category,\n        amount: ctx.amount,\n        operation: \"subtract\"\n      }\n    }\n  ",
+                                                                            str: "perform_metered_action {\n      action \"update_budget_allocation\"\n      args {\n        category: ctx.category,\n        amount: ctx.amount,\n        operation: \"subtract\"\n      }\n    }",
                                                                             start: 2781,
-                                                                            end: 2965,
+                                                                            end: 2962,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "perform_metered_action",
-                                                                                    start: 2781,
-                                                                                    end: 2803,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -4485,7 +4439,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"budget.proposed\" {\n    mint_token {\n      type \"budget_proposal\"\n      recipient ctx.proposer_id\n      data {\n        proposal_id: ctx.proposal_id,\n        proposed_at: timestamp(),\n        total_amount: ctx.total_amount\n      }\n    }\n  }",
                                                     start: 2972,
@@ -4493,16 +4447,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 2972,
-                                                            end: 2974,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"budget.proposed\"",
                                                             start: 2975,
@@ -4510,23 +4455,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"budget.proposed\"",
-                                                                    start: 2975,
-                                                                    end: 2992,
+                                                                    str: "budget.proposed",
+                                                                    start: 2976,
+                                                                    end: 2991,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "budget.proposed",
-                                                                            start: 2976,
-                                                                            end: 2991,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -4541,28 +4476,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "mint_token {\n      type \"budget_proposal\"\n      recipient ctx.proposer_id\n      data {\n        proposal_id: ctx.proposal_id,\n        proposed_at: timestamp(),\n        total_amount: ctx.total_amount\n      }\n    }\n  ",
+                                                                    str: "mint_token {\n      type \"budget_proposal\"\n      recipient ctx.proposer_id\n      data {\n        proposal_id: ctx.proposal_id,\n        proposed_at: timestamp(),\n        total_amount: ctx.total_amount\n      }\n    }",
                                                                     start: 2999,
-                                                                    end: 3213,
+                                                                    end: 3210,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: mint_token,
                                                                         span: Span {
-                                                                            str: "mint_token {\n      type \"budget_proposal\"\n      recipient ctx.proposer_id\n      data {\n        proposal_id: ctx.proposal_id,\n        proposed_at: timestamp(),\n        total_amount: ctx.total_amount\n      }\n    }\n  ",
+                                                                            str: "mint_token {\n      type \"budget_proposal\"\n      recipient ctx.proposer_id\n      data {\n        proposal_id: ctx.proposal_id,\n        proposed_at: timestamp(),\n        total_amount: ctx.total_amount\n      }\n    }",
                                                                             start: 2999,
-                                                                            end: 3213,
+                                                                            end: 3210,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "mint_token",
-                                                                                    start: 2999,
-                                                                                    end: 3009,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {

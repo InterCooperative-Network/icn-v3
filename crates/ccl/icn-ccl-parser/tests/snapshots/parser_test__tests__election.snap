@@ -2785,7 +2785,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"nomination.confirmed\" {\n    mint_token {\n      type \"nomination_receipt\"\n      recipient ctx.nominee_id\n      data {\n        role: ctx.role,\n        nominated_at: timestamp(),\n        election_id: ctx.election_id\n      }\n    }\n    \n    anchor_data {\n      path \"governance/elections/nominations\"\n      data {\n        nominee: ctx.nominee_id,\n        role: ctx.role,\n        nominators: ctx.nominators,\n        confirmed: true,\n        timestamp: timestamp()\n      }\n    }\n  }",
                                                     start: 2871,
@@ -2793,16 +2793,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 2871,
-                                                            end: 2873,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"nomination.confirmed\"",
                                                             start: 2874,
@@ -2810,23 +2801,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"nomination.confirmed\"",
-                                                                    start: 2874,
-                                                                    end: 2896,
+                                                                    str: "nomination.confirmed",
+                                                                    start: 2875,
+                                                                    end: 2895,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "nomination.confirmed",
-                                                                            start: 2875,
-                                                                            end: 2895,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -2841,28 +2822,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "mint_token {\n      type \"nomination_receipt\"\n      recipient ctx.nominee_id\n      data {\n        role: ctx.role,\n        nominated_at: timestamp(),\n        election_id: ctx.election_id\n      }\n    }\n    \n    ",
+                                                                    str: "mint_token {\n      type \"nomination_receipt\"\n      recipient ctx.nominee_id\n      data {\n        role: ctx.role,\n        nominated_at: timestamp(),\n        election_id: ctx.election_id\n      }\n    }",
                                                                     start: 2903,
-                                                                    end: 3111,
+                                                                    end: 3101,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: mint_token,
                                                                         span: Span {
-                                                                            str: "mint_token {\n      type \"nomination_receipt\"\n      recipient ctx.nominee_id\n      data {\n        role: ctx.role,\n        nominated_at: timestamp(),\n        election_id: ctx.election_id\n      }\n    }\n    \n    ",
+                                                                            str: "mint_token {\n      type \"nomination_receipt\"\n      recipient ctx.nominee_id\n      data {\n        role: ctx.role,\n        nominated_at: timestamp(),\n        election_id: ctx.election_id\n      }\n    }",
                                                                             start: 2903,
-                                                                            end: 3111,
+                                                                            end: 3101,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "mint_token",
-                                                                                    start: 2903,
-                                                                                    end: 2913,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -3198,28 +3170,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "anchor_data {\n      path \"governance/elections/nominations\"\n      data {\n        nominee: ctx.nominee_id,\n        role: ctx.role,\n        nominators: ctx.nominators,\n        confirmed: true,\n        timestamp: timestamp()\n      }\n    }\n  ",
+                                                                    str: "anchor_data {\n      path \"governance/elections/nominations\"\n      data {\n        nominee: ctx.nominee_id,\n        role: ctx.role,\n        nominators: ctx.nominators,\n        confirmed: true,\n        timestamp: timestamp()\n      }\n    }",
                                                                     start: 3111,
-                                                                    end: 3349,
+                                                                    end: 3346,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: anchor_data,
                                                                         span: Span {
-                                                                            str: "anchor_data {\n      path \"governance/elections/nominations\"\n      data {\n        nominee: ctx.nominee_id,\n        role: ctx.role,\n        nominators: ctx.nominators,\n        confirmed: true,\n        timestamp: timestamp()\n      }\n    }\n  ",
+                                                                            str: "anchor_data {\n      path \"governance/elections/nominations\"\n      data {\n        nominee: ctx.nominee_id,\n        role: ctx.role,\n        nominators: ctx.nominators,\n        confirmed: true,\n        timestamp: timestamp()\n      }\n    }",
                                                                             start: 3111,
-                                                                            end: 3349,
+                                                                            end: 3346,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "anchor_data",
-                                                                                    start: 3111,
-                                                                                    end: 3122,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -3605,7 +3568,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"vote.cast\" {\n    mint_token {\n      type \"vote_receipt\"\n      recipient ctx.voter_id\n      data {\n        election_id: ctx.election_id,\n        voted_at: timestamp(),\n        // Note: actual vote choices not recorded in receipt for privacy\n        vote_hash: ctx.vote_hash\n      }\n    }\n    \n    perform_metered_action {\n      action \"record_vote\"\n      args {\n        election_id: ctx.election_id,\n        voter_id: ctx.voter_id,\n        vote_data: ctx.encrypted_vote,\n        timestamp: timestamp()\n      }\n    }\n  }",
                                                     start: 3356,
@@ -3613,16 +3576,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 3356,
-                                                            end: 3358,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"vote.cast\"",
                                                             start: 3359,
@@ -3630,23 +3584,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"vote.cast\"",
-                                                                    start: 3359,
-                                                                    end: 3370,
+                                                                    str: "vote.cast",
+                                                                    start: 3360,
+                                                                    end: 3369,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "vote.cast",
-                                                                            start: 3360,
-                                                                            end: 3369,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -3661,28 +3605,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "mint_token {\n      type \"vote_receipt\"\n      recipient ctx.voter_id\n      data {\n        election_id: ctx.election_id,\n        voted_at: timestamp(),\n        // Note: actual vote choices not recorded in receipt for privacy\n        vote_hash: ctx.vote_hash\n      }\n    }\n    \n    ",
+                                                                    str: "mint_token {\n      type \"vote_receipt\"\n      recipient ctx.voter_id\n      data {\n        election_id: ctx.election_id,\n        voted_at: timestamp(),\n        // Note: actual vote choices not recorded in receipt for privacy\n        vote_hash: ctx.vote_hash\n      }\n    }",
                                                                     start: 3377,
-                                                                    end: 3656,
+                                                                    end: 3646,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: mint_token,
                                                                         span: Span {
-                                                                            str: "mint_token {\n      type \"vote_receipt\"\n      recipient ctx.voter_id\n      data {\n        election_id: ctx.election_id,\n        voted_at: timestamp(),\n        // Note: actual vote choices not recorded in receipt for privacy\n        vote_hash: ctx.vote_hash\n      }\n    }\n    \n    ",
+                                                                            str: "mint_token {\n      type \"vote_receipt\"\n      recipient ctx.voter_id\n      data {\n        election_id: ctx.election_id,\n        voted_at: timestamp(),\n        // Note: actual vote choices not recorded in receipt for privacy\n        vote_hash: ctx.vote_hash\n      }\n    }",
                                                                             start: 3377,
-                                                                            end: 3656,
+                                                                            end: 3646,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "mint_token",
-                                                                                    start: 3377,
-                                                                                    end: 3387,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -4018,28 +3953,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "perform_metered_action {\n      action \"record_vote\"\n      args {\n        election_id: ctx.election_id,\n        voter_id: ctx.voter_id,\n        vote_data: ctx.encrypted_vote,\n        timestamp: timestamp()\n      }\n    }\n  ",
+                                                                    str: "perform_metered_action {\n      action \"record_vote\"\n      args {\n        election_id: ctx.election_id,\n        voter_id: ctx.voter_id,\n        vote_data: ctx.encrypted_vote,\n        timestamp: timestamp()\n      }\n    }",
                                                                     start: 3656,
-                                                                    end: 3877,
+                                                                    end: 3874,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: perform_metered_action,
                                                                         span: Span {
-                                                                            str: "perform_metered_action {\n      action \"record_vote\"\n      args {\n        election_id: ctx.election_id,\n        voter_id: ctx.voter_id,\n        vote_data: ctx.encrypted_vote,\n        timestamp: timestamp()\n      }\n    }\n  ",
+                                                                            str: "perform_metered_action {\n      action \"record_vote\"\n      args {\n        election_id: ctx.election_id,\n        voter_id: ctx.voter_id,\n        vote_data: ctx.encrypted_vote,\n        timestamp: timestamp()\n      }\n    }",
                                                                             start: 3656,
-                                                                            end: 3877,
+                                                                            end: 3874,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "perform_metered_action",
-                                                                                    start: 3656,
-                                                                                    end: 3678,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -4377,7 +4303,7 @@ expression: pairs_debug_string
                                         },
                                         inner: [
                                             Pair {
-                                                rule: any_statement,
+                                                rule: action_def,
                                                 span: Span {
                                                     str: "on \"election.completed\" {\n    mint_token {\n      type \"role_credential\"\n      recipients ctx.elected_members\n      data {\n        role: ctx.role,\n        term_start: ctx.term_start,\n        term_end: ctx.term_end,\n        election_id: ctx.election_id\n      }\n    }\n    \n    anchor_data {\n      path \"governance/elections/results\"\n      data {\n        election_id: ctx.election_id,\n        role: ctx.role,\n        elected_members: ctx.elected_members,\n        vote_count: ctx.vote_count,\n        quorum_reached: ctx.quorum_reached,\n        timestamp: timestamp()\n      }\n    }\n  }",
                                                     start: 3884,
@@ -4385,16 +4311,7 @@ expression: pairs_debug_string
                                                 },
                                                 inner: [
                                                     Pair {
-                                                        rule: identifier,
-                                                        span: Span {
-                                                            str: "on",
-                                                            start: 3884,
-                                                            end: 3886,
-                                                        },
-                                                        inner: [],
-                                                    },
-                                                    Pair {
-                                                        rule: value,
+                                                        rule: string_literal,
                                                         span: Span {
                                                             str: "\"election.completed\"",
                                                             start: 3887,
@@ -4402,23 +4319,13 @@ expression: pairs_debug_string
                                                         },
                                                         inner: [
                                                             Pair {
-                                                                rule: string_literal,
+                                                                rule: inner_string,
                                                                 span: Span {
-                                                                    str: "\"election.completed\"",
-                                                                    start: 3887,
-                                                                    end: 3907,
+                                                                    str: "election.completed",
+                                                                    start: 3888,
+                                                                    end: 3906,
                                                                 },
-                                                                inner: [
-                                                                    Pair {
-                                                                        rule: inner_string,
-                                                                        span: Span {
-                                                                            str: "election.completed",
-                                                                            start: 3888,
-                                                                            end: 3906,
-                                                                        },
-                                                                        inner: [],
-                                                                    },
-                                                                ],
+                                                                inner: [],
                                                             },
                                                         ],
                                                     },
@@ -4433,28 +4340,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "mint_token {\n      type \"role_credential\"\n      recipients ctx.elected_members\n      data {\n        role: ctx.role,\n        term_start: ctx.term_start,\n        term_end: ctx.term_end,\n        election_id: ctx.election_id\n      }\n    }\n    \n    ",
+                                                                    str: "mint_token {\n      type \"role_credential\"\n      recipients ctx.elected_members\n      data {\n        role: ctx.role,\n        term_start: ctx.term_start,\n        term_end: ctx.term_end,\n        election_id: ctx.election_id\n      }\n    }",
                                                                     start: 3914,
-                                                                    end: 4158,
+                                                                    end: 4148,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: mint_token,
                                                                         span: Span {
-                                                                            str: "mint_token {\n      type \"role_credential\"\n      recipients ctx.elected_members\n      data {\n        role: ctx.role,\n        term_start: ctx.term_start,\n        term_end: ctx.term_end,\n        election_id: ctx.election_id\n      }\n    }\n    \n    ",
+                                                                            str: "mint_token {\n      type \"role_credential\"\n      recipients ctx.elected_members\n      data {\n        role: ctx.role,\n        term_start: ctx.term_start,\n        term_end: ctx.term_end,\n        election_id: ctx.election_id\n      }\n    }",
                                                                             start: 3914,
-                                                                            end: 4158,
+                                                                            end: 4148,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "mint_token",
-                                                                                    start: 3914,
-                                                                                    end: 3924,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {
@@ -4829,28 +4727,19 @@ expression: pairs_debug_string
                                                             Pair {
                                                                 rule: statement,
                                                                 span: Span {
-                                                                    str: "anchor_data {\n      path \"governance/elections/results\"\n      data {\n        election_id: ctx.election_id,\n        role: ctx.role,\n        elected_members: ctx.elected_members,\n        vote_count: ctx.vote_count,\n        quorum_reached: ctx.quorum_reached,\n        timestamp: timestamp()\n      }\n    }\n  ",
+                                                                    str: "anchor_data {\n      path \"governance/elections/results\"\n      data {\n        election_id: ctx.election_id,\n        role: ctx.role,\n        elected_members: ctx.elected_members,\n        vote_count: ctx.vote_count,\n        quorum_reached: ctx.quorum_reached,\n        timestamp: timestamp()\n      }\n    }",
                                                                     start: 4158,
-                                                                    end: 4462,
+                                                                    end: 4459,
                                                                 },
                                                                 inner: [
                                                                     Pair {
-                                                                        rule: any_statement,
+                                                                        rule: anchor_data,
                                                                         span: Span {
-                                                                            str: "anchor_data {\n      path \"governance/elections/results\"\n      data {\n        election_id: ctx.election_id,\n        role: ctx.role,\n        elected_members: ctx.elected_members,\n        vote_count: ctx.vote_count,\n        quorum_reached: ctx.quorum_reached,\n        timestamp: timestamp()\n      }\n    }\n  ",
+                                                                            str: "anchor_data {\n      path \"governance/elections/results\"\n      data {\n        election_id: ctx.election_id,\n        role: ctx.role,\n        elected_members: ctx.elected_members,\n        vote_count: ctx.vote_count,\n        quorum_reached: ctx.quorum_reached,\n        timestamp: timestamp()\n      }\n    }",
                                                                             start: 4158,
-                                                                            end: 4462,
+                                                                            end: 4459,
                                                                         },
                                                                         inner: [
-                                                                            Pair {
-                                                                                rule: identifier,
-                                                                                span: Span {
-                                                                                    str: "anchor_data",
-                                                                                    start: 4158,
-                                                                                    end: 4169,
-                                                                                },
-                                                                                inner: [],
-                                                                            },
                                                                             Pair {
                                                                                 rule: block,
                                                                                 span: Span {

@@ -1,0 +1,37 @@
+---
+source: crates/ccl/icn-ccl-compiler/src/lib.rs
+expression: dsl_modules
+---
+[
+  {
+    "ActionHandler": {
+      "event": "expense.approved",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        },
+        {
+          "Anchor": {
+            "payload_cid": "bafy...placeholder"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "ActionHandler": {
+      "event": "budget.proposed",
+      "steps": [
+        {
+          "Metered": {
+            "resource_type": "token",
+            "amount": 0
+          }
+        }
+      ]
+    }
+  }
+]

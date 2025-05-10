@@ -124,22 +124,19 @@ pub enum RuleValue {
 /// Represents a handler for a specific event, containing a sequence of actions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionHandler {
+    /// The name of the event that triggers this handler.
     pub event: String,
+    /// A list of steps to execute when the event occurs.
     pub steps: Vec<ActionStep>,
 }
 
 /// Represents a single step within an ActionHandler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionStep {
+    /// A metered action, typically involving resource tokens or other quantifiable operations.
     Metered(MeteredAction),
+    /// An action that anchors data, usually by storing a CID on a DAG.
     Anchor(Anchor),
-}
-
-/// Represents a reference to an on-chain data anchor.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnchorReference {
-    /// CID of the payload to anchor.
-    pub payload_cid: String,
 }
 
 #[cfg(test)]
