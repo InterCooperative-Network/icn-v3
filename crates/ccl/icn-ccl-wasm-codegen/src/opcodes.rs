@@ -37,6 +37,17 @@ pub enum Opcode {
         sender: Option<String>,
         recipient: String,
     },
+    SubmitJob {
+        wasm_cid: String,
+        description: Option<String>,
+        input_data_cid: Option<String>,
+        entry_function: Option<String>,
+        required_resources_json: Option<String>,
+        qos_profile_json: Option<String>,
+        max_acceptable_bid_tokens: Option<u64>,
+        deadline_utc_ms: Option<u64>,
+        metadata_json: Option<String>,
+    },
     CallHost {
         fn_name: String,
         args: Vec<String>,

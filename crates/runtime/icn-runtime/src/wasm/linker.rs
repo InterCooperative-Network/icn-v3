@@ -2,8 +2,11 @@ use anyhow::Result;
 use host_abi::*;
 use icn_economics::ResourceType;
 use icn_mesh_receipts::ExecutionReceipt;
-use wasmtime::{Caller, Linker};
+use icn_types::mesh::{MeshJob, MeshJobParams};
+use wasmtime::{Caller, Linker, Memory, ValType, Trap, Val, Extern};
 use std::cell::RefCell;
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 /// Store data for the WASM engine, contains the host environment
 pub struct StoreData {
@@ -33,7 +36,7 @@ impl StoreData {
 }
 
 /// Register all host functions for the economics module
-pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
+pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), anyhow::Error> {
     // Register the resource authorization check function
     linker.func_wrap(
         "icn_host", 
@@ -174,6 +177,84 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<()> {
                         AnchorError::MissingFederationId => -15,     // Missing federation ID
                     }
                 }
+            }
+        },
+    )?;
+    
+    // Register the submit mesh job function
+    linker.func_wrap(
+        "icn_host",
+        "host_submit_mesh_job",
+        |mut caller: Caller<'_, StoreData>, 
+            job_params_cbor_ptr: i32, 
+            job_params_cbor_len: i32,
+            job_id_buffer_ptr: i32,
+            job_id_buffer_len: i32
+        | -> Result<i32, Trap> {
+                
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(mem) => mem,
+                None => return Ok(-3), // Error: Memory not found
+            };
+
+            let job_params: MeshJobParams = {
+                let data = memory.data(&caller);
+                let start = job_params_cbor_ptr as usize;
+                let end = start + job_params_cbor_len as usize;
+                if end > data.len() {
+                    return Ok(-21); // Error: Payload out of bounds
+                }
+                let payload_bytes = &data[start..end];
+                match serde_cbor::from_slice(payload_bytes) {
+                    Ok(params) => params,
+                    Err(_) => return Ok(-22), // Error: Payload deserialization failed
+                }
+            };
+
+            let originator_did = caller.data().host().caller_did.clone();
+
+            let job_id_str = format!("job_{}", Uuid::new_v4());
+
+            let submission_timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| Trap::new("System time error"))?
+                .as_secs();
+
+            let mesh_job = MeshJob {
+                job_id: job_id_str.clone(),
+                params: job_params,
+                originator_did,
+                submission_timestamp,
+            };
+            
+            caller.data().host_mut().ctx.pending_mesh_jobs.lock().unwrap().push_back(mesh_job);
+            
+            // Write JobId string to guest-provided buffer
+            let job_id_bytes = job_id_str.as_bytes();
+            let job_id_actual_len = job_id_bytes.len();
+
+            if job_id_buffer_len == 0 {
+                return Ok(-31); // Error: Output buffer length is zero
+            }
+            // As per ABI: Return 0 if job_id_buffer_len is too small. Let's define minimal as at least 1 char.
+            // A more robust check might be if it can fit "job_" + even a short UUID part.
+            // For now, if buffer_len is less than actual_len, we might truncate or return error.
+            // Let's try to write what fits. If nothing fits (e.g. buffer_len < minimal_id_len), return 0.
+            // A typical JobId like "job_uuid" is long. Let's say min 10 chars for a very basic ID.
+            const MIN_JOB_ID_WRITE_LEN: usize = 1; 
+            if job_id_buffer_len < MIN_JOB_ID_WRITE_LEN as i32 {
+                 return Ok(0); // Buffer too small to write anything meaningful
+            }
+
+            let len_to_write = std::cmp::min(job_id_actual_len, job_id_buffer_len as usize);
+
+            if len_to_write == 0 { // Should be caught by MIN_JOB_ID_WRITE_LEN check if that's > 0
+                return Ok(0); // Cannot write anything
+            }
+
+            match memory.write(&mut caller, job_id_buffer_ptr as usize, &job_id_bytes[..len_to_write]) {
+                Ok(_) => Ok(len_to_write as i32), // Success: return actual bytes written
+                Err(_) => Ok(-32), // Error: Failed to write JobId to WASM memory buffer
             }
         },
     )?;

@@ -1,4 +1,10 @@
 use crate::opcodes::{Opcode, Program};
+use icn_types::mesh::{MeshJobParams, QoSProfile};
+use icn_economics::ResourceType;
+use serde_json;
+use serde_cbor;
+use std::collections::HashMap;
+
 use wasm_encoder::{
     CodeSection, EntityType, Function, FunctionSection, ImportSection, Instruction, Module,
     TypeSection, ValType,
@@ -28,6 +34,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
             Opcode::RangeCheck { .. } => 13, // New type index for (F64, F64) -> ()
             Opcode::UseResource { .. } => 14, // New for resource usage tracking
             Opcode::TransferToken { .. } => 15, // New for token transfers
+            Opcode::SubmitJob { .. } => 16,  // New for job submission
         };
         functions_section.function(type_index); // Map this function body to its type index
 
@@ -126,6 +133,75 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 encode_push_string(&mut f, recipient);
                 f.instruction(&Instruction::Call(15)); // host fn 15: transfer_token
             }
+            Opcode::SubmitJob { 
+                wasm_cid, 
+                description, 
+                input_data_cid, 
+                entry_function: _, // Not directly used in MeshJobParams, info for executor
+                required_resources_json, 
+                qos_profile_json, 
+                max_acceptable_bid_tokens: _, // Not directly used in MeshJobParams, for bidding phase
+                deadline_utc_ms, 
+                metadata_json: _, // Not directly used in MeshJobParams currently
+            } => {
+                // 1. Construct MeshJobParams
+                let mut resources_required_vec: Vec<(ResourceType, u64)> = Vec::new();
+                if let Some(json_str) = required_resources_json {
+                    if let Ok(parsed_resources) = serde_json::from_str::<HashMap<String, u64>>(json_str) {
+                        for (key, value) in parsed_resources {
+                            let res_type = match key.to_lowercase().as_str() {
+                                "cpu" => ResourceType::Cpu,
+                                "memory" => ResourceType::Memory,
+                                "io" => ResourceType::Io,
+                                "token" => ResourceType::Token,
+                                _ => continue, // Or handle as error
+                            };
+                            resources_required_vec.push((res_type, value));
+                        }
+                    }
+                    // TODO: Handle parsing error robustly (e.g., emit trap or error code)
+                }
+
+                let qos_profile_val = qos_profile_json.as_ref()
+                    .and_then(|json_str| serde_json::from_str::<QoSProfile>(json_str).ok())
+                    .unwrap_or(QoSProfile::BestEffort); // Default QoS
+
+                let params = MeshJobParams {
+                    wasm_cid: wasm_cid.clone(),
+                    description: description.clone().unwrap_or_default(),
+                    resources_required: resources_required_vec,
+                    qos_profile: qos_profile_val,
+                    deadline: deadline_utc_ms.clone(),
+                    input_data_cid: input_data_cid.clone(),
+                };
+
+                // 2. Serialize MeshJobParams to CBOR
+                // This CBOR data needs to be placed in WASM memory.
+                // For now, this step is conceptual. Actual WASM instructions depend on memory strategy.
+                let params_cbor = serde_cbor::to_vec(&params).unwrap_or_default();
+                // TODO: Error handling for serialization
+
+                // 3. Emit WASM instructions (Conceptual - assumes pointers are available)
+                //    Actual implementation requires defining data segments or using globals for pointers.
+                
+                // TODO: Get pointer and length for params_cbor (e.g., from a data segment)
+                let params_cbor_ptr_val = 0; // Placeholder
+                let params_cbor_len_val = params_cbor.len() as i32; // Placeholder
+
+                // TODO: Get pointer and length for JobId output buffer (e.g., from a data segment or global)
+                let job_id_buffer_ptr_val = 0; // Placeholder, e.g., address of a global buffer
+                const JOB_ID_BUFFER_LEN: i32 = 128; // Placeholder
+                
+                f.instruction(&Instruction::I32Const(params_cbor_ptr_val));
+                f.instruction(&Instruction::I32Const(params_cbor_len_val));
+                f.instruction(&Instruction::I32Const(job_id_buffer_ptr_val));
+                f.instruction(&Instruction::I32Const(JOB_ID_BUFFER_LEN));
+                f.instruction(&Instruction::Call(16)); // host_submit_mesh_job
+                
+                // TODO: Handle the i32 result from host_submit_mesh_job (bytes written or error)
+                // For example, store it in a local, check if negative (error), etc.
+                f.instruction(&Instruction::Drop); // Drop the result for now
+            }
         }
         f.instruction(&Instruction::End);
         code.function(&f);
@@ -152,6 +228,8 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     type_section.function(vec![ValType::F64, ValType::F64], vec![]); // 13: range_check(start: f64, end: f64)
     type_section.function(vec![ValType::I32, ValType::I64], vec![]); // 14: use_resource(resource_type: ptr, amount: i64)
     type_section.function(vec![ValType::I32, ValType::I64, ValType::I32, ValType::I32], vec![]); // 15: transfer_token(token_type: ptr, amount: i64, sender: ptr, recipient: ptr)
+    // Type 16: host_submit_mesh_job(params_ptr: i32, params_len: i32, job_id_buf_ptr: i32, job_id_buf_len: i32) -> written_len: i32
+    type_section.function(vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32], vec![ValType::I32]); 
 
     // Imports: Define all imported host functions
     let mut import_section = ImportSection::new();
@@ -172,9 +250,10 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
         ("range_check", 13u32),     // New for actual range check
         ("use_resource", 14u32),    // New for resource usage tracking
         ("transfer_token", 15u32),  // New for token transfers
+        ("host_submit_mesh_job", 16u32), // Added for mesh job submission
     ];
     for (name, type_idx) in host_fns.iter() {
-        import_section.import("icn", name, EntityType::Function(*type_idx));
+        import_section.import("icn_host", name, EntityType::Function(*type_idx)); // Changed module to "icn_host"
     }
 
     module.section(&type_section);

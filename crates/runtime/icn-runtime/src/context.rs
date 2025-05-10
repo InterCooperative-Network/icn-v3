@@ -4,6 +4,9 @@ use icn_identity::TrustValidator;
 use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType, LedgerKey};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
+use icn_types::mesh::MeshJob;
+use std::collections::VecDeque;
+use std::sync::Mutex;
 
 /// Runtime context for execution environments
 ///
@@ -33,6 +36,9 @@ pub struct RuntimeContext {
 
     /// Resource usage ledger - maps (DID, ResourceType) to amount
     pub resource_ledger: Arc<RwLock<HashMap<LedgerKey, u64>>>,
+
+    /// Queue for mesh jobs submitted via host_submit_mesh_job awaiting P2P dispatch
+    pub pending_mesh_jobs: Arc<Mutex<VecDeque<MeshJob>>>,
 }
 
 impl RuntimeContext {
@@ -46,6 +52,7 @@ impl RuntimeContext {
             trust_validator: None,
             economics: Arc::new(Economics::new(ResourceAuthorizationPolicy::default())),
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
+            pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -59,6 +66,7 @@ impl RuntimeContext {
             trust_validator: None,
             economics: Arc::new(Economics::new(ResourceAuthorizationPolicy::default())),
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
+            pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -176,6 +184,7 @@ impl RuntimeContextBuilder {
             Arc::new(Economics::new(ResourceAuthorizationPolicy::default()))
         });
         let resource_ledger = Arc::new(RwLock::new(HashMap::new()));
+        let pending_mesh_jobs = Arc::new(Mutex::new(VecDeque::new()));
 
         RuntimeContext {
             dag_store,
@@ -185,6 +194,7 @@ impl RuntimeContextBuilder {
             trust_validator: self.trust_validator,
             economics,
             resource_ledger,
+            pending_mesh_jobs,
         }
     }
 } 

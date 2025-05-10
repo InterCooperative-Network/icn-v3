@@ -10,6 +10,7 @@ use cid::multihash::MultihashDigest;
 use icn_economics::ResourceType;
 use icn_identity::Did;
 use icn_types::org::{CooperativeId, CommunityId};
+use icn_types::mesh::JobStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -30,14 +31,29 @@ pub enum ReceiptError {
 /// A verifiable receipt of WASM execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionReceipt {
-    pub task_cid: String,
+    /// Identifier of the job this receipt is for.
+    pub job_id: String,
+    /// DID of the executor node that produced this receipt.
     pub executor: Did,
+    /// Status of the job execution.
+    pub status: JobStatus,
+    /// Optional CID pointing to the primary result data of the job.
+    pub result_data_cid: Option<String>,
+    /// Optional CID pointing to a collection of execution logs.
+    pub logs_cid: Option<String>,
+    /// Reported resource usage for the job.
     pub resource_usage: HashMap<ResourceType, u64>,
-    pub timestamp: DateTime<Utc>,
+    /// Unix timestamp (seconds since epoch) when the job execution started.
+    pub execution_start_time: u64,
+    /// Unix timestamp (seconds since epoch) when the job execution ended.
+    pub execution_end_time: u64,
+    /// DateTime<Utc> when the job execution ended (kept for convenience, renamed from timestamp).
+    pub execution_end_time_dt: DateTime<Utc>,
+    /// Cryptographic signature of the receipt content by the executor.
     pub signature: Vec<u8>,
-    /// Optional cooperative ID that this receipt is associated with
+    /// Optional cooperative ID that this receipt is associated with.
     pub coop_id: Option<CooperativeId>,
-    /// Optional community ID that this receipt is associated with
+    /// Optional community ID that this receipt is associated with.
     pub community_id: Option<CommunityId>,
 }
 
@@ -76,10 +92,15 @@ mod tests {
         let kp = KeyPair::generate();
         
         let receipt = ExecutionReceipt {
-            task_cid: "test-cid".to_string(),
+            job_id: "test-cid".to_string(),
             executor: kp.did.clone(),
+            status: JobStatus::Completed,
+            result_data_cid: None,
+            logs_cid: None,
             resource_usage: usage,
-            timestamp: Utc::now(),
+            execution_start_time: 1672502400,
+            execution_end_time: 1672506000,
+            execution_end_time_dt: DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z").unwrap().with_timezone(&Utc),
             signature: vec![1, 2, 3, 4],
             coop_id: None,
             community_id: None,
@@ -100,10 +121,15 @@ mod tests {
         let kp = KeyPair::generate();
         
         let receipt = ExecutionReceipt {
-            task_cid: "test-cid".to_string(),
+            job_id: "test-cid".to_string(),
             executor: kp.did.clone(),
+            status: JobStatus::Completed,
+            result_data_cid: None,
+            logs_cid: None,
             resource_usage: usage,
-            timestamp: Utc::now(),
+            execution_start_time: 1672502400,
+            execution_end_time: 1672506000,
+            execution_end_time_dt: DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z").unwrap().with_timezone(&Utc),
             signature: vec![1, 2, 3, 4],
             coop_id: None,
             community_id: None,
@@ -126,10 +152,15 @@ mod tests {
         // Create a receipt with fixed timestamp for deterministic testing
         let timestamp = DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z").unwrap().with_timezone(&Utc);
         let receipt = ExecutionReceipt {
-            task_cid: "bafybeideputvakentvavfc".to_string(),
+            job_id: "bafybeideputvakentvavfc".to_string(),
             executor: kp.did.clone(),
+            status: JobStatus::Completed,
+            result_data_cid: None,
+            logs_cid: None,
             resource_usage: usage,
-            timestamp,
+            execution_start_time: 1672502400,
+            execution_end_time: 1672506000,
+            execution_end_time_dt: timestamp,
             signature: vec![9, 8, 7, 6],
             coop_id: None,
             community_id: None,
@@ -149,7 +180,7 @@ mod tests {
         
         // Change a value - should get different CID
         let mut receipt3 = receipt.clone();
-        receipt3.task_cid = "different-cid".to_string();
+        receipt3.job_id = "different-cid".to_string();
         let cid3 = receipt3.cid().unwrap();
         assert_ne!(cid, cid3, "Different receipts should have different CIDs");
     }

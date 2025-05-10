@@ -6,6 +6,11 @@ use icn_economics::ScopedResourceToken;
 // use icn_identity_core::did::Did;
 type Did = String; // DIDs are strings in the format did:key:...
                    // use icn_identity_core::vc::ExecutionReceiptCredential;
+
+// Import standardized ExecutionReceipt and JobStatus
+use icn_mesh_receipts::{ExecutionReceipt, ReceiptError}; 
+use icn_types::mesh::JobStatus as StandardJobStatus; // Alias to avoid conflict with local JobStatus
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -251,6 +256,18 @@ pub struct JobExecutionReceipt {
 
     /// Verification timestamp
     pub verified_at: Option<DateTime<Utc>>,
+    
+    /// Result status code (0 = success, non-zero = error)
+    pub result_status: i32,
+    
+    /// Result hash (hash of output data)
+    pub result_hash: Option<String>,
+    
+    /// Result metadata (JSON string with additional info)
+    pub result_metadata: Option<String>,
+    
+    /// Execution logs
+    pub execution_logs: Vec<String>,
 }
 
 /// Interface for a mesh node
@@ -287,7 +304,7 @@ pub trait MeshNode {
     async fn cancel_job(&self, job_id: &str) -> Result<()>;
 
     /// Get a job receipt
-    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<JobExecutionReceipt>>;
+    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<ExecutionReceipt>>;
 }
 
 /// Mesh node implementation
@@ -307,8 +324,8 @@ pub struct PlanetaryMeshNode {
     /// Local bid store
     bids: Arc<Mutex<HashMap<String, Vec<Bid>>>>,
 
-    /// Local receipt store
-    receipts: Arc<Mutex<HashMap<String, JobExecutionReceipt>>>,
+    /// Local receipt store - updated to use standardized ExecutionReceipt
+    receipts: Arc<Mutex<HashMap<String, ExecutionReceipt>>>,
 
     /// VM for executing WASM jobs
     vm: CoVm,
@@ -339,10 +356,10 @@ pub enum NetworkEvent {
     NewBid(Bid),
 
     /// Job status update
-    JobStatusUpdate { job_id: String, status: JobStatus },
+    JobStatusUpdate { job_id: String, status: JobStatus }, // This is the local, detailed JobStatus
 
-    /// New receipt available
-    NewReceipt(JobExecutionReceipt),
+    /// New receipt available - updated to use standardized ExecutionReceipt
+    NewReceipt(ExecutionReceipt),
 }
 
 impl PlanetaryMeshNode {
@@ -397,38 +414,68 @@ impl PlanetaryMeshNode {
     }
 
     /// Create a job execution receipt
-    pub async fn create_job_receipt(
+    pub async fn create_execution_receipt(
         &self,
         job_id: &str,
-        metrics: ExecutionMetrics,
-        resource_usage: Vec<(String, u64)>,
-        output_cid: Option<String>,
-    ) -> Result<JobExecutionReceipt> {
-        // Get the job
-        let jobs = self.jobs.lock().unwrap();
-        if !jobs.contains_key(job_id) {
-            return Err(MeshError::JobNotFound(job_id.to_string()).into());
-        }
+        job_status: StandardJobStatus, // Use standardized JobStatus for receipt
+        metrics: &ExecutionMetrics, // Pass by reference
+        resource_usage_vec: Vec<(String, u64)>, // Changed from direct HashMap to allow conversion
+        result_data_cid: Option<String>,
+        logs_cid: Option<String>, // Added for logs
+        execution_start_time_unix: u64, // Added start time
+        // signature will be generated internally if not provided, or taken as param if pre-signed
+    ) -> Result<ExecutionReceipt> {
+        let now_dt = Utc::now();
+        let execution_end_time_unix = now_dt.timestamp() as u64;
 
-        // Create a receipt
-        let receipt = JobExecutionReceipt {
+        // Convert resource_usage Vec<(String, u64)> to HashMap<ResourceType, u64>
+        // This requires ResourceType to be parsable from String or for the input to change.
+        // For now, assuming a helper or direct construction if ResourceType is simple.
+        // This part might need further refinement based on how ResourceType is handled.
+        let mut resource_usage_map = HashMap::new();
+        for (rt_str, amount) in resource_usage_vec {
+            // Placeholder: This conversion needs to be robust.
+            // Assuming icn_economics::ResourceType can be created from rt_str
+            // For example, if ResourceType implements FromStr or similar.
+            // If not, this mapping logic needs to be defined.
+            // For simplicity, let's assume a direct mapping for Cpu, Memory, Io for now.
+            use icn_economics::ResourceType;
+            let key = match rt_str.to_lowercase().as_str() {
+                "cpu" | "compute" => ResourceType::Cpu,
+                "memory" | "mem" => ResourceType::Memory,
+                "io" => ResourceType::Io,
+                _ => continue, // Skip unknown resource types for now or handle error
+            };
+            resource_usage_map.insert(key, amount);
+        }
+        
+        // Placeholder for actual signature generation
+        let signature_bytes = Vec::new(); // In a real scenario, sign the relevant fields
+
+        let receipt = ExecutionReceipt {
             job_id: job_id.to_string(),
-            executor_node_id: self.node_id.clone(),
-            executor_node_did: self.node_did.to_string(),
-            metrics,
-            output_data_cid: output_cid,
-            start_time: Utc::now() - chrono::Duration::seconds(5), // Just for demo
-            end_time: Utc::now(),
-            resource_usage,
-            receipt_cid: format!("receipt:{}", Uuid::new_v4()),
-            verified_by_federation: false,
-            verifier_did: None,
-            verified_at: None,
+            executor: self.node_did.clone(), // Assuming self.node_did is the Did String
+            status: job_status,
+            result_data_cid,
+            logs_cid,
+            resource_usage: resource_usage_map,
+            execution_start_time: execution_start_time_unix,
+            execution_end_time: execution_end_time_unix,
+            execution_end_time_dt: now_dt,
+            signature: signature_bytes, // Placeholder
+            coop_id: None, // TODO: Determine how to populate these if needed
+            community_id: None, // TODO: Determine how to populate these if needed
         };
 
-        // Store the receipt
-        let mut receipts = self.receipts.lock().unwrap();
-        receipts.insert(job_id.to_string(), receipt.clone());
+        // Store the receipt locally
+        // The key for the receipts map should probably be the receipt's CID or the job_id.
+        // Using job_id for now.
+        {
+            let mut receipts_store = self.receipts.lock().unwrap();
+            receipts_store.insert(job_id.to_string(), receipt.clone());
+        }
+
+        // TODO: Broadcast receipt to the network (using receipt.cid()?)
 
         Ok(receipt)
     }
@@ -516,14 +563,14 @@ impl MeshNode for PlanetaryMeshNode {
             .get_mut(job_id)
             .ok_or_else(|| MeshError::JobNotFound(job_id.to_string()))?;
 
-        job.status = JobStatus::Cancelled;
+        job.status = JobStatus::Cancelled; // This is the local, detailed JobStatus
 
         // In a real implementation, we would notify the network
 
         Ok(())
     }
 
-    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<JobExecutionReceipt>> {
+    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<ExecutionReceipt>> { // Updated return type
         let receipts = self.receipts.lock().unwrap();
         let receipt = receipts.get(job_id).cloned();
 
