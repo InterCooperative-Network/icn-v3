@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
     use icn_ccl_parser::{CclParser, Rule};
+    use insta::assert_snapshot;
     use pest::Parser;
     use std::fs;
     use std::path::Path;
-    use insta::assert_snapshot;
 
     #[test]
     fn test_bylaws_template_parsing() {
@@ -35,8 +35,12 @@ mod tests {
 
         // Test basic parsing with Pest
         let parsed_result = CclParser::parse(Rule::ccl, &content);
-        assert!(parsed_result.is_ok(), "Failed to parse: {:?}", parsed_result.err());
-        
+        assert!(
+            parsed_result.is_ok(),
+            "Failed to parse: {:?}",
+            parsed_result.err()
+        );
+
         let successful_parse = parsed_result.unwrap(); // Unwrap once
 
         // Snapshot testing for the parse tree
@@ -46,7 +50,7 @@ mod tests {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown_template");
-        
+
         let pairs_debug_string = format!("{:#?}", pairs_for_snapshot);
         assert_snapshot!(snapshot_name, pairs_debug_string);
 

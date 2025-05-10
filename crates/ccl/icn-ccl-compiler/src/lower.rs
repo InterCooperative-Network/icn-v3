@@ -1,6 +1,6 @@
 use icn_ccl_dsl::{
     ActionHandler, ActionStep, Anchor, DslModule, GenericSection, IfExpr, MeteredAction, Proposal,
-    Role as DslAstRole, Rule as DslRule, RuleValue as DslValue, RangeRule,
+    RangeRule, Role as DslAstRole, Rule as DslRule, RuleValue as DslValue,
 };
 use icn_ccl_parser::{CclParser, Rule};
 use pest::iterators::{Pair, Pairs};
@@ -15,26 +15,26 @@ const TEST_UUID_STR: &str = "f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff"; // Different
 #[derive(Debug, Error)]
 pub enum LowerError {
     #[error("parse error: {0}")]
-    Parse(#[from] pest::error::Error<Rule>),
+    Parse(#[from] Box<pest::error::Error<Rule>>),
     #[error("unhandled rule: {0:?}")]
     Unhandled(Pair<'static, Rule>),
 }
 
 /// Primary entry‐point used by CLI & tests.
 pub fn lower_str(src: &str) -> Result<Vec<DslModule>, LowerError> {
-    let mut pairs = CclParser::parse(Rule::ccl, src)?;
+    let mut pairs = CclParser::parse(Rule::ccl, src).map_err(Box::new)?;
     let ccl_root_pair = pairs.next().ok_or_else(|| {
         // This case should ideally not happen if parsing Rule::ccl was successful
         // and the grammar expects at least SOI/EOI or some content.
         // Creating a generic parse error if it does.
-        pest::error::Error::new_from_span(
+        Box::new(pest::error::Error::new_from_span(
             pest::error::ErrorVariant::CustomError {
                 message: "Expected a CCL root pair but found none.".to_string(),
             },
             pest::Span::new(src, 0, 0).unwrap(), // Dummy span
-        )
+        ))
     })?;
-    Lowerer::default().lower(ccl_root_pair.into_inner())
+    Lowerer.lower(ccl_root_pair.into_inner())
 }
 
 #[derive(Default)]
@@ -78,54 +78,66 @@ impl Lowerer {
             }
             Rule::roles_def => {
                 let pair_span = pair.as_span(); // Get span before move
-                // roles_def = { "roles" ~ block }
-                // The block itself is the first inner pair of roles_def
+                                                // roles_def = { "roles" ~ block }
+                                                // The block itself is the first inner pair of roles_def
                 if let Some(block_pair) = pair.into_inner().next() {
                     if block_pair.as_rule() == Rule::block {
                         self.lower_roles_from_block(block_pair, modules)?;
                     } else {
                         // This case should ideally be prevented by the grammar if roles_def strictly expects a block.
                         // If it can occur, it's an unexpected structure.
-                        return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                        return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                             pest::error::ErrorVariant::CustomError {
-                                message: format!("Expected block within roles_def, found {:?}", block_pair.as_rule()),
+                                message: format!(
+                                    "Expected block within roles_def, found {:?}",
+                                    block_pair.as_rule()
+                                ),
                             },
                             block_pair.as_span(),
-                        )));
+                        ))));
                     }
                 } else {
                     // roles_def was empty or did not contain a block, also an error.
-                    return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                    return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                         pest::error::ErrorVariant::CustomError {
                             message: "roles_def is empty or missing a block".to_string(),
                         },
                         pair_span, // Use the stored span
-                    )));
+                    ))));
                 }
             }
             Rule::actions_def => {
                 modules.extend(self.lower_actions(pair)?);
             }
-            Rule::organization_def |
-            Rule::governance_def |
-            Rule::membership_def |
-            Rule::allocations_def |
-            Rule::spending_rules_def |
-            Rule::reporting_def |
-            Rule::process_def |
-            Rule::vacancies_def => {
+            Rule::organization_def
+            | Rule::governance_def
+            | Rule::membership_def
+            | Rule::allocations_def
+            | Rule::spending_rules_def
+            | Rule::reporting_def
+            | Rule::process_def
+            | Rule::vacancies_def => {
                 modules.push(DslModule::Section(self.lower_generic_section(pair)?));
             }
 
             Rule::EOI => {} // EOI will be the last item from ccl_root_pair.into_inner()
             _other => {
-                return Err(LowerError::Unhandled(unsafe { std::mem::transmute(pair) }));
+                // TODO: Review this transmute for safety. It casts a non-'static Pair to 'static.
+                // This is only safe if the underlying data for 'pair' outlives its use in LowerError::Unhandled.
+                // A better fix might be to store an owned representation.
+                return Err(LowerError::Unhandled(unsafe {
+                    std::mem::transmute::<Pair<'_, Rule>, Pair<'static, Rule>>(pair)
+                }));
             }
         }
         Ok(())
     }
 
-    fn lower_roles_from_block(&self, block_pair: Pair<'_, Rule>, modules: &mut Vec<DslModule>) -> Result<(), LowerError> {
+    fn lower_roles_from_block(
+        &self,
+        block_pair: Pair<'_, Rule>,
+        modules: &mut Vec<DslModule>,
+    ) -> Result<(), LowerError> {
         // block_pair is Rule::block, containing statements
         for statement_pair in block_pair.into_inner() {
             if statement_pair.as_rule() == Rule::statement {
@@ -144,16 +156,23 @@ impl Lowerer {
         Ok(())
     }
 
-    fn lower_single_role_def(&self, role_def_pair: Pair<'_, Rule>) -> Result<DslAstRole, LowerError> {
+    fn lower_single_role_def(
+        &self,
+        role_def_pair: Pair<'_, Rule>,
+    ) -> Result<DslAstRole, LowerError> {
         // role_def = { "role" ~ string_literal ~ block }
         let pair_span = role_def_pair.as_span(); // Span of the whole role_def for error reporting
         let mut inner_role_pairs = role_def_pair.into_inner();
 
         // First inner is string_literal (role name)
-        let role_name_pair = inner_role_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Role definition missing name".to_string() },
-            pair_span, // Error points to the whole role_def
-        )))?;
+        let role_name_pair = inner_role_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Role definition missing name".to_string(),
+                },
+                pair_span, // Error points to the whole role_def
+            )))
+        })?;
         // Ensure it's a string_literal as expected by grammar `role_def = { "role" ~ string_literal ~ block }`
         // Note: role_name_pair.as_rule() might be Rule::inner_string if string_literal is silent.
         // The grammar for string_literal is `${ """ ~ inner_string ~ """ }`.
@@ -161,25 +180,37 @@ impl Lowerer {
         let role_name = role_name_pair.as_str().trim_matches('"').to_string();
 
         // Second inner is block (role attributes)
-        let role_block_pair = inner_role_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: format!("Role definition for '{}' missing block", role_name) },
-            pair_span, // Error points to the whole role_def
-        )))?;
+        let role_block_pair = inner_role_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("Role definition for '{}' missing block", role_name),
+                },
+                pair_span, // Error points to the whole role_def
+            )))
+        })?;
 
         if role_block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
-                    message: format!("Expected block for role '{}', found {:?}", role_name, role_block_pair.as_rule()),
+                    message: format!(
+                        "Expected block for role '{}', found {:?}"#,
+                        role_name,
+                        role_block_pair.as_rule()
+                    ),
                 },
                 role_block_pair.as_span(),
-            )));
+            ))));
         }
 
         let (description, attributes) = self.lower_block_common_fields(role_block_pair)?;
 
         Ok(DslAstRole {
             name: role_name,
-            description: if description.is_empty() { None } else { Some(description) },
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(description)
+            },
             attributes,
         })
     }
@@ -206,8 +237,11 @@ impl Lowerer {
                                     if let Some(value_outer_pair) = value_outer_pair_opt {
                                         match value_outer_pair.as_rule() {
                                             Rule::value => {
-                                                if let Some(value_inner_pair) = value_outer_pair.into_inner().next() {
-                                                    let dsl_val = self.lower_value_rule(value_inner_pair)?;
+                                                if let Some(value_inner_pair) =
+                                                    value_outer_pair.into_inner().next()
+                                                {
+                                                    let dsl_val =
+                                                        self.lower_value_rule(value_inner_pair)?;
                                                     if key_str == "description" {
                                                         // Assuming description is always a simple string for now
                                                         if let DslValue::String(s) = dsl_val {
@@ -225,7 +259,8 @@ impl Lowerer {
                                                 // else: Rule::value was empty, ignore for now
                                             }
                                             Rule::block => {
-                                                let (_nested_desc, nested_rules) = self.lower_block_common_fields(value_outer_pair)?;
+                                                let (_nested_desc, nested_rules) = self
+                                                    .lower_block_common_fields(value_outer_pair)?;
                                                 dsl_rules.push(DslRule {
                                                     key: key_str.to_string(),
                                                     value: DslValue::Map(nested_rules),
@@ -234,7 +269,9 @@ impl Lowerer {
                                             Rule::general_identifier => {
                                                 dsl_rules.push(DslRule {
                                                     key: key_str.to_string(),
-                                                    value: DslValue::String(value_outer_pair.as_str().to_string()),
+                                                    value: DslValue::String(
+                                                        value_outer_pair.as_str().to_string(),
+                                                    ),
                                                 });
                                             }
                                             _ => {
@@ -256,7 +293,10 @@ impl Lowerer {
                             }
                             Rule::range_statement => {
                                 let range_rule_data = self.lower_range_statement(inner_def_pair)?;
-                                let key = format!("range_{}_{}", range_rule_data.start, range_rule_data.end);
+                                let key = format!(
+                                    "range_{}_{}",
+                                    range_rule_data.start, range_rule_data.end
+                                );
                                 dsl_rules.push(DslRule {
                                     key,
                                     value: DslValue::Range(Box::new(range_rule_data)),
@@ -276,14 +316,17 @@ impl Lowerer {
                                 // function_call_statement = { function_call ~ ";" }
                                 // inner_def_pair is Rule::function_call_statement
                                 // Its first inner should be Rule::function_call
-                                if let Some(fc_pair) = inner_def_pair.into_inner().next() { 
+                                if let Some(fc_pair) = inner_def_pair.into_inner().next() {
                                     if fc_pair.as_rule() == Rule::function_call {
                                         // Extract function name from the function_call pair for the key
                                         // function_call = { identifier ~ "(" ~ function_call_args ~ ")" }
                                         // The first inner of fc_pair is the identifier (function name)
-                                        let fn_name = fc_pair.clone().into_inner().next()
-                                            .map_or_else(|| "unknown_function_call".to_string(), |p| p.as_str().to_string());
-                                        
+                                        let fn_name =
+                                            fc_pair.clone().into_inner().next().map_or_else(
+                                                || "unknown_function_call".to_string(),
+                                                |p| p.as_str().to_string(),
+                                            );
+
                                         let dsl_val = self.lower_value_rule(fc_pair)?;
                                         dsl_rules.push(DslRule {
                                             key: fn_name,
@@ -294,7 +337,8 @@ impl Lowerer {
                                 }
                                 // Else: malformed function_call_statement, no inner pair
                             }
-                            _ => { /* Other definitions in statement. Ignored for common fields. */ }
+                            _ => { /* Other definitions in statement. Ignored for common fields. */
+                            }
                         }
                     }
                 }
@@ -307,23 +351,35 @@ impl Lowerer {
         // value_pair is the actual primitive rule like string_literal, number, boolean, etc.
         // not Rule::value itself.
         match value_pair.as_rule() {
-            Rule::string_literal => Ok(DslValue::String(value_pair.as_str().trim_matches('"').to_string())),
+            Rule::string_literal => Ok(DslValue::String(
+                value_pair.as_str().trim_matches('"').to_string(),
+            )),
             Rule::number => {
                 let num_str = value_pair.as_str();
-                num_str.parse::<f64>().map(DslValue::Number)
-                    .map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError { message: format!("Invalid number: {}", e) },
+                num_str.parse::<f64>().map(DslValue::Number).map_err(|e| {
+                    LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: format!("Invalid number: {}", e),
+                        },
                         value_pair.as_span(),
                     )))
+                })
             }
             Rule::boolean => {
                 // The grammar for boolean is `boolean = { "true" | "false" }`
                 // so `as_str()` will give "true" or "false".
-                value_pair.as_str().parse::<bool>().map(DslValue::Boolean)
-                    .map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
-                        pest::error::ErrorVariant::CustomError { message: format!("Invalid boolean: {}", e) },
-                        value_pair.as_span(),
-                    )))
+                value_pair
+                    .as_str()
+                    .parse::<bool>()
+                    .map(DslValue::Boolean)
+                    .map_err(|e| {
+                        LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                            pest::error::ErrorVariant::CustomError {
+                                message: format!("Invalid boolean: {}", e),
+                            },
+                            value_pair.as_span(),
+                        )))
+                    })
             }
             Rule::duration => {
                 // For now, treat duration as a string. Could be a specific DslValue variant later.
@@ -341,9 +397,7 @@ impl Lowerer {
                 }
                 Ok(DslValue::List(elements))
             }
-            Rule::general_identifier => {
-                Ok(DslValue::String(value_pair.as_str().to_string()))
-            }
+            Rule::general_identifier => Ok(DslValue::String(value_pair.as_str().to_string())),
             Rule::object => {
                 // object = { "{" ~ (object_pair ~ ("," ~ object_pair)*)? ~ ","? ~ "}" }
                 // object_pair = { (string_literal | identifier) ~ ":" ~ value }
@@ -356,13 +410,16 @@ impl Lowerer {
                 // Each object_pair has identifier/string_literal (key) and Rule::value (value).
 
                 let mut dsl_rules = Vec::new();
-                for kv_pair in value_pair.into_inner() { // kv_pair is Rule::object_pair
+                for kv_pair in value_pair.into_inner() {
+                    // kv_pair is Rule::object_pair
                     if kv_pair.as_rule() == Rule::object_pair {
                         let mut inner_kv = kv_pair.into_inner();
                         let key_obj_pair = inner_kv.next();
                         let value_obj_pair = inner_kv.next();
 
-                        if let (Some(k_pair), Some(v_rule_container_pair)) = (key_obj_pair, value_obj_pair) {
+                        if let (Some(k_pair), Some(v_rule_container_pair)) =
+                            (key_obj_pair, value_obj_pair)
+                        {
                             // k_pair is string_literal or identifier
                             // v_rule_container_pair is Rule::value, its inner is the actual value type
                             let key_str = k_pair.as_str().trim_matches('"').to_string();
@@ -399,12 +456,20 @@ impl Lowerer {
                                 let arg_key_pair = object_pair_inners.next();
                                 let arg_value_wrapper_pair = object_pair_inners.next(); // This is Rule::value
 
-                                if let (Some(k_pair), Some(v_wrapper_pair)) = (arg_key_pair, arg_value_wrapper_pair) {
+                                if let (Some(k_pair), Some(v_wrapper_pair)) =
+                                    (arg_key_pair, arg_value_wrapper_pair)
+                                {
                                     let arg_key_str = k_pair.as_str().trim_matches('"').to_string();
                                     // v_wrapper_pair is Rule::value, its inner is the actual value type
-                                    if let Some(actual_arg_val_pair) = v_wrapper_pair.into_inner().next() {
-                                        let dsl_arg_val = self.lower_value_rule(actual_arg_val_pair)?;
-                                        named_args_rules.push(DslRule { key: arg_key_str, value: dsl_arg_val });
+                                    if let Some(actual_arg_val_pair) =
+                                        v_wrapper_pair.into_inner().next()
+                                    {
+                                        let dsl_arg_val =
+                                            self.lower_value_rule(actual_arg_val_pair)?;
+                                        named_args_rules.push(DslRule {
+                                            key: arg_key_str,
+                                            value: dsl_arg_val,
+                                        });
                                     }
                                     // Else: Rule::value was empty, or malformed object_pair, ignore for now or error
                                 }
@@ -412,27 +477,34 @@ impl Lowerer {
                             }
                         }
                     }
-                    
-                    let mut fn_call_map_rules = Vec::new();
-                    fn_call_map_rules.push(DslRule { key: "function_name".to_string(), value: DslValue::String(fn_name) });
-                    fn_call_map_rules.push(DslRule { key: "args".to_string(), value: DslValue::Map(named_args_rules) });
+
+                    let fn_call_map_rules = vec![
+                        DslRule { key: "function_name".to_string(), value: DslValue::String(fn_name) },
+                        DslRule { key: "args".to_string(), value: DslValue::Map(named_args_rules) },
+                    ];
                     Ok(DslValue::Map(fn_call_map_rules))
                 } else {
-                    Err(LowerError::Parse(pest::error::Error::new_from_span(
+                    Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                         pest::error::ErrorVariant::CustomError {
-                            message: "Invalid function call structure: missing function name".to_string(),
+                            message: "Invalid function call structure: missing function name"#
+                                .to_string(),
                         },
                         original_fn_call_span,
-                    )))
+                    ))))
                 }
             }
-            Rule::range_value => { // Added for keyed ranges
+            Rule::range_value => {
+                // Added for keyed ranges
                 // value_pair is Rule::range_value. Its inner pairs (number, number, block)
                 // are what lower_range_statement expects.
                 let range_rule_data = self.lower_range_statement(value_pair)?;
                 Ok(DslValue::Range(Box::new(range_rule_data)))
             }
-            _ => Ok(DslValue::String(format!("UNPROCESSED_VALUE_RULE_{:?}_{}", value_pair.as_rule(), value_pair.as_str()))), // Placeholder
+            _ => Ok(DslValue::String(format!(
+                "UNPROCESSED_VALUE_RULE_{:?}_{}",
+                value_pair.as_rule(),
+                value_pair.as_str()
+            ))), // Placeholder
         }
     }
 
@@ -441,34 +513,59 @@ impl Lowerer {
         let original_span = pair.as_span(); // For top-level error reporting
         let mut inner_pairs = pair.into_inner();
 
-        let start_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Range statement missing start number".to_string() },
-            original_span,
-        )))?;
-        let start_val = start_pair.as_str().parse::<f64>().map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: format!("Invalid start number for range: {}", e) },
-            start_pair.as_span(),
-        )))?;
+        let start_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Range statement missing start number".to_string(),
+                },
+                original_span,
+            )))
+        })?;
+        let start_val = start_pair.as_str().parse::<f64>().map_err(|e| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("Invalid start number for range: {}", e),
+                },
+                start_pair.as_span(),
+            )))
+        })?;
 
-        let end_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Range statement missing end number".to_string() },
-            original_span,
-        )))?;
-        let end_val = end_pair.as_str().parse::<f64>().map_err(|e| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: format!("Invalid end number for range: {}", e) },
-            end_pair.as_span(),
-        )))?;
+        let end_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Range statement missing end number".to_string(),
+                },
+                original_span,
+            )))
+        })?;
+        let end_val = end_pair.as_str().parse::<f64>().map_err(|e| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("Invalid end number for range: {}", e),
+                },
+                end_pair.as_span(),
+            )))
+        })?;
 
-        let block_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Range statement missing block".to_string() },
-            original_span,
-        )))?;
+        let block_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Range statement missing block".to_string(),
+                },
+                original_span,
+            )))
+        })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: format!("Expected block in range statement, found {:?}", block_pair.as_rule()) },
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!(
+                        "Expected block in range statement, found {:?}"#,
+                        block_pair.as_rule()
+                    ),
+                },
                 block_pair.as_span(),
-            )));
+            ))));
         }
 
         // The description part from lower_block_common_fields is not used for RangeRule's sub-rules.
@@ -486,22 +583,35 @@ impl Lowerer {
         let original_span = pair.as_span();
         let mut inner_pairs = pair.into_inner();
 
-        let comparison_expr_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "If statement missing condition".to_string() },
-            original_span,
-        )))?;
+        let comparison_expr_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "If statement missing condition".to_string(),
+                },
+                original_span,
+            )))
+        })?;
         let condition_raw = comparison_expr_pair.as_str().to_string();
 
-        let then_block_pair = inner_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "If statement missing 'then' block".to_string() },
-            original_span,
-        )))?;
+        let then_block_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "If statement missing 'then' block".to_string(),
+                },
+                original_span,
+            )))
+        })?;
 
         if then_block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: format!("Expected block for 'then' branch, found {:?}", then_block_pair.as_rule()) },
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!(
+                        "Expected block for 'then' branch, found {:?}"#,
+                        then_block_pair.as_rule()
+                    ),
+                },
                 then_block_pair.as_span(),
-            )));
+            ))));
         }
         let (_then_desc, then_rules) = self.lower_block_common_fields(then_block_pair)?;
 
@@ -514,21 +624,26 @@ impl Lowerer {
                 else_rules = Some(rules);
             } else {
                 // This is an error: if something follows the 'then' block, it must be a block (for 'else')
-                return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError { 
-                        message: format!("Expected block for 'else' branch, found {:?}", else_block_pair.as_rule()) 
+                return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected block for 'else' branch, found {:?}"#,
+                            else_block_pair.as_rule()
+                        ),
                     },
                     else_block_pair.as_span(),
-                )));
+                ))));
             }
         }
 
         // Ensure there are no more tokens after the optional else block
         if inner_pairs.next().is_some() {
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Unexpected tokens after if-statement's else block".to_string() },
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Unexpected tokens after if-statement's else block".to_string(),
+                },
                 original_span, // Or a more specific span from the unexpected token if available
-            )));
+            ))));
         }
 
         Ok(IfExpr {
@@ -544,24 +659,32 @@ impl Lowerer {
 
         let title = proposal_specific_pairs
             .next()
-            .ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Proposal missing title".to_string() },
-                pair_span,
-            )))?
+            .ok_or_else(|| {
+                LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "Proposal missing title".to_string(),
+                    },
+                    pair_span,
+                )))
+            })?
             .as_str()
             .trim_matches('"')
             .to_owned();
-        
+
         // For proposal_def, election_def, budget_def which don't have a version in grammar
         let version = "0.0.0-unknown".to_string(); // Default/placeholder version
 
-        let block_pair = proposal_specific_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Proposal missing block".to_string() },
-            pair_span,
-        )))?;
+        let block_pair = proposal_specific_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Proposal missing block".to_string(),
+                },
+                pair_span,
+            )))
+        })?;
 
         let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
-        
+
         Ok(self.build_stub_proposal(title, version, description_body, dsl_rules))
     }
 
@@ -571,30 +694,53 @@ impl Lowerer {
 
         let title = election_specific_pairs
             .next()
-            .ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Election missing title".to_string() },
-                pair_span,
-            )))?
+            .ok_or_else(|| {
+                LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "Election missing title".to_string(),
+                    },
+                    pair_span,
+                )))
+            })?
             .as_str()
             .trim_matches('"')
             .to_owned();
 
-        let block_pair = election_specific_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Election missing block".to_string() },
-            pair_span, 
-        )))?;
+        let block_pair = election_specific_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Election missing block".to_string(),
+                },
+                pair_span,
+            )))
+        })?;
 
         let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
 
-        Ok(self.build_stub_proposal(title, "0.0.0-unknown".to_string(), description_body, dsl_rules))
+        Ok(self.build_stub_proposal(
+            title,
+            "0.0.0-unknown".to_string(),
+            description_body,
+            dsl_rules,
+        ))
     }
 
-    fn build_stub_proposal(&self, title: String, version: String, body: String, rules: Vec<DslRule>) -> Proposal {
+    fn build_stub_proposal(
+        &self,
+        title: String,
+        version: String,
+        body: String,
+        rules: Vec<DslRule>,
+    ) -> Proposal {
         let id = {
             #[cfg(test)]
-            { Uuid::parse_str(TEST_UUID_STR).unwrap() } 
+            {
+                Uuid::parse_str(TEST_UUID_STR).unwrap()
+            }
             #[cfg(not(test))]
-            { Uuid::new_v4() } 
+            {
+                Uuid::new_v4()
+            }
         };
 
         Proposal {
@@ -615,31 +761,43 @@ impl Lowerer {
 
         let title = bylaws_specific_pairs
             .next()
-            .ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Bylaws definition missing title".to_string() },
-                pair_span,
-            )))?
+            .ok_or_else(|| {
+                LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "Bylaws definition missing title".to_string(),
+                    },
+                    pair_span,
+                )))
+            })?
             .as_str()
             .trim_matches('"')
             .to_owned();
 
         let version = bylaws_specific_pairs
             .next() // Skips "version" keyword, takes the string_literal after it
-            .ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "Bylaws definition missing version string".to_string() },
-                pair_span,
-            )))?
+            .ok_or_else(|| {
+                LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "Bylaws definition missing version string".to_string(),
+                    },
+                    pair_span,
+                )))
+            })?
             .as_str()
             .trim_matches('"')
             .to_owned();
 
-        let block_pair = bylaws_specific_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "Bylaws definition missing block".to_string() },
-            pair_span,
-        )))?;
+        let block_pair = bylaws_specific_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Bylaws definition missing block".to_string(),
+                },
+                pair_span,
+            )))
+        })?;
 
         let (description_body, dsl_rules) = self.lower_block_common_fields(block_pair)?;
-        
+
         Ok(self.build_stub_proposal(title, version, description_body, dsl_rules))
     }
 
@@ -647,16 +805,16 @@ impl Lowerer {
         let mut handlers = Vec::new();
         let pair_span = pair.as_span();
         let block_pair = pair.into_inner().next().ok_or_else(|| {
-            LowerError::Parse(pest::error::Error::new_from_span(
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
                     message: "actions_def is missing a block".to_string(),
                 },
-                pair_span, // Use stored span
-            ))
+                pair_span, 
+            )))
         })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
                     message: format!(
                         "Expected block within actions_def, found {:?}",
@@ -664,45 +822,64 @@ impl Lowerer {
                     ),
                 },
                 block_pair.as_span(),
-            )));
+            ))));
         }
 
-        for statement_pair_outer in block_pair.into_inner() { // Iterates statements in actions block
+        for statement_pair_outer in block_pair.into_inner() {
+            // Iterates statements in actions block
             let outer_rule = statement_pair_outer.as_rule();
-            let _outer_span = statement_pair_outer.as_span(); 
+            let _outer_span = statement_pair_outer.as_span();
             if outer_rule == Rule::statement {
-                if let Some(on_pair) = statement_pair_outer.into_inner().next() { 
+                if let Some(on_pair) = statement_pair_outer.into_inner().next() {
                     let on_pair_rule = on_pair.as_rule();
-                    let _on_pair_span_for_log = on_pair.as_span(); 
+                    let _on_pair_span_for_log = on_pair.as_span();
                     if on_pair_rule == Rule::action_def {
-                        let on_action_def_span = on_pair.as_span(); 
+                        let on_action_def_span = on_pair.as_span();
                         let mut inner_action_def_pairs = on_pair.into_inner();
-                        let event_name_pair = inner_action_def_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-                            pest::error::ErrorVariant::CustomError { message: "action_def missing event name (string_literal)".to_string() },
-                            on_action_def_span, 
-                        )))?;
+                        let event_name_pair = inner_action_def_pairs.next().ok_or_else(|| {
+                            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "action_def missing event name (string_literal)"
+                                        .to_string(),
+                                },
+                                on_action_def_span,
+                            )))
+                        })?;
                         let event = event_name_pair.as_str().trim_matches('"').to_owned();
 
-                        let steps_block_pair = inner_action_def_pairs.next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-                            pest::error::ErrorVariant::CustomError { message: format!("action_def for event '{}' missing block", event) },
-                            on_action_def_span, 
-                        )))?;
+                        let steps_block_pair = inner_action_def_pairs.next().ok_or_else(|| {
+                            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: format!(
+                                        "action_def for event '{}' missing block",
+                                        event
+                                    ),
+                                },
+                                on_action_def_span,
+                            )))
+                        })?;
 
                         if steps_block_pair.as_rule() != Rule::block {
-                             return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                                 pest::error::ErrorVariant::CustomError {
-                                    message: format!("Expected block for action_def event '{}', found {:?}", event, steps_block_pair.as_rule()),
+                                    message: format!(
+                                        "Expected block for action_def event '{}', found {:?}"#,
+                                        event,
+                                        steps_block_pair.as_rule()
+                                    ),
                                 },
                                 steps_block_pair.as_span(),
-                            )));
+                            ))));
                         }
 
                         let mut steps = Vec::new();
-                        for step_statement_pair_outer in steps_block_pair.into_inner() { 
+                        for step_statement_pair_outer in steps_block_pair.into_inner() {
                             let step_outer_rule = step_statement_pair_outer.as_rule();
-                            let _step_outer_span = step_statement_pair_outer.as_span(); 
+                            let _step_outer_span = step_statement_pair_outer.as_span();
                             if step_outer_rule == Rule::statement {
-                                if let Some(step_pair) = step_statement_pair_outer.into_inner().next() { 
+                                if let Some(step_pair) =
+                                    step_statement_pair_outer.into_inner().next()
+                                {
                                     match step_pair.as_rule() {
                                         Rule::mint_token => {
                                             steps.push(ActionStep::Metered(
@@ -725,9 +902,9 @@ impl Lowerer {
                             }
                         }
                         handlers.push(DslModule::ActionHandler(ActionHandler { event, steps }));
-                    } 
-                } 
-            } 
+                    }
+                }
+            }
         }
         Ok(handlers)
     }
@@ -735,18 +912,27 @@ impl Lowerer {
     fn lower_mint_token(&self, pair: Pair<'_, Rule>) -> Result<MeteredAction, LowerError> {
         // pair is Rule::mint_token = { "mint_token" ~ block }
         let original_pair_span = pair.as_span(); // Get span before moving pair
-        let block_pair = pair.into_inner().next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "mint_token missing block".to_string() },
-            original_pair_span, // Use original span
-        )))?;
+        let block_pair = pair.into_inner().next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "mint_token missing block".to_string(),
+                },
+                original_pair_span, // Use original span
+            )))
+        })?;
 
         if block_pair.as_rule() != Rule::block {
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: format!("Expected block in mint_token, found {:?}", block_pair.as_rule()) },
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!(
+                        "Expected block in mint_token, found {:?}"#,
+                        block_pair.as_rule()
+                    ),
+                },
                 block_pair.as_span(),
-            )));
+            ))));
         }
-        
+
         let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
         let (_description, rules) = self.lower_block_common_fields(block_pair)?;
 
@@ -764,8 +950,10 @@ impl Lowerer {
                         // Handle error or log: type should be a string
                     }
                 }
-                "recipient" | "recipients" => { // Handle both singular and plural
-                    if let DslValue::String(s) = rule.value { // Assumes recipient is a string (identifier)
+                "recipient" | "recipients" => {
+                    // Handle both singular and plural
+                    if let DslValue::String(s) = rule.value {
+                        // Assumes recipient is a string (identifier)
                         recipient = Some(s);
                     } else {
                         // Handle error or log: recipient should be a string
@@ -788,13 +976,15 @@ impl Lowerer {
                 _ => { /* Ignore other fields for now */ }
             }
         }
-        
+
         if resource_type.is_empty() {
             // It's an error if type is not specified for mint_token
-            return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: "mint_token requires a 'type' field".to_string() },
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "mint_token requires a 'type' field".to_string(),
+                },
                 block_pair_span, // Use stored span
-            )));
+            ))));
         }
 
         Ok(MeteredAction {
@@ -808,16 +998,25 @@ impl Lowerer {
     fn lower_anchor_data(&self, pair: Pair<'_, Rule>) -> Result<Anchor, LowerError> {
         // pair is Rule::anchor_data = { "anchor_data" ~ block }
         let original_pair_span = pair.as_span(); // Get span before moving pair
-        let block_pair = pair.into_inner().next().ok_or_else(|| LowerError::Parse(pest::error::Error::new_from_span(
-            pest::error::ErrorVariant::CustomError { message: "anchor_data missing block".to_string() },
-            original_pair_span, // Use original span
-        )))?;
+        let block_pair = pair.into_inner().next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "anchor_data missing block".to_string(),
+                },
+                original_pair_span, // Use original span
+            )))
+        })?;
 
         if block_pair.as_rule() != Rule::block {
-             return Err(LowerError::Parse(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError { message: format!("Expected block in anchor_data, found {:?}", block_pair.as_rule()) },
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!(
+                        "Expected block in anchor_data, found {:?}"#,
+                        block_pair.as_rule()
+                    ),
+                },
                 block_pair.as_span(),
-            )));
+            ))));
         }
 
         let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
@@ -833,7 +1032,7 @@ impl Lowerer {
                         path = Some(s);
                     } // else: path should be string, consider error/logging
                 }
-                "data" | "payload_cid" => { 
+                "data" | "payload_cid" => {
                     match rule.value {
                         DslValue::String(s) => {
                             data_reference = s;
@@ -844,10 +1043,11 @@ impl Lowerer {
                             data_reference = format!("map_content_placeholder_{:?}", map_rules);
                         }
                         // Handle other DslValue types if necessary, or error
-                        _ => { 
+                        _ => {
                             // Could set to a generic placeholder or error out
                             // For now, let's try to make a string representation to avoid panic
-                            data_reference = format!("unhandled_data_type_placeholder_{:?}", rule.value);
+                            data_reference =
+                                format!("unhandled_data_type_placeholder_{:?}", rule.value);
                         }
                     }
                 }
@@ -856,10 +1056,10 @@ impl Lowerer {
         }
 
         if data_reference.is_empty() {
-             return Err(LowerError::Parse(pest::error::Error::new_from_span(
+            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError { message: "anchor_data requires a 'data' or 'payload_cid' field that yields a reference string or map".to_string() },
                 block_pair_span, // Use stored span
-            )));
+            ))));
         }
 
         Ok(Anchor {
@@ -889,30 +1089,30 @@ impl Lowerer {
                 _ => {
                     // This might happen if the grammar for a _def rule is more complex than expected
                     // or if a _def rule doesn't strictly follow string_literal? ~ block or just block.
-                    return Err(LowerError::Parse(pest::error::Error::new_from_span(
+                    return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                         pest::error::ErrorVariant::CustomError {
-                            message: format!("Unexpected rule {:?} inside generic section {}", inner_pair.as_rule(), kind)
+                            message: format!(
+                                "Unexpected rule {:?} inside generic section {}",
+                                inner_pair.as_rule(),
+                                kind
+                            ),
                         },
                         inner_pair.as_span(),
-                    )));
+                    ))));
                 }
             }
         }
 
         if let Some(block_pair) = block_pair_option {
             let (_description, rules) = self.lower_block_common_fields(block_pair)?;
-            Ok(GenericSection {
-                kind,
-                title,
-                rules,
-            })
+            Ok(GenericSection { kind, title, rules })
         } else {
-            Err(LowerError::Parse(pest::error::Error::new_from_span(
+            Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
-                    message: format!("Generic section type '{}' missing main block", kind)
+                    message: format!("Generic section type '{}' missing main block"#, kind),
                 },
                 original_pair_span,
-            )))
+            ))))
         }
     }
-} 
+}

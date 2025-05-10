@@ -1,6 +1,6 @@
 use icn_ccl_compiler::lower::lower_str;
-use icn_ccl_wasm_codegen::WasmGenerator;
 use icn_ccl_wasm_codegen::opcodes::Program;
+use icn_ccl_wasm_codegen::WasmGenerator;
 use insta::assert_json_snapshot;
 
 // Helper to load CCL, parse, lower, and generate opcodes
@@ -26,4 +26,4 @@ macro_rules! snapshot_file {
 // Test cases
 snapshot_file!(election_ops, "../../icn-ccl-parser/templates/election.ccl");
 snapshot_file!(budget_ops, "../../icn-ccl-parser/templates/budget.ccl");
-snapshot_file!(bylaws_ops, "../../icn-ccl-parser/templates/bylaws.ccl"); 
+snapshot_file!(bylaws_ops, "../../icn-ccl-parser/templates/bylaws.ccl");

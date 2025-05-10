@@ -216,4 +216,4 @@ mod tests {
         assert_eq!(p.created_at, back.created_at);
         assert_eq!(p.rules.len(), back.rules.len());
     }
-} 
+}

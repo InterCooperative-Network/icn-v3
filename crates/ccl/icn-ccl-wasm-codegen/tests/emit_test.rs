@@ -1,8 +1,8 @@
 use icn_ccl_compiler::lower::lower_str;
 use icn_ccl_wasm_codegen::compile_to_wasm;
-use wasmparser::Validator;
 use icn_ccl_wasm_codegen::{emit::program_to_wasm, WasmGenerator};
-use wasmparser::{WasmFeatures, ImportSectionReader, ExternalKind, Parser, Payload, TypeRef};
+use wasmparser::Validator;
+use wasmparser::{ExternalKind, ImportSectionReader, Parser, Payload, TypeRef, WasmFeatures};
 
 #[test]
 fn emit_budget_wasm_validates() {
@@ -16,8 +16,7 @@ fn emit_budget_wasm_validates() {
         .expect("output wasm must validate");
 
     // snapshot raw opcode list for reference
-    let prog = icn_ccl_wasm_codegen::WasmGenerator::new()
-        .generate(lower_str(src).unwrap());
+    let prog = icn_ccl_wasm_codegen::WasmGenerator::new().generate(lower_str(src).unwrap());
     insta::assert_json_snapshot!("budget_wasm_opcodes", prog);
 }
 
@@ -59,8 +58,8 @@ fn wasm_contains_range_check() {
         }
     "#;
 
-    let modules  = lower_str(src).expect("lowering failed");
-    let program  = WasmGenerator::new().generate(modules);
+    let modules = lower_str(src).expect("lowering failed");
+    let program = WasmGenerator::new().generate(modules);
     let wasm_bin = program_to_wasm(&program);
 
     // Validate module
@@ -72,4 +71,4 @@ fn wasm_contains_range_check() {
         has_range_check_call(&wasm_bin),
         "range_check import not found in module"
     );
-} 
+}
