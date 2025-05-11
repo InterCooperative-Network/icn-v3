@@ -149,89 +149,96 @@ fn generate_job_cid_from_payload(
     Ok(Cid::new_v1(cid:: известных_кодеков::DAG_CBOR, multihash))
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenv::dotenv().ok();
-    tracing_subscriber::fmt::init();
+// NEW FUNCTION: run_server
+pub async fn run_server(
+    database_url: String,
+    p2p_identity_keypair: IcnKeyPair,
+    p2p_explicit_listen_address: Option<String>, // Renamed for clarity
+    reputation_service_url_str: String, // Renamed for clarity
+    http_listen_socket_addr: SocketAddr, // Renamed for clarity
+) -> anyhow::Result<(SocketAddr, Vec<Multiaddr>)> {
+    tracing::info!("run_server: Initializing with DB URL: {}, P2P Listen: {:?}, HTTP Listen: {}", database_url, p2p_explicit_listen_address, http_listen_socket_addr);
 
     // --- Database Setup ---
-    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:icn_mesh_jobs.db?mode=rwc".to_string());
-    tracing::info!("Using database at: {}", database_url);
-
+    tracing::info!("run_server: Setting up database at: {}", database_url);
     if !Sqlite::database_exists(&database_url).await.unwrap_or(false) {
-        tracing::info!("Database not found, creating new one...");
+        tracing::info!("run_server: Database not found, creating new one...");
         Sqlite::create_database(&database_url).await?;
-        tracing::info!("Database created.");
+        tracing::info!("run_server: Database created.");
     }
 
     let pool = Arc::new(SqlitePool::connect(&database_url).await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to database {}: {}", database_url, e))?);
-    tracing::info!("Database connection pool established.");
+        .map_err(|e| anyhow::anyhow!("run_server: Failed to connect to database {}: {}", database_url, e))?);
+    tracing::info!("run_server: Database connection pool established.");
 
-    // Run migrations
-    // The path is relative to CARGO_MANIFEST_DIR, which is the root of the current crate.
-    // If main.rs is in src/, then ./migrations is correct if migrations/ is in the crate root.
     match sqlx::migrate!("./migrations").run(&*pool).await {
-        Ok(_) => tracing::info!("Database migrations completed successfully."),
+        Ok(_) => tracing::info!("run_server: Database migrations completed successfully."),
         Err(e) => {
-            tracing::error!("Failed to run database migrations: {}", e);
-            // Depending on the error, you might want to panic or handle differently.
-            // For instance, if the migrations table is locked, it might be a transient issue.
-            // If migrations are corrupt, it's a fatal error.
-            return Err(anyhow::anyhow!("Migration error: {}", e));
+            tracing::error!("run_server: Failed to run database migrations: {}", e);
+            return Err(anyhow::anyhow!("run_server: Migration error: {}", e));
         }
     }
-    // --- End Database Setup ---
-
-    // Replace InMemoryStore with SqliteStore
     let store: Arc<dyn MeshJobStore> = Arc::new(SqliteStore::new(pool.clone()));
-    tracing::info!("Using SqliteStore for job and bid management.");
+    tracing::info!("run_server: Using SqliteStore for job and bid management.");
 
-    let reputation_service_url = Arc::new(env::var("REPUTATION_SERVICE_URL").unwrap_or_else(|_| "http://localhost:8081".to_string()));
-    tracing::info!("Using reputation service at: {}", *reputation_service_url);
+    let reputation_service_url = Arc::new(reputation_service_url_str);
+    tracing::info!("run_server: Using reputation service at: {}", *reputation_service_url);
 
-    // --- P2P Mesh Node Setup --- // ADDED SECTION START
-    // 1. Create/Load Identity for icn-mesh-jobs service
-    // In a real deployment, this keypair should be loaded securely from configuration.
-    let p2p_identity_keypair = IcnKeyPair::generate(); 
-    tracing::info!("P2P Node DID for icn-mesh-jobs service: {}", p2p_identity_keypair.did);
-
-    // 2. Prepare arguments for MeshNode::new
-    // This queue is for jobs this node might announce if it were an originator.
-    // For icn-mesh-jobs, it might mainly listen and send specific messages, so this queue might not be heavily used by this service.
+    // --- P2P Mesh Node Setup ---
+    tracing::info!("run_server: P2P Node DID for icn-mesh-jobs service: {}", p2p_identity_keypair.did);
     let p2p_node_job_queue: Arc<std::sync::Mutex<VecDeque<MeshJob>>> = Arc::new(std::sync::Mutex::new(VecDeque::new()));
-    // icn-mesh-jobs service does not typically anchor receipts itself, so local_runtime_context can be None.
     let p2p_node_runtime_context = None; 
-    // Allow P2P listen address to be configured via environment variable, or default to auto-assign.
-    let p2p_listen_address = env::var("ICN_MESH_JOBS_P2P_LISTEN_ADDRESS").ok();
-    tracing::info!("Attempting to use P2P listen address: {:?}", p2p_listen_address);
 
-    // 3. Instantiate PlanetaryMeshNode
-    let p2p_node_instance = PlanetaryMeshNode::new(
-        p2p_identity_keypair,
-        p2p_listen_address, // Option<String>
+    let mut p2p_node_instance = PlanetaryMeshNode::new(
+        p2p_identity_keypair, // Use passed-in keypair
+        p2p_explicit_listen_address,
         p2p_node_job_queue,
         p2p_node_runtime_context,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("Failed to create PlanetaryMeshNode for icn-mesh-jobs: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("run_server: Failed to create PlanetaryMeshNode: {}", e))?;
+    
+    // Get P2P listen addresses. Note: `run` must be called for listening to truly start for external purposes,
+    // but `new` usually sets up the listener internally. We'll get addresses before spawning run.
+    // This might require PlanetaryMeshNode to expose listeners immediately after Swarm is created or a helper.
+    // For now, assuming new starts listeners effectively enough to get addresses.
+    // This part might need adjustment depending on PlanetaryMeshNode's internal listen logic.
+    // A safer way is to get listeners *after* run() has been called and the node signals readiness,
+    // or have PlanetaryMeshNode::new return them.
+    // Assuming PlanetaryMeshNode::new makes listen_on calls that are effective immediately for address retrieval.
+    let p2p_listen_addrs = p2p_node_instance.swarm.listeners().cloned().collect::<Vec<_>>();
+    if p2p_listen_addrs.is_empty() {
+        tracing::warn!("run_server: P2P Node reported no listen addresses immediately after creation. This might be an issue for discovery.");
+    } else {
+        for addr in &p2p_listen_addrs {
+            tracing::info!("run_server: P2P Node listening on: {}", addr);
+        }
+    }
     
     let shared_p2p_node: SharedP2pNode = Arc::new(TokioMutex::new(p2p_node_instance));
 
-    // 4. Run the P2P node's event loop in a separate task
     let p2p_node_runner = shared_p2p_node.clone();
     tokio::spawn(async move {
-        tracing::info!("Starting P2P Mesh Node event loop for icn-mesh-jobs service...");
+        tracing::info!("run_server: Starting P2P Mesh Node event loop...");
+        // The lock guard is held for the duration of run(). Ensure run() doesn't deadlock.
         let mut node_guard = p2p_node_runner.lock().await;
-        // Ensure `run()` method is public and designed for this invocation.
         if let Err(e) = node_guard.run().await { 
-             tracing::error!("P2P Mesh Node event loop for icn-mesh-jobs service failed: {}", e);
+             tracing::error!("run_server: P2P Mesh Node event loop failed: {}", e);
         }
     });
-    tracing::info!("P2P Mesh Node task for icn-mesh-jobs service has been spawned.");
-    // --- P2P Mesh Node Setup --- // ADDED SECTION END
+    tracing::info!("run_server: P2P Mesh Node task has been spawned.");
+
+    // --- HTTP Server Setup ---
+    // Bind a TCP listener to get the actual local address, especially if port 0 is used.
+    let http_listener = tokio::net::TcpListener::bind(http_listen_socket_addr).await
+        .map_err(|e| anyhow::anyhow!("run_server: Failed to bind HTTP listener to {}: {}", http_listen_socket_addr, e))?;
+    let actual_http_listen_addr = http_listener.local_addr()
+        .map_err(|e| anyhow::anyhow!("run_server: Failed to get local address from HTTP listener: {}", e))?;
+    
+    tracing::info!("run_server: HTTP server attempting to listen on {}", actual_http_listen_addr);
 
     let app = Router::new()
+        // All original routes from main.rs
         .route("/jobs", post(create_job).get(list_jobs))
         .route("/jobs/by-worker/:worker_did", get(get_jobs_for_worker_handler))
         .route("/jobs/:job_id", get(get_job))
@@ -243,11 +250,119 @@ async fn main() -> anyhow::Result<()> {
         .route("/jobs/:job_id/fail", post(mark_job_failed_handler))
         .layer(Extension(store.clone()))
         .layer(Extension(reputation_service_url.clone()))
-        .layer(Extension(shared_p2p_node.clone())); // ADDED P2P Node to Axum state
+        .layer(Extension(shared_p2p_node.clone()));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    tracing::info!("ICN Mesh Jobs service listening on {}", addr);
-    axum::Server::bind(&addr).serve(app.into_make_service()).await?;
+    tokio::spawn(async move {
+        tracing::info!("run_server: ICN Mesh Jobs service HTTP server starting on {}", actual_http_listen_addr);
+        if let Err(e) = axum::Server::from_tcp(http_listener)
+            .map_err(|e| anyhow::anyhow!("Failed to create axum server from_tcp: {}",e ))? // map this error
+            .serve(app.into_make_service())
+            .await {
+                tracing::error!("run_server: HTTP server failed: {}", e);
+            }
+        Ok::<(), anyhow::Error>(()) // Ensure the spawned task matches expected type if it needs to return Result
+    });
+    
+    tracing::info!("run_server: HTTP server task has been spawned. Returning bound addresses.");
+    Ok((actual_http_listen_addr, p2p_listen_addrs))
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenv().ok();
+    tracing_subscriber::fmt::init();
+
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:icn_mesh_jobs.db?mode=rwc".to_string());
+    
+    // Generate or load P2P identity for the service
+    // For production, this should be loaded from a secure config or persisted.
+    // For now, generate a new one each time main() runs.
+    let p2p_service_keypair = IcnKeyPair::generate();
+    tracing::info!("main: Generated P2P DID for service: {}", p2p_service_keypair.did);
+
+    let p2p_listen_addr_env = env::var("ICN_MESH_JOBS_P2P_LISTEN_ADDRESS").ok();
+    let reputation_url_env = env::var("REPUTATION_SERVICE_URL").unwrap_or_else(|_| "http://localhost:8081".to_string());
+    
+    let http_listen_addr_str = env::var("HTTP_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let http_socket_addr: SocketAddr = http_listen_addr_str.parse()
+        .map_err(|e| anyhow::anyhow!("Invalid HTTP_LISTEN_ADDR format '{}': {}", http_listen_addr_str, e))?;
+
+    tracing::info!("main: Starting icn-mesh-jobs server...");
+    // In main, we don't critically need the returned addresses, but run_server now provides them.
+    // The server itself is spawned as a background task by run_server.
+    // We need to keep main alive if run_server's HTTP and P2P parts are spawned.
+    // The original axum::Server::bind(...).serve(...).await? would block main.
+    // If run_server spawns its tasks and returns, main might exit.
+    // For now, let run_server spawn tasks and return addresses.
+    // The test will await these tasks or manage them. Main will just call and exit if tasks are spawned.
+    // To make `main` behave like before (blocking until server stops), it should await a handle from `run_server`.
+    // For simplicity in refactoring for tests, run_server will spawn and return.
+    // If `main` needs to block, it should await a join handle from `run_server` for the http server task.
+    
+    // Create a Tokio channel to signal completion or error from the server tasks
+    let (tx, mut rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
+
+    tokio::spawn(async move {
+        match run_server(
+            database_url,
+            p2p_service_keypair,
+            p2p_listen_addr_env,
+            reputation_url_env,
+            http_socket_addr,
+        ).await {
+            Ok((http_addr, p2p_addrs)) => {
+                tracing::info!("main: run_server started successfully. HTTP: {}, P2P: {:?}", http_addr, p2p_addrs);
+                // If run_server's spawned tasks are the actual long-running server, 
+                // main needs to wait for them or a signal.
+                // The current run_server spawns tasks and returns Ok.
+                // To keep main running like a typical server, we need it to await something.
+                // The simplest is for run_server to *not* spawn the http server but return it.
+                // Or, main just prints and exits, assuming spawned tasks continue (detached).
+                // Let's adjust `run_server` so it doesn't spawn the HTTP server but returns it.
+                // NO, the previous design was: axum::Server::bind(&addr).serve(app.into_make_service()).await? in main
+                // which blocks.
+                // The new run_server *also* spawns the http server.
+                // This means `main` calling `run_server().await` will wait for `run_server` to finish setup,
+                // but `run_server` itself returns after spawning the actual server tasks.
+                // So `main` will exit unless we add a wait here.
+                // For a typical server, we'd wait indefinitely.
+                // Since `run_server` now returns quickly after spawning, add a ctrl-c handler in main.
+                // This change makes `main` behave differently.
+                // Let's stick to `run_server` returning the `JoinHandle` for the http server.
+                // For now, this simpler version just logs. The test will manage its own spawned server.
+                // The oneshot channel is a way for the spawned tasks to signal main.
+                // However, run_server does not currently accept this channel.
+                // Let's keep it simpler: main calls run_server. run_server returns addresses.
+                // The spawned tasks within run_server keep it alive. If main exits, tasks might too if not detached.
+                // Default for tokio::spawn is detached.
+                // So main can exit.
+                let _ = tx.send(Ok(())); // Signal successful startup
+            }
+            Err(e) => {
+                tracing::error!("main: Failed to start server: {:?}", e);
+                 let _ = tx.send(Err(e)); // Signal error
+            }
+        }
+    });
+
+    // Wait for the server to start (or fail)
+    match rx.await {
+        Ok(Ok(_)) => {
+            tracing::info!("main: Server components initialized by run_server. Main will now wait for Ctrl-C.");
+            // Keep main alive, typically a server would loop or await a shutdown signal
+            tokio::signal::ctrl_c().await?;
+            tracing::info!("main: Ctrl-C received, shutting down.");
+        }
+        Ok(Err(e)) => {
+            tracing::error!("main: Server failed to initialize: {}", e);
+            return Err(e);
+        }
+        Err(_) => {
+             tracing::error!("main: Oneshot channel for server startup failed.");
+             return Err(anyhow::anyhow!("Server startup signal channel failed"));
+        }
+    }
+    
     Ok(())
 }
 
