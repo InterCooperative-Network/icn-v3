@@ -12,6 +12,13 @@ use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 use std::str::FromStr;
+use std::collections::HashMap;
+use chrono::Utc;
+use cid::Cid;
+use icn_identity::KeyPair as IcnKeyPair;
+use icn_types::mesh::MeshJob;
+use icn_types::main::JobStatus as StandardJobStatus;
+use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place};
 
 // Import the context module
 mod context;
@@ -982,4 +989,82 @@ mod tests {
         
         Ok(())
     }
+}
+
+/// Executes a MeshJob within the ICN runtime (currently stubbed).
+///
+/// This function simulates fetching and executing a WASM binary based on the
+/// provided MeshJob, measures fake resource usage, and constructs a signed
+/// ExecutionReceipt.
+pub async fn execute_mesh_job(
+    mesh_job: MeshJob,
+    local_keypair: &IcnKeyPair, // For signing the receipt
+    runtime_context: Option<Arc<RuntimeContext>>, // Placeholder for actual runtime context
+) -> Result<ExecutionReceipt, anyhow::Error> {
+    tracing::info!(
+        "[RuntimeExecute] Attempting to execute job_id: {}, wasm_cid: {}",
+        mesh_job.job_id,
+        mesh_job.params.wasm_cid
+    );
+
+    // 1. Placeholder for WASM Fetch
+    tracing::info!(
+        "[RuntimeExecute] STUB: Fetching WASM binary for CID: {}",
+        mesh_job.params.wasm_cid
+    );
+    // In a real scenario, this would involve IPFS/network calls or local cache access.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Simulate fetch delay
+
+    // 2. Placeholder for RuntimeContext usage
+    if let Some(ctx) = &runtime_context {
+        tracing::info!("[RuntimeExecute] STUB: RuntimeContext provided (id: {:?}). Actual use TBD.", ctx.id());
+        // Actual runtime might use this for host functions, environment setup, etc.
+    } else {
+        tracing::info!("[RuntimeExecute] STUB: No RuntimeContext provided. Using dummy/default behavior.");
+    }
+
+    // 3. Placeholder for WASM Execution
+    tracing::info!("[RuntimeExecute] STUB: Simulating WASM execution for job_id: {}...", mesh_job.job_id);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await; // Simulate execution delay
+    tracing::info!("[RuntimeExecute] STUB: WASM execution simulation finished for job_id: {}.", mesh_job.job_id);
+
+    // 4. Fake Resource Usage
+    let mut resource_usage_actual = HashMap::new();
+    resource_usage_actual.insert(ResourceType::Cpu, 100u64); // e.g., 100 millicores or abstract units
+    resource_usage_actual.insert(ResourceType::Memory, 64u64); // e.g., 64 MiB
+    resource_usage_actual.insert(ResourceType::NetworkOutbound, 1024u64); // e.g., 1KB
+    tracing::info!("[RuntimeExecute] STUB: Generated fake resource usage: {:?}", resource_usage_actual);
+
+    // 5. Construct ExecutionReceipt
+    let execution_start_time_unix = Utc::now().timestamp() - 1; // 1 second ago
+    let execution_end_time_dt = Utc::now();
+    let execution_end_time_unix = execution_end_time_dt.timestamp();
+
+    // Create a dummy CID string - ensure it's a valid format if Cid::try_from is used later
+    let dummy_cid_str = "bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+    let mut receipt = ExecutionReceipt {
+        job_id: mesh_job.job_id.clone(), // Assuming job_id in MeshJob is the correct IcnJobId (String)
+        executor: local_keypair.did.clone(),
+        status: StandardJobStatus::CompletedSuccess, // Assuming successful execution for the stub
+        result_data_cid: Some(dummy_cid_str.to_string()), // Placeholder
+        logs_cid: Some(dummy_cid_str.to_string()),       // Placeholder
+        resource_usage: resource_usage_actual,
+        execution_start_time: execution_start_time_unix as u64,
+        execution_end_time: execution_end_time_unix as u64,
+        execution_end_time_dt, // Store the DateTime<Utc> as well
+        signature: Vec::new(), // Will be filled by sign_receipt_in_place
+        coop_id: mesh_job.originator_org_scope.as_ref().and_then(|s| s.coop_id.clone()),
+        community_id: mesh_job.originator_org_scope.as_ref().and_then(|s| s.community_id.clone()),
+    };
+    tracing::info!("[RuntimeExecute] Constructed initial (unsigned) ExecutionReceipt for job_id: {}.", mesh_job.job_id);
+
+    // 6. Sign the Receipt
+    if let Err(e) = sign_receipt_in_place(&mut receipt, local_keypair) {
+        tracing::error!("[RuntimeExecute] Failed to sign ExecutionReceipt for job_id: {}: {:?}", mesh_job.job_id, e);
+        return Err(anyhow!("Failed to sign execution receipt: {}", e));
+    }
+    tracing::info!("[RuntimeExecute] Successfully signed ExecutionReceipt for job_id: {}.", mesh_job.job_id);
+
+    Ok(receipt)
 }
