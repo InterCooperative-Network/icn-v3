@@ -731,6 +731,40 @@ impl MeshNode {
         tracing::info!("[MeshNode] Attempting economic settlement for JobID: {}, Executor: {}, Receipt CID: {}",
                  job_id, receipt.executor, receipt.cid().map_or_else(|e| format!("Error: {}", e), |c| c.to_string()));
 
+        let actual_bid_price: u64;
+        {
+            let bids_map_guard = self.bids.read().unwrap_or_else(|e| {
+                tracing::error!("[MeshNode] Economic settlement failed for JobID {}: Failed to get read lock on bids map: {:?}", job_id, e);
+                // This will cause the function to effectively return due to panic from unwrap(), or we can return explicitly if preferred.
+                // For now, relying on unwrap()'s panic if poisoned.
+                // To avoid panic, one might return here or use a default/error state for actual_bid_price.
+                panic!("Bids RwLock poisoned"); // Or handle more gracefully
+            });
+
+            match bids_map_guard.get(job_id) {
+                Some(bids_for_job) => {
+                    if let Some(winning_bid) = bids_for_job.iter().find(|b| b.bidder == receipt.executor) {
+                        actual_bid_price = winning_bid.price;
+                        tracing::info!("[MeshNode] Found winning bid for JobID {}: Price = {}, Bidder = {}", 
+                                     job_id, actual_bid_price, receipt.executor);
+                    } else {
+                        tracing::warn!(
+                            "[MeshNode] Economic settlement failed for JobID {}: No bid found from executor {} in the stored bids.",
+                            job_id, receipt.executor
+                        );
+                        return;
+                    }
+                }
+                None => {
+                    tracing::warn!(
+                        "[MeshNode] Economic settlement failed for JobID {}: No bids found for this job in the bids map.",
+                        job_id
+                    );
+                    return;
+                }
+            }
+        } // Bids map guard is dropped here
+
         // TODO: BIDDING SYSTEM INTEGRATION REQUIRED FOR ACTUAL PRICE.
         // The current MOCK_BID_PRICE is a placeholder.
         // Once the bidding protocol (e.g., JobBidV1 message, Bid struct, and bid storage)
@@ -738,11 +772,11 @@ impl MeshNode {
         // 1. Retrieve all bids for the given `job_id`.
         // 2. Find the specific bid where `bid.bidder == receipt.executor`.
         // 3. Use `bid.price` (or equivalent field from the implemented Bid struct) for the transfer amount.
-        const MOCK_BID_PRICE: u64 = 100; 
-        tracing::warn!(
-            "[MeshNode] Using MOCK_BID_PRICE: {} for job {}. This is a placeholder until bidding system is implemented.",
-            MOCK_BID_PRICE, job_id
-        );
+        // const MOCK_BID_PRICE: u64 = 100; 
+        // tracing::warn!(
+        //     "[MeshNode] Using MOCK_BID_PRICE: {} for job {}. This is a placeholder until bidding system is implemented.",
+        //     MOCK_BID_PRICE, job_id
+        // );
 
         let originator_did_opt: Option<Did> = {
             let originated_jobs_guard = self.announced_originated_jobs.read().unwrap();
@@ -757,13 +791,13 @@ impl MeshNode {
         let executor_did = &receipt.executor;
 
         if originator_did == *executor_did {
-            tracing::info!("[MeshNode] Economic settlement skipped: Originator and executor are the same ({}). No payment needed.", originator_did);
+            tracing::info!("[MeshNode] Economic settlement skipped: Originator and executor are the same ({}). No payment needed for job {}.", originator_did, job_id);
             return;
         }
 
         if let Some(rt_ctx) = &self.local_runtime_context {
             tracing::info!("[MeshNode] Attempting to transfer {} ICN from {} to {} for job {}",
-                MOCK_BID_PRICE, originator_did, executor_did, job_id
+                actual_bid_price, originator_did, executor_did, job_id
             );
 
             let transfer_result = rt_ctx.economics.transfer_balance_direct(
@@ -774,7 +808,7 @@ impl MeshNode {
                 None,                 // to_ledger_scope_id
                 None,                 // to_key_scope
                 &icn_economics::ResourceType::Token("ICN".to_string()), // resource_type
-                MOCK_BID_PRICE,       // amount
+                actual_bid_price,       // amount - USE THE ACTUAL BID PRICE
                 &rt_ctx.resource_ledger,
                 &rt_ctx.transaction_log,
             ).await;
@@ -782,11 +816,11 @@ impl MeshNode {
             match transfer_result {
                 Ok(_) => {
                     tracing::info!("[MeshNode] Economic settlement SUCCESSFUL for JobID: {}. Transferred {} ICN from {} to {}.",
-                             job_id, MOCK_BID_PRICE, originator_did, executor_did);
+                             job_id, actual_bid_price, originator_did, executor_did);
                 }
                 Err(e) => {
-                    tracing::error!("[MeshNode] Economic settlement FAILED for JobID: {}. Error during transfer from {} to {}: {:?}",
-                              job_id, originator_did, executor_did, e);
+                    tracing::error!("[MeshNode] Economic settlement FAILED for JobID: {}. Error during transfer from {} to {} for amount {}: {:?}",
+                              job_id, originator_did, executor_did, actual_bid_price, e);
                 }
             }
         } else {
@@ -936,39 +970,76 @@ impl MeshNode {
                 
                 // Timer for selecting executors for originated jobs
                 _ = executor_selection_interval.tick() => {
-                    let jobs_to_assign: Vec<(IcnJobId, Did)> = {
-                        let originated_jobs = self.announced_originated_jobs.read().unwrap_or_else(|e| {
-                            eprintln!("Failed to get read lock on originated_jobs: {}", e);
-                            Default::default()
-                        });
-                        let interests = self.job_interests_received.read().unwrap_or_else(|e| {
-                            eprintln!("Failed to get read lock on job_interests: {}", e);
-                            Default::default()
-                        });
-                        
-                        let mut assignments = Vec::new();
-                        for (job_id, _job_details) in originated_jobs.iter() {
-                            // Simple selection: if we originated it and it has interests, pick the first interested party.
-                            // And ensure we haven't already assigned it (needs better state tracking for assigned jobs).
-                            // This is a placeholder for more sophisticated selection logic.
-                            if let Some(interested_dids) = interests.get(job_id) {
-                                if !interested_dids.is_empty() {
-                                    // TODO: Add logic to ensure a job isn't assigned multiple times.
-                                    // This might involve checking job_details.status or a separate tracking map.
-                                    println!("Job {} has {} interested parties. Selecting first one.", job_id, interested_dids.len());
-                                    assignments.push((job_id.clone(), interested_dids[0].clone()));
+                    let mut assignments_to_make: Vec<(IcnJobId, Did, MeshJob)> = Vec::new();
+                    let originated_jobs_guard = self.announced_originated_jobs.read().unwrap_or_else(|e| {
+                        tracing::error!("[BidSelection] Failed to get read lock on announced_originated_jobs: {}", e);
+                        // Return a Ref<'_, HashMap<...>> to an empty map or handle error appropriately
+                        // For now, this might panic if the lock is poisoned. A better approach might be:
+                        // if let Ok(guard) = self.announced_originated_jobs.read() { guard } else { return; /* or empty map */ }
+                        panic!("announced_originated_jobs RwLock poisoned"); // Or handle gracefully
+                    });
+                    let assigned_by_originator_guard = self.assigned_by_originator.read().unwrap_or_else(|e| {
+                        tracing::error!("[BidSelection] Failed to get read lock on assigned_by_originator: {}", e);
+                        panic!("assigned_by_originator RwLock poisoned"); // Or handle gracefully
+                    });
+                    let bids_map_guard = self.bids.read().unwrap_or_else(|e| {
+                        tracing::error!("[BidSelection] Failed to get read lock on bids map: {}", e);
+                        panic!("bids RwLock poisoned"); // Or handle gracefully
+                    });
+
+                    for (job_id, (_manifest, mesh_job_details)) in originated_jobs_guard.iter() {
+                        if assigned_by_originator_guard.contains(job_id) {
+                            tracing::trace!("[BidSelection] Job {} already assigned by originator. Skipping selection.", job_id);
+                            continue;
+                        }
+
+                        if let Some(bids_for_job) = bids_map_guard.get(job_id) {
+                            if bids_for_job.is_empty() {
+                                tracing::debug!("[BidSelection] No bids received yet for job {}. Skipping selection.", job_id);
+                                continue;
+                            }
+
+                            // Select the bid with the minimum price
+                            if let Some(winning_bid) = bids_for_job.iter().min_by_key(|b| b.price) {
+                                tracing::info!(
+                                    "[BidSelection] Winning bid for job {}: Price = {}, Bidder = {}. Assigning job.",
+                                    job_id, winning_bid.price, winning_bid.bidder
+                                );
+                                assignments_to_make.push((
+                                    job_id.clone(),
+                                    winning_bid.bidder.clone(),
+                                    mesh_job_details.clone(),
+                                ));
+                            } else {
+                                // This case should technically not be reached if bids_for_job is not empty.
+                                tracing::debug!("[BidSelection] No winning bid could be determined for job {} (e.g., empty bid list after filtering, though filter not applied here).", job_id);
+                            }
+                        } else {
+                            tracing::debug!("[BidSelection] No bids found in map for job {}. Skipping selection.", job_id);
+                        }
+                    }
+                    // Release read locks explicitly before making assignments (which might involve `&mut self` or further locks)
+                    drop(originated_jobs_guard);
+                    drop(assigned_by_originator_guard);
+                    drop(bids_map_guard);
+
+                    for (job_id, selected_executor_did, job_to_assign) in assignments_to_make {
+                        match self.assign_job_to_executor(&job_id, selected_executor_did.clone(), job_to_assign, self.local_node_did.clone()).await {
+                            Ok(_) => {
+                                tracing::info!("[BidSelection] Successfully published AssignJobV1 for job {} to executor {}. Marking as assigned.", job_id, selected_executor_did);
+                                if let Ok(mut assigned_set) = self.assigned_by_originator.write() {
+                                    assigned_set.insert(job_id.clone());
+                                } else {
+                                    tracing::error!("[BidSelection] Failed to get write lock for assigned_by_originator to mark job {} as assigned.", job_id);
                                 }
                             }
-                        }
-                        assignments
-                    };
-
-                    for (job_id, executor_did) in jobs_to_assign {
-                         // Before assigning, we should lock `announced_originated_jobs` and update its status
-                         // or use another mechanism to prevent re-assignment.
-                         // For this example, we proceed directly.
-                        if let Err(e) = self.assign_job_to_executor(&job_id, executor_did.clone(), job_details.clone(), self.local_node_did.clone()).await {
-                            eprintln!("Failed to assign job {} to {}: {:?}", job_id, executor_did, e);
+                            Err(e) => {
+                                tracing::error!(
+                                    "[BidSelection] Failed to assign job {} to executor {}: {:?}. Job will be reconsidered later.",
+                                    job_id, selected_executor_did, e
+                                );
+                                // Do not add to assigned_by_originator, so it can be retried.
+                            }
                         }
                     }
                 }
