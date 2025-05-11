@@ -893,16 +893,35 @@ impl MeshNode {
             signature: None, // TODO: Consider signing this record with self.local_keypair if needed by reputation system
         };
 
+        // Sign the record
+        let signed_record = match get_reputation_record_signing_payload(&record) {
+            Ok(payload_bytes) => {
+                let signature = self.local_keypair.sign(&payload_bytes);
+                ReputationRecord {
+                    signature: Some(signature),
+                    ..record // Use struct update syntax to copy other fields from the original record
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "[MeshNode] Failed to serialize ReputationRecord for signing (JobID: {}): {:?}. Submitting unsigned.",
+                    job_id_str, e
+                );
+                record // Submit the original, unsigned record
+            }
+        };
+
         if let Some(base_url) = &self.reputation_service_url {
             let client = &self.http_client;
             let url = format!("{}/reputation/records", base_url.trim_end_matches('/'));
 
             tracing::info!(
-                "[MeshNode] Submitting ReputationRecord for JobID: {} to URL: {}",
+                "[MeshNode] Submitting {}ReputationRecord for JobID: {} to URL: {}",
+                if signed_record.signature.is_some() { "SIGNED " } else { "UNSIGNED " },
                 job_id_str, url
             );
 
-            match client.post(&url).json(&record).send().await {
+            match client.post(&url).json(&signed_record).send().await { // Submit the signed_record
                 Ok(response) => {
                     if response.status().is_success() || response.status() == reqwest::StatusCode::CREATED {
                         tracing::info!(
@@ -1502,4 +1521,19 @@ impl MeshNode {
     // This is a simplified clone; a real one might need more careful consideration of what needs to be Arc<Mutex/RwLock<T>> vs what can be cloned directly.
     // For MeshNode methods that take `&self` or `&mut self` and are called from spawned tasks, `self` needs to be Arc-wrapped.
     // However, our `
+}
+
+// Helper function to get the canonical CBOR payload for signing a ReputationRecord
+// This ensures that the signature is over a stable representation of the record's content.
+fn get_reputation_record_signing_payload(record: &ReputationRecord) -> Result<Vec<u8>, serde_cbor::Error> {
+    // Create a temporary record with signature explicitly set to None for serialization
+    let record_for_signing = ReputationRecord {
+        timestamp: record.timestamp,
+        issuer: record.issuer.clone(),
+        subject: record.subject.clone(),
+        event: record.event.clone(),
+        anchor: record.anchor,
+        signature: None, // Crucial: signature field must be None (or excluded) when serializing for signing
+    };
+    serde_cbor::to_vec(&record_for_signing)
 }
