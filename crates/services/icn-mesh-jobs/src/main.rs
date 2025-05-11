@@ -34,7 +34,7 @@ use sqlite_store::SqliteStore; // Import the SqliteStore struct
 mod reputation_client;
 mod bid_logic;
 mod job_assignment; // Added module
-use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector}; // Added import
+use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector, GovernedExecutorSelector, ExecutionPolicy}; // Updated import
 
 enum AppError {
     Internal(anyhow::Error),
@@ -305,27 +305,47 @@ async fn assign_best_bid_handler(
         return Err(AppError::NotFound(format!("No bids found for job {}", job_id_str)));
     }
 
-    // 4. Score bids and select the best one using ExecutorSelector
-    // Define weights (could come from config or job request later)
-    const DEFAULT_REP_WEIGHT: f64 = 0.7;
-    const DEFAULT_PRICE_WEIGHT: f64 = 0.3;
+    // 4. Dynamic selector choice based on policy presence (mocked via job_request.metadata)
+    let selector: Box<dyn ExecutorSelector> = {
+        // Mock example: Assume policy could be derived from job metadata.
+        // This assumes job_request has a field like `metadata: Option<std::collections::HashMap<String, String>>`
+        // or that JobRequest from icn_types::jobs::JobRequest can be interpreted as such.
+        let use_governed_policy = job_request.metadata.as_ref() // Check if metadata exists
+            .and_then(|meta| meta.get("selector"))          // Get "selector" value
+            .map_or(false, |val| val == "governed");        // Check if it's "governed"
 
-    let selector = DefaultExecutorSelector::new(DEFAULT_REP_WEIGHT, DEFAULT_PRICE_WEIGHT);
+        if use_governed_policy {
+            let metadata_map = job_request.metadata.as_ref().unwrap(); // Safe due to check above
+            let policy = ExecutionPolicy {
+                rep_weight: metadata_map.get("rep_weight").and_then(|s| s.parse().ok()).unwrap_or(0.7),
+                price_weight: metadata_map.get("price_weight").and_then(|s| s.parse().ok()).unwrap_or(0.3),
+                region_filter: metadata_map.get("region_filter").cloned(),
+                min_reputation: metadata_map.get("min_reputation").and_then(|s| s.parse().ok()),
+            };
+            tracing::info!(policy = ?policy, "Using GovernedExecutorSelector for job {}", job_id_str);
+            Box::new(GovernedExecutorSelector { policy })
+        } else {
+            tracing::info!("Using DefaultExecutorSelector for job {}", job_id_str);
+            // Using hardcoded weights as per user's example for the default case here.
+            // Previously these were constants: const DEFAULT_REP_WEIGHT: f64 = 0.7; const DEFAULT_PRICE_WEIGHT: f64 = 0.3;
+            Box::new(DefaultExecutorSelector::new(0.7, 0.3))
+        }
+    };
     
     let (best_bid, winning_score) = selector
         .select(&job_request, &bids)?
         .ok_or_else(|| {
-            tracing::warn!(job_id = %job_id_str, "No suitable bids found after scoring (selector returned None or only non-positive scores)");
+            // Retaining more informative error message
+            tracing::warn!(job_id = %job_id_str, "No suitable bids found after scoring (selector returned None)");
             AppError::NotFound(format!("No suitable bids found for job {} after scoring", job_id_str))
         })?;
 
     let winning_bid_id = best_bid.id.ok_or_else(|| { 
         tracing::error!(job_id = %job_id_str, "Winning bid selected but has no ID (this should not happen if bid came from store)");
-        AppError::Internal(anyhow::anyhow!("Selected winning bid is missing its ID"))
+        AppError::Internal(anyhow::anyhow!("Selected winning bid is missing its ID for job {}", job_id_str))
     })?;
 
     // 5. Call the updated store.assign_job method
-    // The sqlite_store.assign_job expects winning_bid_id (i64) and winning_bidder_did (Did)
     store.assign_job(&job_id, winning_bid_id, best_bid.bidder.clone()).await?;
 
     tracing::info!(
@@ -339,7 +359,7 @@ async fn assign_best_bid_handler(
     Ok(Json(AssignJobResponse {
         message: "Job assigned successfully".to_string(),
         job_id: job_id_str,
-        assigned_bidder_did: best_bid.bidder.0.clone(), // Bid is cloned, so its fields are owned
+        assigned_bidder_did: best_bid.bidder.0.clone(),
         winning_bid_id,
         winning_score,
     }))
