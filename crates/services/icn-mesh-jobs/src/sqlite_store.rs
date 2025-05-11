@@ -13,6 +13,8 @@ use anyhow::Result; // For internal helper functions
 use sqlx::QueryBuilder;
 use std::str::FromStr; // Required for Cid::from_str if that's how try_from is implemented for String
 use serde_json; // Ensure this is imported
+use icn_identity::Did; // Ensure Did is imported
+use sqlx::Acquire; // For transactions
 
 // Assuming AppError is defined in lib.rs or a common error module for the crate
 // and has From implementations for anyhow::Error, sqlx::Error, serde_json::Error
@@ -53,6 +55,18 @@ impl SqliteStore {
             bid_broadcasters: RwLock::new(HashMap::new()),
         }
     }
+}
+
+// Helper struct for fetching bid rows
+#[derive(sqlx::FromRow, Debug)]
+struct DbBidRow {
+    id: i64, // Already fetching the ID
+    job_id: String, // Stored as TEXT, will be parsed to Cid
+    bidder_did: String, // Stored as TEXT, will be parsed to Did
+    price: i64, // Stored as INTEGER, will be converted to u64 (TokenAmount)
+    estimate_json: String, // Stored as TEXT, will be deserialized to ResourceEstimate
+    reputation_score: Option<f64>, // Stored as REAL
+    // status: String, // If/when you add status to bids table
 }
 
 #[async_trait]
@@ -347,57 +361,54 @@ impl MeshJobStore for SqliteStore {
         Ok(())
     }
 
-    async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>, AppError> {
-        let job_id_str = job_id.to_string();
+    async fn list_bids(&self, job_id_param: &Cid) -> Result<Vec<Bid>, AppError> {
+        let job_id_str = job_id_param.to_string();
+        tracing::debug!(job_id = %job_id_str, "Listing bids for job");
 
-        #[derive(sqlx::FromRow)]
-        struct DbBidRow {
-            // job_id_from_db: String, // Renaming to avoid confusion with the Cid::try_from source
-            bidder_did: String,
-            price: i64, // SQLite INTEGER typically maps to i64
-            estimate_json: String,
-            reputation_score: Option<f64>,
-            // We also need job_id column from bids table to construct the Bid struct if it differs, but usually it's the same one we query by.
-            // Let's select it to be explicit, even if it's the same as job_id_str.
-            // The Bid struct requires job_id: Cid.
-            job_id_col: String, // Naming it job_id_col to make it clear it's from the column
-        }
-
-        let rows = sqlx::query_as!(
+        let bid_rows = sqlx::query_as!(
             DbBidRow,
             r#"
-            SELECT job_id as job_id_col, bidder_did, price, estimate_json, reputation_score
+            SELECT id, job_id, bidder_did, price, estimate_json, reputation_score
             FROM bids
             WHERE job_id = $1
+            ORDER BY submitted_at ASC
             "#,
             job_id_str
         )
         .fetch_all(&*self.pool)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch bids from database: {}", e)))?;
+        .map_err(|e| {
+            tracing::error!(job_id = %job_id_str, "Failed to fetch bids from DB: {:?}", e);
+            AppError::Internal(anyhow::Error::new(e).context("Failed to fetch bids from database"))
+        })?;
 
         let mut bids = Vec::new();
-        for row in rows {
-            let bid_job_id = Cid::try_from(row.job_id_col.as_str())
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse bid's job_id as Cid: {} for job_id {}", e, row.job_id_col)))?;
-            
-            let estimate: ResourceEstimate = serde_json::from_str(&row.estimate_json)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize bid estimate: {}", e)))?;
+        for row in bid_rows {
+            let job_id = Cid::try_from(row.job_id.as_str()).map_err(|e| {
+                tracing::error!("Failed to parse job_id CID from DB: {}", e);
+                AppError::Internal(anyhow::Error::new(e).context("Failed to parse job_id CID from database row"))
+            })?;
 
-            // Ensure price is non-negative before converting to u64
+            let estimate: ResourceEstimate = serde_json::from_str(&row.estimate_json).map_err(|e| {
+                tracing::error!("Failed to deserialize ResourceEstimate from DB: {}", e);
+                AppError::Internal(anyhow::Error::new(e).context("Failed to deserialize ResourceEstimate from database row"))
+            })?;
+
             if row.price < 0 {
-                return Err(AppError::Internal(anyhow::anyhow!("Invalid negative price found in database for bid by {} on job {}", row.bidder_did, bid_job_id)));
+                tracing::error!("Fetched bid with negative price: {}", row.price);
+                return Err(AppError::Internal(anyhow::anyhow!("Fetched bid with negative price from database")));
             }
 
             bids.push(Bid {
-                job_id: bid_job_id,
+                id: Some(row.id), // <-- POPULATE THE ID FIELD
+                job_id,
                 bidder: icn_identity::Did(row.bidder_did),
                 price: row.price as u64, // TokenAmount is u64
                 estimate,
                 reputation_score: row.reputation_score,
             });
         }
-
+        tracing::debug!(job_id = %job_id_str, count = bids.len(), "Successfully listed bids");
         Ok(bids)
     }
 
@@ -411,27 +422,124 @@ impl MeshJobStore for SqliteStore {
         Ok(Some(sender.subscribe()))
     }
 
-    async fn assign_job(&self, job_id: &Cid, bidder_did: icn_identity::Did) -> Result<(), AppError> {
-        // 1. Fetch the job and check its current status
-        let (_job_request, current_status) = self.get_job(job_id).await?
-            .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
+    async fn assign_job(
+        &self,
+        job_id_param: &Cid,
+        winning_bid_id: i64, // ID of the winning bid
+        winning_bidder_did: Did, // DID of the winning bidder
+    ) -> Result<(), AppError> {
+        let job_id_str = job_id_param.to_string();
+        let winning_bidder_did_str = winning_bidder_did.0; // Get the String from Did
 
-        // 2. Validate that the job can be assigned
-        match current_status {
-            JobStatus::Pending | JobStatus::Bidding => {
-                // Proceed to update status
-            }
-            _ => {
-                return Err(AppError::BadRequest(format!(
-                    "Job {} is in status {:?} and cannot be assigned.",
-                    job_id,
-                    current_status
-                )));
-            }
+        tracing::info!(
+            job_id = %job_id_str,
+            winning_bid_id = winning_bid_id,
+            winning_bidder_did = %winning_bidder_did_str,
+            "Attempting to assign job"
+        );
+
+        // Start a database transaction
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            tracing::error!("Failed to begin database transaction: {:?}", e);
+            AppError::Internal(anyhow::Error::new(e).context("Failed to begin database transaction"))
+        })?;
+
+        // 1. Update the jobs table: set status to Assigned, store winning_bidder_did and winning_bid_id
+        let update_job_result = sqlx::query!(
+            r#"
+            UPDATE jobs
+            SET status_type = 'Assigned',
+                status_did = $1,
+                winning_bid_id = $2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE job_cid = $3 AND (status_type = 'Pending' OR status_type = 'Bidding')
+            "#,
+            winning_bidder_did_str, // $1
+            winning_bid_id,         // $2
+            job_id_str              // $3
+        )
+        .execute(&mut *tx) // Use &mut *tx for executing queries within a transaction
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update job status to Assigned in DB: {:?}", e);
+            AppError::Internal(anyhow::Error::new(e).context("Failed to update job to Assigned"))
+        })?;
+
+        if update_job_result.rows_affected() == 0 {
+            tracing::warn!(
+                job_id = %job_id_str,
+                "Failed to assign job: either job not found or not in Pending/Bidding state"
+            );
+            // Rollback transaction before returning error
+            tx.rollback().await.map_err(|e_rb| AppError::Internal(anyhow::Error::new(e_rb).context("Failed to rollback transaction after job assignment failure")))?;
+            return Err(AppError::NotFound(format!(
+                "Job with ID {} not found or not in a state that can be assigned (Pending/Bidding)",
+                job_id_str
+            )));
         }
 
-        // 3. Update the job status to Assigned
-        self.update_job_status(job_id, JobStatus::Assigned { bidder: bidder_did }).await
+        // 2. Update the winning bid's status to 'Won'
+        let update_winning_bid_result = sqlx::query!(
+            r#"
+            UPDATE bids
+            SET status = 'Won',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND job_cid = $2
+            "#,
+            winning_bid_id, // $1
+            job_id_str      // $2
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update winning bid status in DB: {:?}", e);
+            AppError::Internal(anyhow::Error::new(e).context("Failed to update winning bid status"))
+        })?;
+
+        if update_winning_bid_result.rows_affected() == 0 {
+             tracing::warn!(
+                job_id = %job_id_str,
+                winning_bid_id = winning_bid_id,
+                "Failed to mark bid as Won: winning bid not found or does not belong to the job"
+            );
+            tx.rollback().await.map_err(|e_rb| AppError::Internal(anyhow::Error::new(e_rb).context("Failed to rollback transaction after winning bid update failure")))?;
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "Failed to mark winning bid {} for job {} as Won", winning_bid_id, job_id_str
+            )));
+        }
+
+
+        // 3. Update all other bids for this job to 'Lost'
+        sqlx::query!(
+            r#"
+            UPDATE bids
+            SET status = 'Lost',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE job_cid = $1 AND id != $2 AND status = 'Pending' -- Only update other 'Pending' bids
+            "#,
+            job_id_str,     // $1
+            winning_bid_id  // $2
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update other bids to Lost in DB: {:?}", e);
+            AppError::Internal(anyhow::Error::new(e).context("Failed to update other bids to Lost"))
+        })?;
+        // Note: rows_affected for this query can be 0 if there are no other pending bids, which is fine.
+
+        // Commit the transaction
+        tx.commit().await.map_err(|e| {
+            tracing::error!("Failed to commit database transaction: {:?}", e);
+            AppError::Internal(anyhow::Error::new(e).context("Failed to commit database transaction"))
+        })?;
+
+        tracing::info!(
+            job_id = %job_id_str,
+            winning_bid_id = winning_bid_id,
+            "Job successfully assigned"
+        );
+        Ok(())
     }
 
     async fn list_jobs_for_worker(&self, worker_did: &icn_identity::Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>, AppError> {

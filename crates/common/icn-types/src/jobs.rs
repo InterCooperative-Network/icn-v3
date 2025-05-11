@@ -40,6 +40,8 @@ pub struct ResourceEstimate {
 // consider using a wrapper for f64 (e.g., ordered_float::NotNan) or representing the score differently.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] // Removed Eq, Hash
 pub struct Bid {
+    #[serde(skip_serializing_if = "Option::is_none")] // Don't serialize if None (e.g., before DB insert)
+    pub id: Option<i64>, // <-- NEW FIELD: Database ID of the bid
     pub job_id: Cid, // Assuming JobRequest itself will be a CID or have an ID that is a CID
     pub bidder: Did,
     pub price: TokenAmount,
