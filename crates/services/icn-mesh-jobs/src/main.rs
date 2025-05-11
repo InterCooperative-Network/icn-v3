@@ -9,8 +9,9 @@ use axum::{
 use cid::Cid;
 use futures::{stream::StreamExt, SinkExt};
 use icn_identity::Did;
-use icn_types::jobs::{Bid, JobRequest, JobStatus, ResourceEstimate, ResourceRequirements};
+use icn_types::jobs::{Bid, JobRequest, JobStatus, ResourceEstimate};
 use icn_types::reputation::{ReputationRecord, ReputationUpdateEvent, ReputationProfile};
+use icn_types::mesh::MeshJobParams;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
@@ -19,6 +20,8 @@ use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
 use tracing_subscriber;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
+use multihash::{Code, Multihash};
 
 // Added for SqliteStore integration
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
@@ -109,6 +112,38 @@ struct AssignJobResponse {
     winning_score: f64,
 }
 
+/// Payload expected for creating a new job.
+#[derive(Deserialize)]
+struct CreateJobApiPayload {
+    params: MeshJobParams,
+    originator_did: Did,
+}
+
+/// Internal struct for deterministic CID generation of a job.
+#[derive(Serialize)]
+struct JobCidInput<'a> {
+    params: &'a MeshJobParams,
+    originator_did: &'a Did,
+}
+
+/// Generates a deterministic CID for a job based on its parameters and originator.
+fn generate_job_cid_from_payload(
+    params: &MeshJobParams,
+    originator_did: &Did,
+) -> Result<Cid, AppError> {
+    let cid_input = JobCidInput { params, originator_did };
+    let bytes = serde_json::to_vec(&cid_input)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize job data for CID generation: {}", e)))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let hash_bytes = hasher.finalize();
+    // Using SHA2-256 multihash code (0x12)
+    let multihash = Multihash::new(Code::Sha2_256.into(), &hash_bytes)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create multihash for CID generation: {}", e)))?;
+    // Using DAG-CBOR codec (0x71) for the CID, common for IPLD structured data.
+    Ok(Cid::new_v1(cid:: известных_кодеков::DAG_CBOR, multihash))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
@@ -171,13 +206,30 @@ async fn main() -> anyhow::Result<()> {
 
 async fn create_job(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
-    AxumJson(req): AxumJson<JobRequest>,
+    AxumJson(payload): AxumJson<CreateJobApiPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    match store.insert_job(req).await {
-        Ok(job_cid) => Ok((StatusCode::CREATED, AxumJson(json!({ "job_id": job_cid.to_string() })))),
+    // 1. Generate the Job ID (CID)
+    let job_id = generate_job_cid_from_payload(&payload.params, &payload.originator_did)?;
+
+    // 2. Construct the JobRequest for storage
+    let job_request_to_store = JobRequest {
+        id: job_id,
+        params: payload.params,
+        originator_did: payload.originator_did,
+    };
+
+    // 3. Insert into the store
+    match store.insert_job(job_request_to_store).await {
+        Ok(returned_job_cid) => {
+            // The store.insert_job now returns the CID that was part of the input JobRequest
+            // So, returned_job_cid should be the same as job_id generated above.
+            // We can add an assertion here for safety during development if desired.
+            // assert_eq!(job_id, returned_job_cid, "Mismatch between generated CID and stored CID");
+            Ok((StatusCode::CREATED, AxumJson(json!({ "job_id": returned_job_cid.to_string() }))))
+        }
         Err(e) => {
             tracing::error!("Failed to create job: {}", e);
-            Err(AppError::Internal(e))
+            Err(AppError::Internal(e)) // Assuming AppError has a From<anyhow::Error>
         }
     }
 }
