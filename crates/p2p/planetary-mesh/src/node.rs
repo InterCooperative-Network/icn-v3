@@ -1,9 +1,9 @@
 use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC};
 use crate::protocol::{MeshProtocolMessage, NodeCapability};
 use futures::StreamExt;
-use icn_identity::{Did, KeyPair};
+use icn_identity::{Did, KeyPair as IcnKeyPair};
 use libp2p::gossipsub::IdentTopic as Topic;
-use libp2p::identity;
+use libp2p::identity::{Keypair as Libp2pKeypair, ed25519::SecretKey as Libp2pSecretKey};
 use libp2p::swarm::{Swarm, SwarmEvent};
 use libp2p::{PeerId, Transport};
 use std::collections::{HashMap, VecDeque};
@@ -27,11 +27,12 @@ fn job_interest_topic_string(job_id: &IcnJobId) -> String {
     format!("/icn/mesh/jobs/{}/interest/v1", job_id)
 }
 
+#[derive(Clone)]
 pub struct MeshNode {
     swarm: Swarm<MeshBehaviour>,
     local_peer_id: PeerId,
     local_node_did: Did,
-    local_keypair: KeyPair, // Store keypair for signing receipts
+    local_keypair: IcnKeyPair, // Store keypair for signing receipts
     capability_gossip_topic: Topic,
     job_announcement_topic: Topic,
     pub available_jobs_on_mesh: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
@@ -49,32 +50,21 @@ pub struct MeshNode {
 
 impl MeshNode {
     pub async fn new(
-        node_did_str: String,
-        keypair_opt: Option<identity::Keypair>,
+        identity_keypair: IcnKeyPair, // Primary identity keypair
         listen_addr_opt: Option<String>,
         runtime_job_queue: Arc<Mutex<VecDeque<MeshJob>>>,
-        local_runtime_context: Option<Arc<RuntimeContext>>, // New param for local runtime access
+        local_runtime_context: Option<Arc<RuntimeContext>>,
     ) -> Result<Self, Box<dyn Error>> {
-        let p2p_keypair = keypair_opt.unwrap_or_else(identity::Keypair::generate_ed25519);
-        // We need icn_identity::KeyPair for signing receipts, assume conversion or separate provision
-        // For now, let's generate a new one if not perfectly convertible or store p2p_keypair if it is.
-        // This needs clarification based on KeyPair types. Assuming p2p_keypair can be cloned into icn_identity::KeyPair or similar
-        // For the purpose of this example, let's assume KeyPair::from_libp2p_keypair(&p2p_keypair) exists or is handled.
-        // To make it runnable, let's use the node_did_str to re-derive/create a consistent KeyPair if possible or require it.
-        // Simplified: using a newly generated KeyPair for icn_identity for now. In reality, this must be THE node's identity key.
-        let node_identity_keypair = KeyPair::from_seed(&p2p_keypair.clone().try_into_ed25519().unwrap().to_bytes()[0..32])?;
+        
+        // Derive libp2p keypair from the icn_identity::KeyPair secret key bytes
+        // This assumes icn_identity::KeyPair's secret key part can be exposed or converted to a compatible format.
+        // ed25519_dalek::SigningKey has to_bytes() -> [u8; 32], which is a seed.
+        // libp2p ed25519 SecretKey can be from_bytes (seed).
+        let libp2p_secret_key = Libp2pSecretKey::from_bytes(identity_keypair.to_bytes())?;
+        let p2p_keypair = Libp2pKeypair::Ed25519(libp2p_secret_key.into());
         
         let local_peer_id = PeerId::from(p2p_keypair.public());
-        let parsed_did = Did::parse(&node_did_str)?;
-
-        // Ensure the DID derived from the keypair matches the provided node_did_str if they are meant to be the same entity
-        if parsed_did != node_identity_keypair.did {
-            // This is a critical mismatch. For now, we'll log an error and proceed with the keypair's DID
-            // for internal consistency in signing, but this indicates a configuration issue.
-            eprintln!("Warning: Provided node_did_str '{}' does not match DID derived from keypair '{}'. Using keypair's DID for node identity.", parsed_did, node_identity_keypair.did);
-        }
-        let local_node_did_for_ops = node_identity_keypair.did.clone();
-
+        let local_node_did_for_ops = identity_keypair.did.clone();
 
         println!("Local Peer ID: {}", local_peer_id);
         println!("Local Node DID for operations: {}", local_node_did_for_ops);
@@ -91,8 +81,8 @@ impl MeshNode {
         Ok(Self {
             swarm,
             local_peer_id,
-            local_node_did: local_node_did_for_ops, // Use the DID from the keypair that will sign
-            local_keypair: node_identity_keypair, // Store the KeyPair for signing
+            local_node_did: local_node_did_for_ops,
+            local_keypair: identity_keypair,
             capability_gossip_topic: Topic::new(CAPABILITY_TOPIC),
             job_announcement_topic: Topic::new(JOB_ANNOUNCEMENT_TOPIC),
             available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
@@ -282,8 +272,8 @@ impl MeshNode {
             execution_end_time,
             execution_end_time_dt,
             signature: Vec::new(), // Will be filled by sign_receipt_in_place
-            coop_id: job.params.coop_id.clone(), // Propagate from MeshJobParams if present
-            community_id: job.params.community_id.clone(), // Propagate from MeshJobParams if present
+            coop_id: job.originator_org_scope.as_ref().and_then(|s| s.coop_id.clone()),
+            community_id: job.originator_org_scope.as_ref().and_then(|s| s.community_id.clone()),
         };
 
         // Sign the receipt
@@ -546,20 +536,6 @@ impl MeshNode {
         // The KeyPair also needs to be Clone.
         self.clone()
     }
-}
-
-// MeshNode needs to be Clone for the async task spawning pattern used.
-// This is generally okay if the fields are Arcs or themselves Clone.
-// KeyPair needs to implement Clone.
-#[derive(Clone)] // Add derive Clone here
-struct MeshNodeInternalState { // Example if we needed to extract parts for cloning, but direct clone of MeshNode is simpler if KeyPair is Clone
-    local_node_did: Did,
-    local_keypair: KeyPair,
-    available_jobs_on_mesh: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
-    executing_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
-    completed_job_receipt_cids: Arc<RwLock<HashMap<IcnJobId, Cid>>>,
-    runtime_context: Option<Arc<RuntimeContext>>,
-    // ... potentially swarm interaction components if methods on them were called directly, but they are on self.swarm currently.
 }
 
 // Added helper for MeshProtocolMessage to get a name string for logging

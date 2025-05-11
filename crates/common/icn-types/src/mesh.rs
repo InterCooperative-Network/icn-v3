@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use icn_economics::ResourceType;
 use icn_identity::Did; // Assuming Did is available from icn_identity
+use crate::org::{CooperativeId, CommunityId}; // Assuming these are in icn_types::org
 
 /// Quality of Service profile for a Mesh Job
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,6 +33,13 @@ pub struct MeshJobParams {
     pub max_acceptable_bid_tokens: Option<u64>,
 }
 
+/// Represents an organizational scope for a job or receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct OrgScopeIdentifier {
+    pub coop_id: Option<CooperativeId>,
+    pub community_id: Option<CommunityId>,
+}
+
 /// Represents a mesh computation job within the ICN system.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshJob {
@@ -42,6 +50,8 @@ pub struct MeshJob {
     pub params: MeshJobParams,
     /// DID of the entity that originated/submitted the job.
     pub originator_did: Did,
+    /// Optional organizational scope associated with the job's originator or context.
+    pub originator_org_scope: Option<OrgScopeIdentifier>,
     /// Timestamp of when the job was submitted to the ICN, as a Unix timestamp (seconds since epoch).
     pub submission_timestamp: u64,
 }
