@@ -1,5 +1,5 @@
 use ed25519_dalek::Keypair;
-use icn_identity_core::{did_key_from_pk, pk_from_did_key};
+use icn_identity::did::{did_key_from_pk, pk_from_did_key};
 use rand::rngs::OsRng;
 
 fn main() {

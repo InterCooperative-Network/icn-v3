@@ -2,8 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use wasmtime::{Module, Caller, Engine, Instance, Linker, Store, TypedFunc, Val, Trap};
-#[cfg(feature = "legacy-identity")]
-use icn_identity_core::vc::{ExecutionMetrics as VcExecutionMetrics, ExecutionReceiptCredential};
+use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
 use icn_identity::{TrustBundle, TrustValidationError, Did};
 use icn_economics::ResourceType;
 use ed25519_dalek::VerifyingKey;
@@ -574,50 +573,47 @@ impl Runtime {
     }
 
     /// Issue an execution receipt after successful execution
-    #[cfg(feature = "legacy-identity")]
     pub fn issue_receipt(
         &self,
         wasm_cid: &str,
         ccl_cid: &str,
         result: &ExecutionResult,
         context: &VmContext,
-    ) -> Result<ExecutionReceiptCredential> {
+    ) -> Result<RuntimeExecutionReceipt> {
         // Convert ExecutionMetrics to VC ExecutionMetrics
-        let vc_metrics = VcExecutionMetrics {
+        let vc_metrics = RuntimeExecutionMetrics {
             fuel_used: result.metrics.fuel_used,
             host_calls: result.metrics.host_calls,
             io_bytes: result.metrics.io_bytes,
         };
 
-        // Create a unique ID for the receipt
-        let receipt_id = format!("urn:icn:receipt:{}", Uuid::new_v4());
+        let receipt_id = Uuid::new_v4().to_string();
 
-        // Create the execution receipt
-        let receipt = ExecutionReceiptCredential::new(
-            receipt_id,
-            context.executor_did.clone(),           // issuer
-            format!("proposal-{}", Uuid::new_v4()), // placeholder proposal ID
-            wasm_cid.to_string(),
-            ccl_cid.to_string(),
-            vc_metrics,
-            result.anchored_cids.clone(),
-            result.resource_usage.clone(),
-            chrono::Utc::now().timestamp_millis() as u64,
-            None, // dag_epoch
-            None, // receipt_cid
-            None, // signature
-        );
+        let receipt = RuntimeExecutionReceipt {
+            id: receipt_id,
+            issuer: context.executor_did.clone(),
+            proposal_id: context.code_cid.clone().unwrap_or_default(),
+            wasm_cid: wasm_cid.to_string(),
+            ccl_cid: ccl_cid.to_string(),
+            metrics: vc_metrics,
+            anchored_cids: result.anchored_cids.clone(),
+            resource_usage: result.resource_usage.clone(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| RuntimeError::ReceiptError(e.to_string()))?
+                .as_secs(),
+            dag_epoch: context.epoch.as_ref().and_then(|s| s.parse().ok()),
+            receipt_cid: None,
+            signature: None,
+        };
 
         Ok(receipt)
     }
 
     /// Anchor a receipt to the DAG and return the CID
-    #[cfg(feature = "legacy-identity")]
-    pub async fn anchor_receipt(&self, receipt: &ExecutionReceiptCredential) -> Result<String> {
-        // Convert to JSON
-        let receipt_json = serde_json::to_string(receipt).map_err(|e| {
-            RuntimeError::ReceiptError(format!("Failed to serialize receipt: {}", e))
-        })?;
+    pub async fn anchor_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
+        let receipt_json = serde_json::to_string(receipt)
+            .map_err(|e| RuntimeError::ReceiptError(e.to_string()))?;
 
         // Store the receipt
         let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;

@@ -2,7 +2,6 @@
 members = [
     "crates/common/icn-types",
     "crates/common/icn-crypto",
-    "crates/common/icn-identity-core",
     "crates/common/icn-identity",
     "crates/common/icn-economics",
     "crates/common/icn-mesh-receipts",

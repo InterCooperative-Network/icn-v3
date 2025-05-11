@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use uuid::Uuid;
+use icn_economics::ResourceType;
 
 /// Represents a generic section of the CCL that hasn't been fully modeled yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,26 +205,6 @@ pub enum ActionStep {
         /// Recipient DID
         recipient: String,
     },
-}
-
-/// Represents the resource type for metered actions
-#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
-pub enum ResourceType {
-    /// CPU resources
-    #[strum(serialize = "CPU")]
-    Cpu = 0,
-    
-    /// Memory resources
-    #[strum(serialize = "MEMORY")]
-    Memory = 1,
-    
-    /// Token resources
-    #[strum(serialize = "TOKEN")]
-    Token = 2,
-    
-    /// IO resources
-    #[strum(serialize = "IO")]
-    Io = 3,
 }
 
 #[cfg(test)]
