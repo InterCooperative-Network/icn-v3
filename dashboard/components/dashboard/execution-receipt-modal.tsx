@@ -20,40 +20,6 @@ interface ExecutionReceiptModalProps {
     onClose: () => void;
 }
 
-// Mock API fetcher function
-const fetchExecutionReceipt = async (cid: string): Promise<ExecutionReceipt> => {
-    console.log(`Fetching execution receipt for CID: ${cid}`);
-    return new Promise((resolve, reject) => {
-        setTimeout(() => {
-            if (cid === 'error_cid') {
-                reject(new Error('Failed to fetch receipt (mock error).'));
-            } else if (cid === 'empty_cid') {
-                 // @ts-ignore // Simulate incomplete or not found receipt
-                resolve(null as ExecutionReceipt);
-            } else {
-                resolve({
-                    job_id: `job_for_${cid}`,
-                    executor: 'did:icn:executor:123abc456def789',
-                    status: 'CompletedSuccess',
-                    result_data_cid: 'bafybeiabcdeoutputdataexamplecid',
-                    logs_cid: 'bafybeifghijlogsdataexamplecid',
-                    resource_usage: {
-                        CPU_CORES_USED: 0.5,
-                        MEMORY_MB_AVG: 256,
-                        EXECUTION_TIME_MS: 1850,
-                        DISK_SPACE_MB_USED: 10,
-                    },
-                    execution_start_time: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago
-                    execution_end_time: Math.floor(Date.now() / 1000) - 3500,   // شويه بعدين
-                    signature: '0xabc123signatureVerificationPendingOrDoneBackendSide456xyz',
-                    coop_id: 'coop_alpha_777',
-                    community_id: 'community_zeta_999',
-                });
-            }
-        }, 1000);
-    });
-};
-
 export function ExecutionReceiptModal({ receiptCid, isOpen, onClose }: ExecutionReceiptModalProps) {
     const [receipt, setReceipt] = useState<ExecutionReceipt | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -61,26 +27,33 @@ export function ExecutionReceiptModal({ receiptCid, isOpen, onClose }: Execution
 
     useEffect(() => {
         if (isOpen && receiptCid) {
-            setIsLoading(true);
-            setError(null);
-            setReceipt(null);
-            fetchExecutionReceipt(receiptCid)
-                .then(data => {
+            const fetchReceiptDetails = async () => {
+                setIsLoading(true);
+                setError(null);
+                setReceipt(null); // Clear previous receipt
+                try {
+                    const response = await fetch(`/api/v1/mesh/receipts/${receiptCid}`);
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+                        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+                    }
+                    const data: ExecutionReceipt = await response.json();
                     setReceipt(data);
-                })
-                .catch(err => {
-                    setError(err.message || 'An unknown error occurred');
-                })
-                .finally(() => {
+                } catch (e: any) {
+                    setError(e.message || 'Failed to fetch receipt details.');
+                } finally {
                     setIsLoading(false);
-                });
+                }
+            };
+
+            fetchReceiptDetails();
         } else {
             // Reset when modal is closed or no CID
             setReceipt(null);
             setIsLoading(false);
             setError(null);
         }
-    }, [isOpen, receiptCid]);
+    }, [isOpen, receiptCid]); // Dependency array ensures this runs when isOpen or receiptCid changes
 
     if (!isOpen) return null;
 
@@ -93,7 +66,7 @@ export function ExecutionReceiptModal({ receiptCid, isOpen, onClose }: Execution
                 <div className="mt-4 space-y-3 text-sm max-h-[60vh] overflow-y-auto pr-2">
                     {isLoading && <p>Loading receipt details...</p>}
                     {error && <p className="text-red-500">Error: {error}</p>}
-                    {receipt && (
+                    {receipt && !isLoading && !error && (
                         <>
                             <p><strong>Job ID:</strong> {receipt.job_id}</p>
                             <p><strong>Executor DID:</strong> {receipt.executor}</p>
@@ -115,7 +88,7 @@ export function ExecutionReceiptModal({ receiptCid, isOpen, onClose }: Execution
                             <p className="break-all"><strong>Signature:</strong> {receipt.signature}</p>
                         </>
                     )}
-                    {!receipt && !isLoading && !error && <p>No receipt details available for this CID.</p>}
+                    {!receipt && !isLoading && !error && <p>No receipt details available for this CID, or receipt not found.</p>}
                 </div>
                 <DialogFooter>
                     <Button onClick={onClose} variant="outline">Close</Button>

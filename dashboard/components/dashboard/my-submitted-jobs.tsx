@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { MeshJob, JobReceiptLink } from '@/types/mesh'; // Assuming types are in @/types/mesh
+import React, { useEffect, useState, useCallback } from 'react';
+import { MeshJob, JobReceiptLink } from '@/types/mesh';
 
 // Mock shadcn/ui components - replace with actual imports
 const Table = ({ children }: { children: React.ReactNode }) => <table className="w-full border-collapse text-sm">{children}</table>;
@@ -18,105 +18,71 @@ interface MySubmittedJobsProps {
     onViewReceipt: (receiptCid: string) => void;
 }
 
-// Mock API fetcher functions
-const fetchOriginatedJobs = async (): Promise<MeshJob[]> => {
-    console.log('Fetching originated jobs...');
-    return new Promise(resolve => {
-        setTimeout(() => {
-            resolve([
-                {
-                    job_id: 'job_orig_001',
-                    originator_did: 'did:icn:localnode',
-                    params: {
-                        wasm_cid: 'bafybeiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                        function_name: 'process_data',
-                        required_resources_json: '{"cpu": 1, "memory_mb": 256}',
-                        qos_profile: 'Balanced',
-                    },
-                    submitted_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
-                },
-                {
-                    job_id: 'job_orig_002',
-                    originator_did: 'did:icn:localnode',
-                    params: {
-                        wasm_cid: 'bafybeibbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-                        function_name: 'generate_report',
-                        required_resources_json: '{"cpu": 2, "memory_mb": 512}',
-                        qos_profile: 'Fast',
-                    },
-                    submitted_at: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
-                },
-                 {
-                    job_id: 'job_orig_003_no_receipt',
-                    originator_did: 'did:icn:localnode',
-                    params: {
-                        wasm_cid: 'bafybeiccccccccccccccccccccccccccccccccccc',
-                        function_name: 'analyze_stream',
-                        required_resources_json: '{"cpu": 1, "memory_mb": 128}',
-                        qos_profile: 'Cheap',
-                    },
-                    submitted_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10 mins ago
-                },
-            ]);
-        }, 800);
-    });
-};
-
-const fetchJobReceiptLink = async (jobId: string): Promise<JobReceiptLink> => {
-    console.log(`Fetching receipt link for job ID: ${jobId}`);
-    return new Promise(resolve => {
-        setTimeout(() => {
-            if (jobId === 'job_orig_001') {
-                resolve({ job_id: jobId, receipt_cid: 'bafyreceipt001examplecid' });
-            } else if (jobId === 'job_orig_002') {
-                resolve({ job_id: jobId, receipt_cid: 'bafyreceipt002examplecid' });
-            } else {
-                resolve({ job_id: jobId, receipt_cid: undefined });
-            }
-        }, 500);
-    });
-};
-
 export function MySubmittedJobs({ onViewReceipt }: MySubmittedJobsProps) {
     const [jobs, setJobs] = useState<MeshJob[]>([]);
     const [receiptLinks, setReceiptLinks] = useState<Record<string, JobReceiptLink>>({});
     const [isLoadingJobs, setIsLoadingJobs] = useState<boolean>(true);
     const [jobsError, setJobsError] = useState<string | null>(null);
-    // Individual loading/error states for receipt links could be added if needed
+    // For simplicity, individual errors for receipt links are logged to console but not displayed per row.
+
+    const fetchJobReceiptLinkCallback = useCallback(async (jobId: string) => {
+        try {
+            const response = await fetch(`/api/v1/mesh/jobs/${jobId}/receipt_cid`);
+            if (!response.ok) {
+                // It's common for this to 404 if no receipt exists, so don't treat as a full error for UI
+                if (response.status === 404) {
+                    console.log(`No receipt link found for job ${jobId} (404).`);
+                    setReceiptLinks(prev => ({ ...prev, [jobId]: { job_id: jobId, receipt_cid: undefined } }));
+                    return; 
+                }
+                const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+                throw new Error(errorData.message || `HTTP error fetching receipt link! status: ${response.status}`);
+            }
+            const data: JobReceiptLink = await response.json();
+            setReceiptLinks(prev => ({ ...prev, [jobId]: data }));
+        } catch (e: any) {
+            console.error(`Failed to fetch receipt link for ${jobId}:`, e.message);
+            // Optionally set a specific error state for this link if needed for UI
+        }
+    }, []);
 
     useEffect(() => {
-        setIsLoadingJobs(true);
-        fetchOriginatedJobs()
-            .then(fetchedJobs => {
+        const fetchOriginatedJobs = async () => {
+            setIsLoadingJobs(true);
+            setJobsError(null);
+            try {
+                const response = await fetch('/api/v1/mesh/jobs/originated');
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+                    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+                }
+                const fetchedJobs: MeshJob[] = await response.json();
                 setJobs(fetchedJobs);
-                // Fetch receipt links for all jobs
-                fetchedJobs.forEach(job => {
-                    fetchJobReceiptLink(job.job_id)
-                        .then(link => {
-                            setReceiptLinks((prev: Record<string, JobReceiptLink>) => ({ ...prev, [job.job_id]: link }));
-                        })
-                        .catch(err => console.error(`Failed to fetch receipt link for ${job.job_id}:`, err));
-                });
-            })
-            .catch(err => {
-                setJobsError(err.message || 'Failed to load your jobs.');
-            })
-            .finally(() => {
+
+                // After fetching jobs, fetch their receipt links
+                // Using Promise.all to fetch them concurrently for better performance
+                await Promise.all(fetchedJobs.map(job => fetchJobReceiptLinkCallback(job.job_id)));
+                
+            } catch (e: any) {
+                setJobsError(e.message || 'Failed to load your jobs.');
+            } finally {
                 setIsLoadingJobs(false);
-            });
-    }, []);
+            }
+        };
+
+        fetchOriginatedJobs();
+    }, [fetchJobReceiptLinkCallback]);
 
     const getJobStatus = (jobId: string): { text: string; variant: string } => {
         if (receiptLinks[jobId]?.receipt_cid) {
             return { text: 'Completed', variant: 'success' };
         }
-        // More sophisticated status logic can be added here later
         return { text: 'Pending', variant: 'pending' };
     };
 
-    if (isLoadingJobs) return <p>Loading your submitted jobs...</p>;
+    if (isLoadingJobs && jobs.length === 0) return <p>Loading your submitted jobs...</p>; // Show loading only if no jobs displayed yet
     if (jobsError) return <p className="text-red-500">Error: {jobsError}</p>;
-    if (jobs.length === 0) return <p>You have not submitted any jobs yet.</p>;
+    if (jobs.length === 0 && !isLoadingJobs) return <p>You have not submitted any jobs yet.</p>;
 
     return (
         <section>
@@ -130,13 +96,13 @@ export function MySubmittedJobs({ onViewReceipt }: MySubmittedJobsProps) {
                             <TableHead>Submitted</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Receipt CID</TableHead>
-                            {/* <TableHead>Actions</TableHead> */}
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {jobs.map((job: MeshJob) => {
                             const status = getJobStatus(job.job_id);
                             const receiptCid = receiptLinks[job.job_id]?.receipt_cid;
+                            // Row-specific loading for receipt_cid could be added here if fetchJobReceiptLinkCallback set individual loading states
                             return (
                                 <TableRow key={job.job_id}>
                                     <TableCell className="font-mono text-xs">{job.job_id}</TableCell>
@@ -153,20 +119,19 @@ export function MySubmittedJobs({ onViewReceipt }: MySubmittedJobsProps) {
                                             >
                                                 {receiptCid.substring(0,20)}...
                                             </Button>
+                                        ) : receiptLinks[job.job_id] === undefined ? (
+                                            <span className="text-gray-400 text-xs">Loading...</span>
                                         ) : (
                                             <span className="text-gray-500 text-xs">N/A</span>
                                         )}
                                     </TableCell>
-                                    {/* <TableCell>
-                                        {/* Placeholder for View Interests button */}
-                                        {/* <Button variant="outline" size="sm">View Interests</Button> */}
-                                    {/* </TableCell> */}
                                 </TableRow>
                             );
                         })}
                     </TableBody>
                 </Table>
             </div>
+            {isLoadingJobs && jobs.length > 0 && <p className="text-sm text-gray-500 mt-2">Updating job details...</p>}
         </section>
     );
 } 
