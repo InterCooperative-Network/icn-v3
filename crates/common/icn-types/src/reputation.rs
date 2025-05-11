@@ -175,6 +175,46 @@ fn average_f32(prev: Option<f32>, new_val: f32, count: u64) -> f32 {
     }
 }
 
+pub fn compute_score(profile: &ReputationProfile) -> f64 {
+    const BASE_SCORE: f64 = 0.5;
+
+    const SUCCESS_WEIGHT: f64 = 2.0;
+    const TIMELINESS_WEIGHT: f64 = 1.0;
+    const ACCURACY_WEIGHT: f64 = 1.5;
+    const STAKE_WEIGHT: f64 = 0.3;
+    const PENALTY_WEIGHT: f64 = 0.7;
+
+    // Ensure total is at least 1.0 to avoid division by zero for rates if total_jobs is 0.
+    let total = (profile.total_jobs as f64).max(1.0);
+
+    let success_rate = profile.successful_jobs as f64 / total;
+    
+    // For on_time_rate, it should be based on successful_jobs or total_jobs depending on definition.
+    // If it's % of successful jobs that were on time:
+    let successful_jobs_total = (profile.successful_jobs as f64).max(1.0); // Avoid div by zero if no successful jobs
+    let on_time_rate = profile.jobs_on_time as f64 / successful_jobs_total;
+    // Alternatively, if it's % of all jobs that were on_time (less common interpretation):
+    // let on_time_rate = profile.jobs_on_time as f64 / total;
+
+    let avg_accuracy = profile.average_bid_accuracy.unwrap_or(0.5); // Default to neutral if no data
+    let dishonesty_events_count = profile.dishonesty_events as f64;
+
+    let stake_log = profile
+        .current_stake
+        .map(|s| (s as f64 + 1.0).ln()) // log(1 + s) is ln_1p, or (s+1.0).ln()
+        .unwrap_or(0.0);
+
+    let raw_score = BASE_SCORE
+        + SUCCESS_WEIGHT * success_rate
+        + TIMELINESS_WEIGHT * on_time_rate
+        + ACCURACY_WEIGHT * avg_accuracy
+        + STAKE_WEIGHT * stake_log
+        - PENALTY_WEIGHT * dishonesty_events_count;
+
+    // Clamp score to a defined range, e.g., 0.0 to 10.0
+    raw_score.clamp(0.0, 10.0)
+}
+
 // TODO:
 // - Consider how f32/f64 fields impact needs for Eq/Hash if ReputationProfile or Event instances were used as HashMap keys.
 // - Implement actual reputation scoring algorithms (`compute_score` function) and integrate with `apply_event`.

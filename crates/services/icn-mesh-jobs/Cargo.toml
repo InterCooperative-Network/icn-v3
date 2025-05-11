@@ -1,0 +1,27 @@
+[package]
+name = "icn-mesh-jobs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.6"           
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+cid = "0.10"           
+icn-types = { path = "../../common/icn-types" }
+icn-identity = { path = "../../common/icn-identity" }
+tracing = "0.1"
+anyhow = "1.0"
+
+# Added for reputation client
+reqwest = { version = "0.11", features = ["json"] }
+config = "0.13" # For managing REPUTATION_URL
+dotenv = "0.15" # For loading .env file in development
+
+# Added for WebSocket handling
+futures = "0.3"
+tokio-stream = "0.1"
+
+[features]
+default = ["json"] 
