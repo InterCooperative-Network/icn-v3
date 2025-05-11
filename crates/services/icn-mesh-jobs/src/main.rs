@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response, Json as AxumJson},
     routing::{get, post},
     Router,
+    headers::HeaderMap,
 };
 use cid::Cid;
 use futures::{stream::StreamExt, SinkExt};
@@ -72,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/jobs", post(create_job).get(list_jobs))
+        .route("/jobs/by-worker/:worker_did", get(get_jobs_for_worker_handler))
         .route("/jobs/:job_id", get(get_job))
         .route("/jobs/:job_id/bids", post(submit_bid).get(ws_stream_bids_handler))
         .route("/jobs/:job_id/assign", post(assign_best_bid_handler))
@@ -118,6 +120,44 @@ async fn list_jobs(
     let status_filter = parse_job_status(query.status);
     match store.list_jobs(status_filter).await? {
         job_cids => Ok(AxumJson(job_cids.into_iter().map(|cid| cid.to_string()).collect::<Vec<_>>()).into_response()),
+    }
+}
+
+async fn get_jobs_for_worker_handler(
+    Extension(store): Extension<Arc<dyn MeshJobStore>>,
+    Path(worker_did_str): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let worker_did = Did(worker_did_str);
+    // Validate DID format if necessary, though Did(String) constructor is simple.
+    // For production, ensure worker_did_str is a valid DID string.
+
+    match store.list_jobs_for_worker(&worker_did).await {
+        Ok(jobs_list) => {
+            // The list_jobs_for_worker returns Vec<(Cid, JobRequest, JobStatus)>.
+            // We need to serialize this into a suitable JSON response.
+            // Let's create a simple struct for the response items for better clarity.
+            #[derive(Serialize)]
+            struct WorkerJobEntry {
+                job_id: String,
+                request: JobRequest,
+                status: JobStatus,
+            }
+
+            let response_data: Vec<WorkerJobEntry> = jobs_list
+                .into_iter()
+                .map(|(cid, request, status)| WorkerJobEntry {
+                    job_id: cid.to_string(),
+                    request,
+                    status,
+                })
+                .collect();
+            
+            Ok(AxumJson(response_data).into_response())
+        }
+        Err(e) => {
+            tracing::error!("Failed to list jobs for worker {}: {}", worker_did.0, e);
+            Err(AppError(e))
+        }
     }
 }
 
@@ -219,21 +259,36 @@ async fn assign_best_bid_handler(
 async fn start_job_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Path(job_id_str): Path<String>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
     let job_id = Cid::try_from(job_id_str.clone())?;
+
+    let worker_did_header = headers
+        .get("X-Worker-DID")
+        .ok_or_else(|| AppError(anyhow::anyhow!("Missing X-Worker-DID header")))?
+        .to_str()
+        .map_err(|_| AppError(anyhow::anyhow!("Invalid X-Worker-DID header format")))?;
+    let worker_did = Did(worker_did_header.to_string());
 
     let (_job_request, current_status) = store.get_job(&job_id).await?
         .ok_or_else(|| AppError(anyhow::anyhow!("Job not found: {}", job_id)))?;
 
     match current_status {
         JobStatus::Assigned { bidder } => {
+            if bidder != worker_did {
+                tracing::warn!(
+                    "Authorization failed for starting job {}. Expected bidder {}, got worker {}.",
+                    job_id, bidder.0, worker_did.0
+                );
+                return Err(AppError(anyhow::anyhow!("Worker DID does not match assigned bidder DID").context(StatusCode::FORBIDDEN)));
+            }
             store.update_job_status(&job_id, JobStatus::Running { runner: bidder.clone() }).await?;
             tracing::info!("Job {} has been started by bidder {}.", job_id, bidder.0);
             Ok(StatusCode::OK)
         }
         JobStatus::Running { runner } => {
             tracing::info!("Job {} is already running by {}.", job_id, runner.0);
-            Err(AppError(anyhow::anyhow!("Job {} is already running.", job_id)))
+            Err(AppError(anyhow::anyhow!("Job {} is already running.")))
         }
         _ => {
             tracing::error!("Job {} is in status {:?} and cannot be started.", job_id, current_status);
@@ -246,13 +301,31 @@ async fn mark_job_completed_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Extension(reputation_url): Extension<Arc<String>>,
     Path(job_id_str): Path<String>,
+    headers: HeaderMap,
     AxumJson(details): AxumJson<JobCompletionDetails>,
 ) -> Result<StatusCode, AppError> {
     let job_id = Cid::try_from(job_id_str.clone())?;
+
+    let worker_did_header = headers
+        .get("X-Worker-DID")
+        .ok_or_else(|| AppError(anyhow::anyhow!("Missing X-Worker-DID header")))?
+        .to_str()
+        .map_err(|_| AppError(anyhow::anyhow!("Invalid X-Worker-DID header format")))?;
+    let worker_did = Did(worker_did_header.to_string());
+
     let (_, job_status) = store.get_job(&job_id).await?.ok_or_else(|| AppError(anyhow::anyhow!("Job not found")))?;
 
     let runner_did = match job_status {
-        JobStatus::Running { runner } => runner,
+        JobStatus::Running { ref runner } => {
+            if runner != &worker_did {
+                tracing::warn!(
+                    "Authorization failed for completing job {}. Expected runner {}, got worker {}.",
+                    job_id, runner.0, worker_did.0
+                );
+                return Err(AppError(anyhow::anyhow!("Worker DID does not match job runner DID").context(StatusCode::FORBIDDEN)));
+            }
+            runner.clone()
+        }
         _ => {
             tracing::error!("Job {} is in status {:?} and cannot be marked completed.", job_id, job_status);
             return Err(AppError(anyhow::anyhow!("Job {} not in Running state. Current state: {:?}.", job_id, job_status)));
@@ -287,13 +360,31 @@ async fn mark_job_failed_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Extension(reputation_url): Extension<Arc<String>>,
     Path(job_id_str): Path<String>,
+    headers: HeaderMap,
     AxumJson(details): AxumJson<JobFailureDetails>,
 ) -> Result<StatusCode, AppError> {
     let job_id = Cid::try_from(job_id_str.clone())?;
+
+    let worker_did_header = headers
+        .get("X-Worker-DID")
+        .ok_or_else(|| AppError(anyhow::anyhow!("Missing X-Worker-DID header")))?
+        .to_str()
+        .map_err(|_| AppError(anyhow::anyhow!("Invalid X-Worker-DID header format")))?;
+    let worker_did = Did(worker_did_header.to_string());
+
     let (_, job_status) = store.get_job(&job_id).await?.ok_or_else(|| AppError(anyhow::anyhow!("Job not found")))?;
 
     let runner_did = match job_status {
-        JobStatus::Running { runner } => runner,
+        JobStatus::Running { ref runner } => {
+            if runner != &worker_did {
+                tracing::warn!(
+                    "Authorization failed for failing job {}. Expected runner {}, got worker {}.",
+                    job_id, runner.0, worker_did.0
+                );
+                return Err(AppError(anyhow::anyhow!("Worker DID does not match job runner DID").context(StatusCode::FORBIDDEN)));
+            }
+            runner.clone()
+        }
         _ => {
             tracing::error!("Job {} is in status {:?} and cannot be marked failed.", job_id, job_status);
             return Err(AppError(anyhow::anyhow!("Job {} not in Running state. Current state: {:?}.", job_id, job_status)));

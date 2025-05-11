@@ -47,6 +47,9 @@ pub trait MeshJobStore: Send + Sync + 'static {
 
     /// Assign a job to a bidder
     async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<()>;
+
+    /// List all jobs (CID, request, and status) for a specific worker DID (either assigned or running).
+    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>>;
 }
 
 pub struct InMemoryStore {
@@ -170,5 +173,23 @@ impl MeshJobStore for InMemoryStore {
             }
             None => Err(anyhow::anyhow!("Job not found: {}", job_id)),
         }
+    }
+
+    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>> {
+        let jobs_guard = self.jobs.read().await;
+        let mut worker_jobs = Vec::new();
+
+        for (cid, (job_req, status)) in jobs_guard.iter() {
+            let is_assigned_to_worker = match status {
+                JobStatus::Assigned { bidder } => bidder == worker_did,
+                JobStatus::Running { runner } => runner == worker_did,
+                _ => false,
+            };
+
+            if is_assigned_to_worker {
+                worker_jobs.push((*cid, job_req.clone(), status.clone()));
+            }
+        }
+        Ok(worker_jobs)
     }
 } 
