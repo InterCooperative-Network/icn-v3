@@ -2,6 +2,7 @@ use cid::Cid;
 use chrono::{DateTime, Utc};
 use icn_identity::Did;
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 
 // Assuming TokenAmount and DID are defined elsewhere, possibly in a common types module or imported.
 // For now, let's use placeholders.
@@ -14,6 +15,7 @@ pub struct JobRequest {
     pub description: String,
     pub requirements: ResourceRequirements,
     pub deadline: Option<DateTime<Utc>>,
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -47,6 +49,14 @@ pub struct Bid {
     pub price: TokenAmount,
     pub estimate: ResourceEstimate, // Bidder's estimate of resources they'll use/provide
     pub reputation_score: Option<f64>, // Added as per discussion
+    pub node_metadata: Option<NodeMetadata>,
+}
+
+// New struct for Bid node_metadata
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeMetadata {
+    pub region: Option<String>,
+    pub reputation: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
