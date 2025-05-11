@@ -17,7 +17,8 @@ use planetary_mesh::node::MeshNode; // Assuming MeshNode is public or pub(crate)
 // Assuming InternalNodeAction is a type used by the event loop, adjust path if necessary
 use planetary_mesh::node::InternalNodeAction; 
 use planetary_mesh::protocol::{MeshProtocolMessage, JobManifest, Bid, AssignJobV1, ExecutionReceiptAvailableV1};
-use tokio::sync::mpsc::Receiver; // For the internal_action_rx type
+use tokio::sync::mpsc::{self, Receiver, Sender}; // Ensure Sender is imported from mpsc
+use planetary_mesh::node::{NodeCommand}; // Import NodeCommand
 
 // Mock or minimal reputation service URL for testing
 const MOCK_REPUTATION_SERVICE_URL: &str = "http://127.0.0.1:12345"; // Placeholder
@@ -26,21 +27,23 @@ async fn setup_node(
     keypair: IcnKeyPair,
     listen_addr: Option<String>,
     rep_url: Option<String>,
-) -> Result<(MeshNode, Receiver<InternalNodeAction>), Box<dyn std::error::Error>> {
+) -> Result<(MeshNode, Receiver<InternalNodeAction>, Sender<NodeCommand>), Box<dyn std::error::Error>> {
     let runtime_job_queue = Arc::new(Mutex::new(std::collections::VecDeque::new()));
-    let local_runtime_context = Some(Arc::new(RuntimeContext::new())); // Basic context
+    let local_runtime_context = Some(Arc::new(RuntimeContext::new()));
 
-    // The new method now returns a tuple (MeshNode, Receiver)
+    // Create the command channel for this node instance
+    let (command_tx, command_rx) = mpsc::channel(32); // Channel buffer size of 32
+
     let (node, internal_action_rx) = MeshNode::new(
         keypair,
         listen_addr,
         runtime_job_queue,
         local_runtime_context,
-        None, // test_job_status_listener_tx
         rep_url,
+        command_rx, // Pass the receiver end to the node
     )
     .await?;
-    Ok((node, internal_action_rx))
+    Ok((node, internal_action_rx, command_tx)) // Return the sender end to the test
 }
 
 #[tokio::test]
@@ -57,19 +60,24 @@ async fn test_full_job_lifecycle() {
     println!("Originator DID: {}", originator_did);
     println!("Executor 1 DID: {}", executor1_did);
 
-    // 2. Initialize MeshNodes
-    let (mut originator_node, originator_rx) = setup_node(originator_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), Some(MOCK_REPUTATION_SERVICE_URL.to_string())).await.expect("Failed to setup originator node");
-    let (mut executor1_node, executor1_rx) = setup_node(executor1_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), Some(MOCK_REPUTATION_SERVICE_URL.to_string())).await.expect("Failed to setup executor1 node");
+    // 2. Initialize MeshNodes and get command senders
+    let (originator_node_instance, originator_internal_rx, originator_command_tx) = 
+        setup_node(originator_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), Some(MOCK_REPUTATION_SERVICE_URL.to_string()))
+        .await.expect("Failed to setup originator node");
     
-    let originator_peer_id = originator_node.local_peer_id();
-    let executor1_peer_id = executor1_node.local_peer_id();
+    let (executor1_node_instance, executor1_internal_rx, executor1_command_tx) = 
+        setup_node(executor1_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), Some(MOCK_REPUTATION_SERVICE_URL.to_string()))
+        .await.expect("Failed to setup executor1 node");
+    
+    let originator_peer_id = originator_node_instance.local_peer_id();
+    let executor1_peer_id = executor1_node_instance.local_peer_id();
 
     println!("Originator Peer ID: {}", originator_peer_id);
     println!("Executor 1 Peer ID: {}", executor1_peer_id);
 
     // Start the event loops for each node in separate tokio tasks
-    let originator_handle = tokio::spawn(async move { originator_node.run_event_loop(originator_rx).await });
-    let executor1_handle = tokio::spawn(async move { executor1_node.run_event_loop(executor1_rx).await });
+    let originator_handle = tokio::spawn(async move { originator_node_instance.run_event_loop(originator_internal_rx).await });
+    let executor1_handle = tokio::spawn(async move { executor1_node_instance.run_event_loop(executor1_internal_rx).await });
 
     // Allow some time for nodes to start up and discover each other (mDNS or Kademlia)
     // In a real test, explicit peering or waiting for discovery events would be better.
@@ -110,21 +118,24 @@ async fn test_full_job_lifecycle() {
     // If MeshNode instance is moved into the tokio::spawn, we need another way to interact with its state.
     // Let's clone the Arcs for the state variables we need to check.
 
-    let originator_announced_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_announced_originated_jobs_arc(&originator_node)); // Placeholder for actual access
-    let originator_bids = Arc::clone(&planetary_mesh::node::test_utils::get_bids_arc(&originator_node)); // Placeholder
-    let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node)); // Placeholder
-    let originator_receipt_store_dag_nodes = Arc::clone(&planetary_mesh::node::test_utils::get_receipt_store_dag_nodes_arc(&originator_node)); // Placeholder
-    let originator_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&originator_node)); // Placeholder
+    let originator_announced_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_announced_originated_jobs_arc(&originator_node_instance)); // Placeholder for actual access
+    let originator_bids = Arc::clone(&planetary_mesh::node::test_utils::get_bids_arc(&originator_node_instance)); // Placeholder
+    let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node_instance)); // Placeholder
+    let originator_receipt_store_dag_nodes = Arc::clone(&planetary_mesh::node::test_utils::get_receipt_store_dag_nodes_arc(&originator_node_instance)); // Placeholder
+    let originator_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&originator_node_instance)); // Placeholder
     
-    let executor_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node)); // Placeholder
-    let executor_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node)); // Placeholder
-    let executor_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&executor1_node)); // Placeholder
+    let executor_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node_instance)); // Placeholder
+    let executor_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node_instance)); // Placeholder
+    let executor_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&executor1_node_instance)); // Placeholder
 
 
     // Originator announces the job
     println!("Announcing job: {}", job_id);
-    planetary_mesh::node::test_utils::announce_job_from_test(&originator_node, job_to_announce.clone()).await.expect("Failed to announce job");
-    println!("Job {} announced by originator", job_id);
+    // Use the command sender to announce the job
+    test_utils::command_originator_to_announce_job(&originator_command_tx, job_to_announce.clone())
+        .await
+        .expect("Failed to send AnnounceJob command to originator");
+    println!("Job {} announcement command sent to originator", job_id);
 
 
     // 4. Executor Nodes Submit Bids
@@ -149,8 +160,11 @@ async fn test_full_job_lifecycle() {
     };
     
     println!("Executor 1 submitting bid for job {}", job_id);
-    planetary_mesh::node::test_utils::submit_bid_from_test(&executor1_node, bid_by_executor1.clone()).await.expect("Executor 1 failed to submit bid");
-    println!("Executor 1 submitted bid for job {}", job_id);
+    // Use the command sender to submit the bid
+    test_utils::command_executor_to_submit_bid(&executor1_command_tx, bid_by_executor1.clone())
+        .await
+        .expect("Failed to send SubmitBid command to executor1");
+    println!("Executor 1 submitted bid command for job {}", job_id);
 
 
     // 5. Originator Selects Bid and Assigns Job
@@ -207,7 +221,7 @@ async fn test_full_job_lifecycle() {
     // To verify, we can check if the originator has seen the receipt announcement.
     // The originator stores known receipt CIDs or processes them.
     // Let's assume a placeholder for originator_node.known_receipt_cids or similar state:
-    let originator_known_receipt_cids = Arc::clone(&planetary_mesh::node::test_utils::get_known_receipt_cids_arc(&originator_node)); // Placeholder
+    let originator_known_receipt_cids = Arc::clone(&planetary_mesh::node::test_utils::get_known_receipt_cids_arc(&originator_node_instance)); // Placeholder
     let mut receipt_cid_found: Option<Cid> = None;
 
     println!("Originator waiting for execution receipt announcement for job {}...", job_id);
@@ -253,7 +267,7 @@ async fn test_full_job_lifecycle() {
     // Verify receipt is anchored
     // This check is already implicitly part of finding receipt_cid_found if it checks dag_store.
     // We can make it more explicit by fetching the receipt by CID from originator's store.
-    // assert!(originator_node.local_runtime_context.as_ref().unwrap().receipt_store.dag_nodes.read().unwrap().contains_key(&receipt_cid));
+    // assert!(originator_node_instance.local_runtime_context.as_ref().unwrap().receipt_store.dag_nodes.read().unwrap().contains_key(&receipt_cid));
     // println!("Receipt {} successfully anchored by originator.", receipt_cid);
 
     // Verify economic settlement
@@ -283,8 +297,8 @@ async fn test_full_job_lifecycle() {
 
 
     // 8. Assertions (more can be added)
-    // - Check job status (e.g., originator_node.completed_job_receipt_cids should contain this job)
-    // let completed_receipts = originator_node.completed_job_receipt_cids.read().unwrap();
+    // - Check job status (e.g., originator_node_instance.completed_job_receipt_cids should contain this job)
+    // let completed_receipts = originator_node_instance.completed_job_receipt_cids.read().unwrap();
     // assert!(completed_receipts.get(&job_id).map_or(false, |cid_set| cid_set.contains(&receipt_cid)));
     // println!("Job {} status verified as completed with receipt {}.", job_id, receipt_cid);
     
@@ -330,6 +344,7 @@ mod test_utils {
     use planetary_mesh::protocol::{JobManifest, Bid};
     use icn_runtime::runtime::RuntimeBalanceStore;
     use planetary_mesh::node::KnownReceiptInfo; // Assuming this type for known_receipt_cids
+    use tokio::sync::mpsc::Sender; // Ensure Sender is imported for function signatures
 
 
     // These functions are placeholders. You'll need to implement them based on how MeshNode exposes its state.
@@ -394,19 +409,22 @@ mod test_utils {
     }
 
 
-    pub async fn announce_job_from_test(_node: &MeshNode, _job: MeshJob) -> Result<(), String> {
-        // Placeholder: node.announce_job(job).await.map_err(|e| e.to_string())
-        // This requires node to be &mut or methods to take &self and use internal mutability for swarm commands.
-        // For now, assume direct call would work if node wasn't moved.
-        // If MeshNode methods require `&mut self`, the spawned task owns it.
-        // Interaction would need to happen via channels to the node's event loop.
-        todo!("Implement actual job announcement for tests, possibly via channel to the node task");
-        // Ok(())
+    // Updated command functions to use the Sender<NodeCommand>
+    pub async fn command_originator_to_announce_job(
+        tx: &Sender<NodeCommand>,
+        job: MeshJob,
+    ) -> Result<(), String> {
+        tx.send(NodeCommand::AnnounceJob(job))
+            .await
+            .map_err(|e| format!("Failed to send AnnounceJob command: {:?}", e))
     }
 
-    pub async fn submit_bid_from_test(_node: &MeshNode, _bid: Bid) -> Result<(), String> {
-        // Placeholder: node.submit_bid(bid).await.map_err(|e| e.to_string())
-        todo!("Implement actual bid submission for tests, possibly via channel to the node task");
-        // Ok(())
+    pub async fn command_executor_to_submit_bid(
+        tx: &Sender<NodeCommand>,
+        bid: Bid,
+    ) -> Result<(), String> {
+        tx.send(NodeCommand::SubmitBid(bid))
+            .await
+            .map_err(|e| format!("Failed to send SubmitBid command: {:?}", e))
     }
 }
