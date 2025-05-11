@@ -33,6 +33,8 @@ pub struct MeshNode {
     pub runtime_job_queue_for_announcement: Arc<Mutex<VecDeque<MeshJob>>>,
     // Stores DIDs of nodes interested in jobs this node originated
     pub job_interests_received: Arc<RwLock<HashMap<IcnJobId, Vec<Did>>>>,
+    // Stores jobs originated by this node and successfully announced
+    pub announced_originated_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
 }
 
 impl MeshNode {
@@ -65,6 +67,7 @@ impl MeshNode {
             available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
             runtime_job_queue_for_announcement: runtime_job_queue,
             job_interests_received: Arc::new(RwLock::new(HashMap::new())),
+            announced_originated_jobs: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -123,6 +126,15 @@ impl MeshNode {
                 match self.swarm.behaviour_mut().gossipsub.subscribe(&interest_topic) {
                     Ok(_) => println!("Subscribed to interest topic: {}", interest_topic_string),
                     Err(e) => eprintln!("Failed to subscribe to interest topic {}: {:?}", interest_topic_string, e),
+                }
+
+                // Add to our announced_originated_jobs map
+                if let Ok(mut announced_jobs) = self.announced_originated_jobs.write() {
+                    announced_jobs.insert(job.job_id.clone(), job.clone());
+                    println!("Added job {} to announced_originated_jobs.", job.job_id);
+                } else {
+                    eprintln!("Failed to get write lock for announced_originated_jobs while adding job {}.
+", job.job_id);
                 }
             }
             Err(e) => {
