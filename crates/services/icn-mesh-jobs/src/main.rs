@@ -165,8 +165,8 @@ async fn assign_best_bid_handler(
         .ok_or_else(|| AppError(anyhow::anyhow!("Job not found: {}", job_id)))?;
     
     match current_status {
-        JobStatus::Pending | JobStatus::Bidding => { /* Proceed */ }
-        _ => return Err(AppError(anyhow::anyhow!("Job {} is in status {:?} and cannot have a bid assigned.", job_id, current_status))),
+        JobStatus::Bidding => { /* Proceed */ }
+        _ => return Err(AppError(anyhow::anyhow!("Job {} is not in Bidding state and cannot have a bid assigned. Current status: {:?}", job_id, current_status))),
     }
 
     let bids = store.list_bids(&job_id).await?;
