@@ -5,13 +5,14 @@ use std::collections::HashMap;
 use std::sync::RwLock; // Changed from Mutex to RwLock as per user's struct definition
 use cid::Cid;
 use async_trait::async_trait;
-use icn_types::jobs::{JobRequest, JobStatus, Bid, ResourceRequirements};
+use icn_types::jobs::{JobRequest, JobStatus, Bid, ResourceRequirements, ResourceEstimate};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use multihash::{Code, Multihash};
 use anyhow::Result; // For internal helper functions
 use sqlx::QueryBuilder;
 use std::str::FromStr; // Required for Cid::from_str if that's how try_from is implemented for String
+use serde_json; // Ensure this is imported
 
 // Assuming AppError is defined in lib.rs or a common error module for the crate
 // and has From implementations for anyhow::Error, sqlx::Error, serde_json::Error
@@ -248,14 +249,156 @@ impl MeshJobStore for SqliteStore {
         }
     }
 
-    async fn insert_bid(&self, job_id: &Cid, bid: Bid) -> Result<(), AppError> {
-        // Placeholder
-        Err(AppError::Internal(anyhow::anyhow!("insert_bid not implemented yet")))
+    async fn insert_bid(&self, job_id_param: &Cid, bid: Bid) -> Result<(), AppError> {
+        // 1. Fetch Job and Validate Status
+        let (_job_request, current_status) = self.get_job(job_id_param).await?
+            .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id_param)))?;
+
+        match current_status {
+            JobStatus::Pending | JobStatus::Bidding => { /* Allowed */ }
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "Job {} is in status {:?} and cannot accept bids",
+                    job_id_param,
+                    current_status
+                )));
+            }
+        }
+
+        // 2. Validate Bid's Job ID
+        if &bid.job_id != job_id_param {
+            return Err(AppError::BadRequest(
+                "Job ID in bid payload does not match job_id in path".to_string(),
+            ));
+        }
+
+        // 3. Serialize Bid Data
+        let estimate_json = serde_json::to_string(&bid.estimate)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize bid estimate: {}", e)))?;
+        
+        let job_id_str = bid.job_id.to_string(); // or job_id_param.to_string()
+        let bidder_did_str = bid.bidder.0.clone(); // Clone because bid might be consumed by broadcaster
+        let price = bid.price; // u64, compatible with INTEGER in SQLite
+        let reputation_score = bid.reputation_score; // Option<f64>, compatible with REAL NULL in SQLite
+
+        // 4. Database Insertion
+        sqlx::query!(
+            r#"
+            INSERT INTO bids (job_id, bidder_did, price, estimate_json, reputation_score)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+            job_id_str,
+            bidder_did_str,
+            price,
+            estimate_json,
+            reputation_score
+        )
+        .execute(&*self.pool)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert bid into database: {}", e)))?;
+
+        // 5. Broadcast Bid
+        let broadcaster_maybe = {
+            // Scope for the read lock
+            let broadcasters_read_guard = self.bid_broadcasters.read()
+                .map_err(|_| AppError::Internal(anyhow::anyhow!("Bid broadcaster read lock poisoned")))?;
+            broadcasters_read_guard.get(job_id_param).cloned() // Clone the sender if it exists
+        };
+
+        if let Some(broadcaster) = broadcaster_maybe {
+            if let Err(_send_error) = broadcaster.send(bid) {
+                // Log this in a real scenario, e.g., using tracing::debug!
+                // For now, we'll ignore if no subscribers, as the DB insert succeeded.
+                // tracing::debug!("Failed to broadcast bid for job {}: {}, no active subscribers?", job_id_param, send_error.to_string());
+            }
+        } else {
+            // No broadcaster existed, meaning no one was subscribed yet. This is fine.
+            // The bid is in the DB. If someone subscribes later, they won't get this old bid via this live channel,
+            // but would see it if they list_bids. This matches InMemoryStore behavior where send is best-effort.
+            // If the bid was consumed by a send attempt above, ensure it's handled. (bid is consumed by send())
+            // Since we only send if broadcaster exists, and `bid` is taken by `send`, this is okay.
+        }
+        
+        // If the intention is to create the broadcaster if it doesn't exist, like InMemoryStore:
+        // let broadcaster = {
+        //     let mut broadcasters_write_guard = self.bid_broadcasters.write()
+        //         .map_err(|_| AppError::Internal(anyhow::anyhow!("Bid broadcaster write lock poisoned")))?;
+        //     broadcasters_write_guard.entry(*job_id_param).or_insert_with(|| broadcast::channel(32).0).clone()
+        // };
+        // if let Err(_send_error) = broadcaster.send(bid) { ... }
+        // For now, sticking to the simpler read-lock version unless explicit creation is required.
+        // The InMemoryStore *does* create it: `self.get_or_create_broadcaster(job_id).await;`
+        // Let's adjust to match that for consistency:
+
+        let broadcaster = {
+            let mut broadcasters_write_guard = self.bid_broadcasters.write()
+                 .map_err(|_| AppError::Internal(anyhow::anyhow!("Bid broadcaster lock poisoned")))?;
+            broadcasters_write_guard.entry(*job_id_param).or_insert_with(|| {
+                let (tx, _) = broadcast::channel(32);
+                tx
+            }).clone()
+        };
+
+        if broadcaster.send(bid).is_err() {
+            // Log this in a real scenario using tracing::debug!
+            // e.g., tracing::debug!("Failed to broadcast bid for job {}: no active subscribers?", job_id_param);
+        }
+
+        Ok(())
     }
 
     async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>, AppError> {
-        // Placeholder
-        Err(AppError::Internal(anyhow::anyhow!("list_bids not implemented yet")))
+        let job_id_str = job_id.to_string();
+
+        #[derive(sqlx::FromRow)]
+        struct DbBidRow {
+            // job_id_from_db: String, // Renaming to avoid confusion with the Cid::try_from source
+            bidder_did: String,
+            price: i64, // SQLite INTEGER typically maps to i64
+            estimate_json: String,
+            reputation_score: Option<f64>,
+            // We also need job_id column from bids table to construct the Bid struct if it differs, but usually it's the same one we query by.
+            // Let's select it to be explicit, even if it's the same as job_id_str.
+            // The Bid struct requires job_id: Cid.
+            job_id_col: String, // Naming it job_id_col to make it clear it's from the column
+        }
+
+        let rows = sqlx::query_as!(
+            DbBidRow,
+            r#"
+            SELECT job_id as job_id_col, bidder_did, price, estimate_json, reputation_score
+            FROM bids
+            WHERE job_id = $1
+            "#,
+            job_id_str
+        )
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch bids from database: {}", e)))?;
+
+        let mut bids = Vec::new();
+        for row in rows {
+            let bid_job_id = Cid::try_from(row.job_id_col.as_str())
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse bid's job_id as Cid: {} for job_id {}", e, row.job_id_col)))?;
+            
+            let estimate: ResourceEstimate = serde_json::from_str(&row.estimate_json)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize bid estimate: {}", e)))?;
+
+            // Ensure price is non-negative before converting to u64
+            if row.price < 0 {
+                return Err(AppError::Internal(anyhow::anyhow!("Invalid negative price found in database for bid by {} on job {}", row.bidder_did, bid_job_id)));
+            }
+
+            bids.push(Bid {
+                job_id: bid_job_id,
+                bidder: icn_identity::Did(row.bidder_did),
+                price: row.price as u64, // TokenAmount is u64
+                estimate,
+                reputation_score: row.reputation_score,
+            });
+        }
+
+        Ok(bids)
     }
 
     async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>, AppError> {
@@ -269,12 +412,84 @@ impl MeshJobStore for SqliteStore {
     }
 
     async fn assign_job(&self, job_id: &Cid, bidder_did: icn_identity::Did) -> Result<(), AppError> {
-        // Placeholder
-        Err(AppError::Internal(anyhow::anyhow!("assign_job not implemented yet")))
+        // 1. Fetch the job and check its current status
+        let (_job_request, current_status) = self.get_job(job_id).await?
+            .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
+
+        // 2. Validate that the job can be assigned
+        match current_status {
+            JobStatus::Pending | JobStatus::Bidding => {
+                // Proceed to update status
+            }
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "Job {} is in status {:?} and cannot be assigned.",
+                    job_id,
+                    current_status
+                )));
+            }
+        }
+
+        // 3. Update the job status to Assigned
+        self.update_job_status(job_id, JobStatus::Assigned { bidder: bidder_did }).await
     }
 
     async fn list_jobs_for_worker(&self, worker_did: &icn_identity::Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>, AppError> {
-        // Placeholder
-        Err(AppError::Internal(anyhow::anyhow!("list_jobs_for_worker not implemented yet")))
+        let worker_did_str = worker_did.0.clone();
+
+        #[derive(sqlx::FromRow)]
+        struct WorkerJobRow {
+            job_id: String,
+            request_json: String,
+            status_type: String,
+            status_did: Option<String>,
+            status_reason: Option<String>,
+        }
+
+        let rows = sqlx::query_as!( // Using query_as! directly if the struct fields match column names and types
+            WorkerJobRow,
+            r#"
+            SELECT job_id, request_json, status_type, status_did, status_reason
+            FROM jobs
+            WHERE (status_type = 'Assigned' AND status_did = $1)
+               OR (status_type = 'Running' AND status_did = $1)
+            "#,
+            worker_did_str
+        )
+        .fetch_all(&*self.pool)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch jobs for worker from database: {}", e)))?;
+
+        let mut worker_jobs = Vec::new();
+        for row in rows {
+            let job_cid = Cid::try_from(row.job_id.as_str())
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse job_id as Cid: {}", e)))?;
+            
+            let job_request: JobRequest = serde_json::from_str(&row.request_json)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize job request: {}", e)))?;
+
+            let job_status = match row.status_type.as_str() {
+                "Pending" => JobStatus::Pending, // Should not occur based on WHERE clause but good to be exhaustive
+                "Bidding" => JobStatus::Bidding, // Should not occur
+                "Assigned" => {
+                    let bidder_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status")))?;
+                    // We already filtered by worker_did, so this should match.
+                    JobStatus::Assigned { bidder: icn_identity::Did(bidder_did_str) }
+                }
+                "Running" => {
+                    let runner_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status")))?;
+                    // We already filtered by worker_did, so this should match.
+                    JobStatus::Running { runner: icn_identity::Did(runner_did_str) }
+                }
+                "Completed" => JobStatus::Completed, // Should not occur
+                "Failed" => { // Should not occur
+                    let reason = row.status_reason.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing reason for Failed status")))?;
+                    JobStatus::Failed { reason }
+                }
+                _ => return Err(AppError::Internal(anyhow::anyhow!("Unknown job status type '{}' for job {}", row.status_type, row.job_id))),
+            };
+            worker_jobs.push((job_cid, job_request, job_status));
+        }
+        Ok(worker_jobs)
     }
 } 

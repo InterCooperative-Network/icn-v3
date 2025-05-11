@@ -20,8 +20,16 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing_subscriber;
 use chrono::Utc;
 
+// Added for SqliteStore integration
+use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
+
 mod storage;
-use storage::{InMemoryStore, MeshJobStore};
+// Remove InMemoryStore if it's no longer the default and not used elsewhere, or keep if needed for tests/other configs
+// For now, assuming SqliteStore becomes the primary store.
+use storage::MeshJobStore; // MeshJobStore trait is still needed
+
+mod sqlite_store; // Declare the new module
+use sqlite_store::SqliteStore; // Import the SqliteStore struct
 
 mod reputation_client;
 mod bid_logic;
@@ -94,7 +102,40 @@ pub struct JobFailureDetails {
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     tracing_subscriber::fmt::init();
-    let store = Arc::new(InMemoryStore::new());
+
+    // --- Database Setup ---
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:icn_mesh_jobs.db?mode=rwc".to_string());
+    tracing::info!("Using database at: {}", database_url);
+
+    if !Sqlite::database_exists(&database_url).await.unwrap_or(false) {
+        tracing::info!("Database not found, creating new one...");
+        Sqlite::create_database(&database_url).await?;
+        tracing::info!("Database created.");
+    }
+
+    let pool = Arc::new(SqlitePool::connect(&database_url).await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to database {}: {}", database_url, e))?);
+    tracing::info!("Database connection pool established.");
+
+    // Run migrations
+    // The path is relative to CARGO_MANIFEST_DIR, which is the root of the current crate.
+    // If main.rs is in src/, then ./migrations is correct if migrations/ is in the crate root.
+    match sqlx::migrate!("./migrations").run(&*pool).await {
+        Ok(_) => tracing::info!("Database migrations completed successfully."),
+        Err(e) => {
+            tracing::error!("Failed to run database migrations: {}", e);
+            // Depending on the error, you might want to panic or handle differently.
+            // For instance, if the migrations table is locked, it might be a transient issue.
+            // If migrations are corrupt, it's a fatal error.
+            return Err(anyhow::anyhow!("Migration error: {}", e));
+        }
+    }
+    // --- End Database Setup ---
+
+    // Replace InMemoryStore with SqliteStore
+    let store: Arc<dyn MeshJobStore> = Arc::new(SqliteStore::new(pool.clone()));
+    tracing::info!("Using SqliteStore for job and bid management.");
+
     let reputation_service_url = Arc::new(env::var("REPUTATION_SERVICE_URL").unwrap_or_else(|_| "http://localhost:8081".to_string()));
     tracing::info!("Using reputation service at: {}", *reputation_service_url);
 
@@ -148,7 +189,11 @@ async fn list_jobs(
 ) -> Result<impl IntoResponse, AppError> {
     let status_filter = parse_job_status(query.status);
     match store.list_jobs(status_filter).await {
-        job_cids => Ok(AxumJson(job_cids.into_iter().map(|cid| cid.to_string()).collect::<Vec<_>>()).into_response()),
+        Ok(job_cids) => Ok(AxumJson(job_cids.into_iter().map(|cid| cid.to_string()).collect::<Vec<_>>()).into_response()),
+        Err(e) => {
+            tracing::error!("Failed to list jobs: {}", e);
+            Err(AppError::Internal(e))
+        }
     }
 }
 
@@ -157,14 +202,9 @@ async fn get_jobs_for_worker_handler(
     Path(worker_did_str): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let worker_did = Did(worker_did_str.clone());
-    // Basic DID validation could be added here if Did::try_from is available and desired.
-    // For now, assuming worker_did_str is plausible.
 
     match store.list_jobs_for_worker(&worker_did).await {
         Ok(jobs_list) => {
-            // The list_jobs_for_worker returns Vec<(Cid, JobRequest, JobStatus)>.
-            // We need to serialize this into a suitable JSON response.
-            // Let's create a simple struct for the response items for better clarity.
             #[derive(Serialize)]
             struct WorkerJobEntry {
                 job_id: String,
@@ -491,41 +531,46 @@ async fn handle_bid_stream(mut socket: WebSocket, store: Arc<dyn MeshJobStore>, 
         }
     };
     tracing::info!("Subscribed to new bids for job {}", job_id);
+
     loop {
         tokio::select! {
-            Ok(bid) = bid_receiver.recv() => {
-                if let Ok(json_bid) = serde_json::to_string(&bid) {
-                    if socket.send(Message::Text(json_bid)).await.is_err() {
-                        tracing::warn!("Failed to send new bid to WebSocket client for job {}. Client disconnected?", job_id);
-                        break; 
+            received_bid = bid_receiver.recv() => {
+                match received_bid {
+                    Ok(bid) => {
+                        if let Ok(json_bid) = serde_json::to_string(&bid) {
+                            if socket.send(Message::Text(json_bid)).await.is_err() {
+                                tracing::warn!("WebSocket send error for job {}, client disconnected?", job_id);
+                                break;
+                            }
+                        } else {
+                            tracing::error!("Failed to serialize bid for WebSocket broadcast on job {}", job_id);
+                        }
                     }
-                } else {
-                    tracing::warn!("Failed to serialize new bid for job {}: {:?}", job_id, bid);
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!("WebSocket bid stream for job {} lagged by {} messages.", job_id, n);
+                        // Optionally, you could send an error to the client or just continue
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::info!("Bid broadcast channel closed for job {}. WebSocket stream ending.", job_id);
+                        break;
+                    }
                 }
             }
-            Some(Ok(msg)) = socket.next() => {
+            msg = socket.recv() => {
                 match msg {
-                    Message::Text(t) => { tracing::debug!("Received text message from client for job {}: {}", job_id, t); }
-                    Message::Binary(b) => { tracing::debug!("Received binary message from client for job {}: {:?}", job_id, b); }
-                    Message::Ping(p) => { if socket.send(Message::Pong(p)).await.is_err() { break; } }
-                    Message::Pong(_) => { tracing::debug!("Pong received from client for job {}", job_id); }
-                    Message::Close(c) => { tracing::info!("Client closed WebSocket connection for job {}: {:?}", job_id, c); break; }
+                    Some(Ok(Message::Close(_))) | None => {
+                        tracing::info!("WebSocket connection closed by client for job bids: {}", job_id);
+                        break;
+                    }
+                    Some(Ok(_)) => { /* We don't expect messages from client on this WebSocket */ }
+                    Some(Err(e)) => {
+                        tracing::warn!("WebSocket receive error for job {}: {}", job_id, e);
+                        break;
+                    }
                 }
-            }
-            Err(RecvError::Closed) = bid_receiver.recv() => {
-                tracing::warn!("Bid broadcast channel closed for job {}. No more live bids will be sent.", job_id);
-                break;
-            }
-            Err(RecvError::Lagged(n)) = bid_receiver.recv() => {
-                tracing::warn!("Bid broadcast channel lagged for job {} by {} messages. Client may have missed bids.", job_id, n);
-            }
-            else => {
-                tracing::info!("WebSocket client for job {} disconnected or stream ended.", job_id);
-                break;
             }
         }
     }
-    tracing::info!("Stopped streaming bids for job {}", job_id);
 }
 
 async fn begin_bidding_handler(
