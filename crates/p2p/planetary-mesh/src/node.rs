@@ -718,41 +718,125 @@ impl MeshNode {
 
     // Placeholder for triggering economic settlement
     async fn trigger_economic_settlement(&self, job_id: &IcnJobId, receipt: &ExecutionReceipt) {
-        // TODO: Retrieve bid price for the job_id
-        // TODO: Interact with icn-economics via RuntimeContext or host calls to perform transfer
-        tracing::info!("[MeshNode] Placeholder: Triggering economic settlement for JobID: {}, Executor: {}, Receipt CID: {}",
+        tracing::info!("[MeshNode] Attempting economic settlement for JobID: {}, Executor: {}, Receipt CID: {}",
                  job_id, receipt.executor, receipt.cid().map_or_else(|e| format!("Error: {}", e), |c| c.to_string()));
-        // Example:
-        // if let Some(ctx) = &self.local_runtime_context {
-        //     let bid_price = self.get_winning_bid_price_for_job(job_id).await; // Needs implementation
-        //     if let Some(price) = bid_price {
-        //         // Assuming originator is self.local_node_did or fetched from job details
-        //         let originator_did = self.announced_originated_jobs.read().unwrap().get(job_id).map(|m| m.submitter_did.clone());
-        //         if let Some(orig_did) = originator_did {
-        //              // This is conceptual; actual call depends on how Economics is exposed
-        //             // let result = ctx.economics.transfer(&orig_did, None, None, &receipt.executor, None, None, ResourceType::Token, price, &ctx.resource_ledger).await;
-        //             // tracing::info!("Economic settlement result for job {}: {:?}", job_id, result);
-        //         }
-        //     }
-        // }
+
+        const MOCK_BID_PRICE: u64 = 100; // TODO: Replace with actual bid price retrieval logic.
+        tracing::warn!("[MeshNode] Using MOCK_BID_PRICE: {} for job {}", MOCK_BID_PRICE, job_id);
+
+        let originator_did_opt: Option<Did> = {
+            let originated_jobs_guard = self.announced_originated_jobs.read().unwrap();
+            originated_jobs_guard.get(job_id).map(|manifest| manifest.submitter_did.clone())
+        };
+
+        if originator_did_opt.is_none() {
+            tracing::error!("[MeshNode] Economic settlement failed: Could not find originator DID for JobID: {}. Job manifest might be missing.", job_id);
+            return;
+        }
+        let originator_did = originator_did_opt.unwrap();
+        let executor_did = &receipt.executor;
+
+        if originator_did == *executor_did {
+            tracing::info!("[MeshNode] Economic settlement skipped: Originator and executor are the same ({}). No payment needed.", originator_did);
+            return;
+        }
+
+        if let Some(rt_ctx) = &self.local_runtime_context {
+            tracing::info!("[MeshNode] Attempting to transfer {} ICN from {} to {} for job {}",
+                MOCK_BID_PRICE, originator_did, executor_did, job_id
+            );
+
+            let transfer_result = rt_ctx.economics.transfer_balance_direct(
+                &originator_did,      // from_org_did
+                None,                 // from_ledger_scope_id
+                None,                 // from_key_scope
+                executor_did,         // to_org_did
+                None,                 // to_ledger_scope_id
+                None,                 // to_key_scope
+                &icn_economics::ResourceType::Token("ICN".to_string()), // resource_type
+                MOCK_BID_PRICE,       // amount
+                &rt_ctx.resource_ledger,
+                &rt_ctx.transaction_log,
+            ).await;
+
+            match transfer_result {
+                Ok(_) => {
+                    tracing::info!("[MeshNode] Economic settlement SUCCESSFUL for JobID: {}. Transferred {} ICN from {} to {}.",
+                             job_id, MOCK_BID_PRICE, originator_did, executor_did);
+                }
+                Err(e) => {
+                    tracing::error!("[MeshNode] Economic settlement FAILED for JobID: {}. Error during transfer from {} to {}: {:?}",
+                              job_id, originator_did, executor_did, e);
+                }
+            }
+        } else {
+            tracing::warn!("[MeshNode] Economic settlement skipped for JobID: {}: No local_runtime_context available.", job_id);
+        }
     }
 
     // Placeholder for triggering reputation update
-    async fn trigger_reputation_update(&self, _job_id: &IcnJobId, receipt: &ExecutionReceipt) {
-        // TODO: Convert receipt.status to a ReputationUpdateEvent
-        // TODO: Interact with an icn-reputation service/system
-        tracing::info!("[MeshNode] Placeholder: Triggering reputation update for Executor: {}, Status: {:?}, Receipt CID: {}",
-                 receipt.executor, receipt.status, receipt.cid().map_or_else(|e| format!("Error: {}", e), |c| c.to_string()));
-        // Example:
-        // let event_type = match receipt.status {
-        //     StandardJobStatus::CompletedSuccess => Some(ReputationUpdateEvent::JobCompletedSuccessfully { /* ...details... */ }),
-        //     StandardJobStatus::Failed { .. } => Some(ReputationUpdateEvent::JobFailed { /* ...details... */ }),
-        //     _ => None,
-        // };
-        // if let Some(event) = event_type {
-        //     // Send this event to the reputation system
-        //     // self.reputation_updater_client.submit_event(&receipt.executor, event).await;
+    async fn trigger_reputation_update(&self, job_id: &IcnJobId, receipt: &ExecutionReceipt) {
+        let executor_did = &receipt.executor;
+        let timestamp = receipt.execution_end_time; // Or Utc::now().timestamp_millis() if more current time is needed
+
+        let outcome_description = match receipt.status {
+            StandardJobStatus::CompletedSuccess => "CompletedSuccess".to_string(),
+            StandardJobStatus::Failed { ref error, .. } => format!("Failed: {}", error),
+            _ => format!("OtherStatus: {:?}", receipt.status),
+        };
+
+        tracing::info!(
+            "[MeshNode] Attempting to trigger reputation update for JobID: {}, Executor: {}, Outcome: {}, Timestamp: {}",
+            job_id, executor_did, outcome_description, timestamp
+        );
+
+        if self.local_runtime_context.is_none() {
+            tracing::warn!(
+                "[MeshNode] Reputation update skipped for JobID: {}: No local_runtime_context available.",
+                job_id
+            );
+            return;
+        }
+
+        // TODO: Define the actual ReputationUpdateEvent structure based on icn-reputation crate's API.
+        // Example conceptual structure:
+        // enum ConcreteReputationEvent {
+        //     JobSucceeded { job_id: IcnJobId, executor_did: Did, timestamp: u64 },
+        //     JobFailed { job_id: IcnJobId, executor_did: Did, reason: String, timestamp: u64 },
         // }
+        // let reputation_event = match receipt.status {
+        //     StandardJobStatus::CompletedSuccess => ConcreteReputationEvent::JobSucceeded { 
+        //         job_id: job_id.clone(), 
+        //         executor_did: executor_did.clone(), 
+        //         timestamp 
+        //     },
+        //     StandardJobStatus::Failed { ref error, .. } => ConcreteReputationEvent::JobFailed { 
+        //         job_id: job_id.clone(), 
+        //         executor_did: executor_did.clone(), 
+        //         reason: error.clone(), 
+        //         timestamp 
+        //     },
+        //     _ => {
+        //         tracing::warn!("[MeshNode] No specific reputation event for JobID: {} with status: {:?}", job_id, receipt.status);
+        //         return;
+        //     }
+        // };
+
+        // TODO: Interact with the reputation system/module via local_runtime_context.
+        // This will likely involve calling a method on a reputation engine or service.
+        // Example conceptual call:
+        // if let Some(rt_ctx) = &self.local_runtime_context {
+        //     match rt_ctx.reputation_service.apply_event(reputation_event).await {
+        //         Ok(_) => tracing::info!("[MeshNode] Reputation update applied successfully for JobID: {}, Executor: {}", job_id, executor_did),
+        //         Err(e) => tracing::error!("[MeshNode] Failed to apply reputation update for JobID: {}, Executor: {}: {:?}", job_id, executor_did, e),
+        //     }
+        // }
+
+        tracing::warn!(
+            "[MeshNode] Placeholder: Actual reputation event creation and application logic needs to be implemented for JobID: {}.
+",
+            job_id
+        );
     }
 
     pub async fn run_event_loop(&mut self, mut internal_action_rx: mpsc::Receiver<NodeInternalAction>) -> Result<(), Box<dyn Error>> {
