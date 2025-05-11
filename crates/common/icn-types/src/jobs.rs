@@ -35,13 +35,16 @@ pub struct ResourceEstimate {
     pub estimated_duration_secs: Option<u64>,
 }
 
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// NOTE: Eq and Hash have been removed from Bid due to the inclusion of Option<f64> for reputation_score.
+// f64 does not implement Eq or Hash. If these traits are strictly needed for Bid in the future,
+// consider using a wrapper for f64 (e.g., ordered_float::NotNan) or representing the score differently.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] // Removed Eq, Hash
 pub struct Bid {
     pub job_id: Cid, // Assuming JobRequest itself will be a CID or have an ID that is a CID
     pub bidder: Did,
     pub price: TokenAmount,
     pub estimate: ResourceEstimate, // Bidder's estimate of resources they'll use/provide
+    pub reputation_score: Option<f64>, // Added as per discussion
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
