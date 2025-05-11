@@ -2,7 +2,7 @@
 
 mod sign;
 
-pub use sign::{sign_receipt, verify_receipt, SignError};
+pub use sign::{sign_receipt_in_place, verify_embedded_signature, SignError};
 
 use chrono::{DateTime, Utc};
 use cid::{Cid, multihash};

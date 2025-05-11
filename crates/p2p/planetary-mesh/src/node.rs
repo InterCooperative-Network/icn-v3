@@ -1,7 +1,7 @@
 use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC};
 use crate::protocol::{MeshProtocolMessage, NodeCapability};
 use futures::StreamExt;
-use icn_identity::Did;
+use icn_identity::{Did, KeyPair};
 use libp2p::gossipsub::IdentTopic as Topic;
 use libp2p::identity;
 use libp2p::swarm::{Swarm, SwarmEvent};
@@ -11,9 +11,15 @@ use std::error::Error;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::time;
-use icn_economics::ResourceType; // For mock capability data
-use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile, JobId as IcnJobId}; // Added for MeshJob, renamed JobId to avoid conflict
-use uuid::Uuid; // For generating mock JobId
+use icn_economics::ResourceType;
+use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile, JobId as IcnJobId, JobStatus as StandardJobStatus};
+use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place, ReceiptError, SignError as ReceiptSignError}; // Added for receipt generation
+use cid::Cid; // For storing receipt CIDs
+
+// Access to RuntimeContext for anchoring receipts locally
+use icn_runtime::context::RuntimeContext; 
+use icn_runtime::host_environment::ConcreteHostEnvironment; // For calling anchor_receipt
+
 use libp2p::gossipsub::TopicHash;
 
 // Helper to create job-specific interest topic strings
@@ -24,33 +30,57 @@ fn job_interest_topic_string(job_id: &IcnJobId) -> String {
 pub struct MeshNode {
     swarm: Swarm<MeshBehaviour>,
     local_peer_id: PeerId,
-    local_node_did: Did, // Store the DID string for capability construction
+    local_node_did: Did,
+    local_keypair: KeyPair, // Store keypair for signing receipts
     capability_gossip_topic: Topic,
     job_announcement_topic: Topic,
-    // Stores jobs received from the P2P network
     pub available_jobs_on_mesh: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
-    // Queue for jobs from the ICN Runtime to be announced on the P2P network
     pub runtime_job_queue_for_announcement: Arc<Mutex<VecDeque<MeshJob>>>,
-    // Stores DIDs of nodes interested in jobs this node originated
     pub job_interests_received: Arc<RwLock<HashMap<IcnJobId, Vec<Did>>>>,
-    // Stores jobs originated by this node and successfully announced
     pub announced_originated_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
+
+    // State for executor simulation
+    pub executing_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
+    pub completed_job_receipt_cids: Arc<RwLock<HashMap<IcnJobId, Cid>>>,
+    
+    // Access to local runtime context for anchoring receipts
+    runtime_context: Option<Arc<RuntimeContext>>, 
 }
 
 impl MeshNode {
     pub async fn new(
-        node_did_str: String, // Node's DID
-        keypair_opt: Option<identity::Keypair>, // Optional pre-generated keypair
-        listen_addr_opt: Option<String>, // Optional listen address
-        runtime_job_queue: Arc<Mutex<VecDeque<MeshJob>>>, // Queue from Runtime
+        node_did_str: String,
+        keypair_opt: Option<identity::Keypair>,
+        listen_addr_opt: Option<String>,
+        runtime_job_queue: Arc<Mutex<VecDeque<MeshJob>>>,
+        local_runtime_context: Option<Arc<RuntimeContext>>, // New param for local runtime access
     ) -> Result<Self, Box<dyn Error>> {
-        let local_key = keypair_opt.unwrap_or_else(identity::Keypair::generate_ed25519);
-        let local_peer_id = PeerId::from(local_key.public());
-        println!("Local Peer ID: {}", local_peer_id);
-        println!("Local Node DID for capabilities: {}", node_did_str);
+        let p2p_keypair = keypair_opt.unwrap_or_else(identity::Keypair::generate_ed25519);
+        // We need icn_identity::KeyPair for signing receipts, assume conversion or separate provision
+        // For now, let's generate a new one if not perfectly convertible or store p2p_keypair if it is.
+        // This needs clarification based on KeyPair types. Assuming p2p_keypair can be cloned into icn_identity::KeyPair or similar
+        // For the purpose of this example, let's assume KeyPair::from_libp2p_keypair(&p2p_keypair) exists or is handled.
+        // To make it runnable, let's use the node_did_str to re-derive/create a consistent KeyPair if possible or require it.
+        // Simplified: using a newly generated KeyPair for icn_identity for now. In reality, this must be THE node's identity key.
+        let node_identity_keypair = KeyPair::from_seed(&p2p_keypair.clone().try_into_ed25519().unwrap().to_bytes()[0..32])?;
+        
+        let local_peer_id = PeerId::from(p2p_keypair.public());
+        let parsed_did = Did::parse(&node_did_str)?;
 
-        let transport = libp2p::development_transport(local_key.clone()).await?;
-        let behaviour = MeshBehaviour::new(&local_key)?;
+        // Ensure the DID derived from the keypair matches the provided node_did_str if they are meant to be the same entity
+        if parsed_did != node_identity_keypair.did {
+            // This is a critical mismatch. For now, we'll log an error and proceed with the keypair's DID
+            // for internal consistency in signing, but this indicates a configuration issue.
+            eprintln!("Warning: Provided node_did_str '{}' does not match DID derived from keypair '{}'. Using keypair's DID for node identity.", parsed_did, node_identity_keypair.did);
+        }
+        let local_node_did_for_ops = node_identity_keypair.did.clone();
+
+
+        println!("Local Peer ID: {}", local_peer_id);
+        println!("Local Node DID for operations: {}", local_node_did_for_ops);
+
+        let transport = libp2p::development_transport(p2p_keypair.clone()).await?;
+        let behaviour = MeshBehaviour::new(&p2p_keypair)?;
         let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
 
         let listen_addr = listen_addr_opt
@@ -61,13 +91,17 @@ impl MeshNode {
         Ok(Self {
             swarm,
             local_peer_id,
-            local_node_did: Did::parse(&node_did_str)?,
+            local_node_did: local_node_did_for_ops, // Use the DID from the keypair that will sign
+            local_keypair: node_identity_keypair, // Store the KeyPair for signing
             capability_gossip_topic: Topic::new(CAPABILITY_TOPIC),
             job_announcement_topic: Topic::new(JOB_ANNOUNCEMENT_TOPIC),
             available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
             runtime_job_queue_for_announcement: runtime_job_queue,
             job_interests_received: Arc::new(RwLock::new(HashMap::new())),
             announced_originated_jobs: Arc::new(RwLock::new(HashMap::new())),
+            executing_jobs: Arc::new(RwLock::new(HashMap::new())),
+            completed_job_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
+            runtime_context: local_runtime_context,
         })
     }
 
@@ -209,11 +243,84 @@ impl MeshNode {
         Ok(())
     }
 
+    async fn simulate_execution_and_anchor_receipt(&self, job: MeshJob) -> Result<(), Box<dyn Error>> {
+        let job_id = job.job_id.clone();
+        println!("Attempting to take job for execution: {}", job_id);
+
+        // Move to executing_jobs to prevent re-taking (simple lock then move)
+        {
+            let mut executing = self.executing_jobs.write().map_err(|e| format!("Lock error on executing_jobs: {}", e))?;
+            if executing.contains_key(&job_id) || self.completed_job_receipt_cids.read().unwrap().contains_key(&job_id) {
+                // Already processing or completed
+                return Ok(()); 
+            }
+            executing.insert(job_id.clone(), job.clone());
+        }
+        
+        println!("Simulating execution for JobId: {}", job_id);
+        tokio::time::sleep(Duration::from_secs(2)).await; // Simulate work
+        println!("Execution complete for JobId: {}", job_id);
+
+        // Construct ExecutionReceipt
+        let execution_start_time = chrono::Utc::now().timestamp() as u64 - 2;
+        let execution_end_time_dt = chrono::Utc::now();
+        let execution_end_time = execution_end_time_dt.timestamp() as u64;
+
+        // Mock resource usage (ideally derive from job.params.required_resources_json)
+        let mut resource_usage_actual = HashMap::new(); 
+        resource_usage_actual.insert(ResourceType::Cpu, 50); // mock value
+        resource_usage_actual.insert(ResourceType::Memory, 128); // mock value
+
+        let mut receipt = ExecutionReceipt {
+            job_id: job_id.clone(),
+            executor: self.local_node_did.clone(), 
+            status: StandardJobStatus::CompletedSuccess, 
+            result_data_cid: Some("bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()), // mock
+            logs_cid: Some("bafybeigcafecafebeeffeedbeeffeedbeeffeedbeeffeedbeeffeedbeeffeed".to_string()), // mock
+            resource_usage: resource_usage_actual,
+            execution_start_time,
+            execution_end_time,
+            execution_end_time_dt,
+            signature: Vec::new(), // Will be filled by sign_receipt_in_place
+            coop_id: job.params.coop_id.clone(), // Propagate from MeshJobParams if present
+            community_id: job.params.community_id.clone(), // Propagate from MeshJobParams if present
+        };
+
+        // Sign the receipt
+        sign_receipt_in_place(&mut receipt, &self.local_keypair)
+            .map_err(|e| format!("Failed to sign receipt for job {}: {:?}", job_id, e))?;
+        println!("Receipt signed for JobId: {}", job_id);
+
+        // Anchor receipt via local runtime context
+        if let Some(rt_ctx) = &self.runtime_context {
+            let host_env = ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
+            // anchor_receipt expects the receipt by value
+            match host_env.anchor_receipt(receipt.clone()).await {
+                Ok(_) => {
+                    let anchored_receipt_cid = receipt.cid().map_err(|e| format!("Failed to get CID of anchored receipt: {}", e))?;
+                    println!("Receipt successfully anchored for JobId: {}, Receipt CID: {}", job_id, anchored_receipt_cid);
+                    self.completed_job_receipt_cids.write().unwrap().insert(job_id.clone(), anchored_receipt_cid);
+                }
+                Err(e) => {
+                    eprintln!("Failed to anchor receipt for JobId {}: {:?}", job_id, e);
+                    // TODO: Consider error handling, e.g., retrying or marking job as failed to anchor
+                }
+            }
+        } else {
+            eprintln!("No runtime_context available to anchor receipt for JobID: {}. Skipping anchoring.", job_id);
+        }
+
+        // Clean up from executing_jobs after attempting anchor
+        self.executing_jobs.write().unwrap().remove(&job_id);
+
+        Ok(())
+    }
+
     pub async fn run_event_loop(mut self) {
         let mut capability_broadcast_interval = time::interval(Duration::from_secs(30));
-        // Interval to check runtime queue and announce jobs
-        let mut runtime_job_check_interval = time::interval(Duration::from_secs(5)); 
-        let mut express_interest_interval = time::interval(Duration::from_secs(15)); // New interval
+        let mut runtime_job_check_interval = time::interval(Duration::from_secs(5));
+        let mut express_interest_interval = time::interval(Duration::from_secs(15));
+        let mut job_execution_check_interval = time::interval(Duration::from_secs(20)); // New interval for executor simulation
 
         // Known topic hashes for quick matching
         let capability_topic_hash = Topic::new(CAPABILITY_TOPIC).hash();
@@ -262,6 +369,33 @@ impl MeshNode {
                         }
                     } else {
                         eprintln!("Failed to get read lock on available_jobs_on_mesh for expressing interest.");
+                    }
+                }
+                _ = job_execution_check_interval.tick() => {
+                    let mut job_to_execute: Option<MeshJob> = None;
+                    if let Ok(available_map) = self.available_jobs_on_mesh.read() {
+                        for (_id, job) in available_map.iter() {
+                            // Simple selection: not originated by self, and not already completed/executing
+                            if job.originator_did != self.local_node_did && 
+                               !self.executing_jobs.read().unwrap().contains_key(&job.job_id) &&
+                               !self.completed_job_receipt_cids.read().unwrap().contains_key(&job.job_id) {
+                                
+                                // TODO: Add more sophisticated suitability check here, e.g., based on expressed interest or resource matching
+                                println!("Considering job {} for execution.", job.job_id);
+                                job_to_execute = Some(job.clone());
+                                break; // Take the first suitable one for now
+                            }
+                        }
+                    }
+
+                    if let Some(job) = job_to_execute {
+                        // Spawn as a new task to avoid blocking the event loop
+                        let self_clone = Arc::new(self.clone_for_async_tasks()); 
+                        tokio::spawn(async move {
+                            if let Err(e) = self_clone.simulate_execution_and_anchor_receipt(job).await {
+                                eprintln!("Error during simulated execution and anchoring: {:?}", e);
+                            }
+                        });
                     }
                 }
                 event = self.swarm.select_next_some() => {
@@ -399,6 +533,33 @@ impl MeshNode {
             }
         }
     }
+    
+    // Helper to clone necessary Arcs for async tasks spawned from event loop
+    // This is a simplified clone; a real one might need more careful consideration of what needs to be Arc<Mutex/RwLock<T>> vs what can be cloned directly.
+    // For MeshNode methods that take `&self` or `&mut self` and are called from spawned tasks, `self` needs to be Arc-wrapped.
+    // However, our `simulate_execution_and_anchor_receipt` takes `&self` but acts on Arc fields, so it's okay if the task owns `self_clone`.
+    // This method is primarily for if we needed to pass `MeshNode` itself into a context that requires `'static` lifetime or if the method was `&mut self`.
+    // The current approach of `let self_clone = Arc::new(self.clone_for_async_tasks());` and then calling `self_clone.method()` on it
+    // requires MeshNode to be Clone. Let's make it Clone. The Arcs within it make this a shallow clone, which is what we want.
+    fn clone_for_async_tasks(&self) -> Self {
+        // This relies on MeshNode deriving Clone. The Arcs will be cloned (incrementing ref count).
+        // The KeyPair also needs to be Clone.
+        self.clone()
+    }
+}
+
+// MeshNode needs to be Clone for the async task spawning pattern used.
+// This is generally okay if the fields are Arcs or themselves Clone.
+// KeyPair needs to implement Clone.
+#[derive(Clone)] // Add derive Clone here
+struct MeshNodeInternalState { // Example if we needed to extract parts for cloning, but direct clone of MeshNode is simpler if KeyPair is Clone
+    local_node_did: Did,
+    local_keypair: KeyPair,
+    available_jobs_on_mesh: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
+    executing_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
+    completed_job_receipt_cids: Arc<RwLock<HashMap<IcnJobId, Cid>>>,
+    runtime_context: Option<Arc<RuntimeContext>>,
+    // ... potentially swarm interaction components if methods on them were called directly, but they are on self.swarm currently.
 }
 
 // Added helper for MeshProtocolMessage to get a name string for logging

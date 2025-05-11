@@ -1,7 +1,7 @@
 use crate::context::RuntimeContext;
 use icn_economics::ResourceType;
 use icn_identity::Did;
-use icn_mesh_receipts::{ExecutionReceipt, verify_receipt};
+use icn_mesh_receipts::{ExecutionReceipt, verify_embedded_signature, SignError as ReceiptSignError};
 use icn_types::dag::ReceiptNode;
 use icn_types::dag_store::DagStore;
 use icn_types::org::{CooperativeId, CommunityId};
@@ -186,19 +186,28 @@ impl ConcreteHostEnvironment {
             receipt.community_id = self.community_id.clone();
         }
         
-        // 3. Verify the receipt signature if one exists
-        if !receipt.signature.is_empty() {
-            // Verify signature - this will need to be updated based on the actual verification mechanism
-            // For now, we'll assume verification is successful if there's a non-empty signature
-            // In a real implementation, we'd validate the signature against the receipt's content
-            tracing::debug!("Receipt has signature of length {}, assuming valid", receipt.signature.len());
-            
-            // Note: The real implementation would look like:
-            // let is_valid = verify_receipt(&receipt, &signature).map_err(...)?;
-            // if !is_valid { return Err(...); }
+        // 3. Verify the receipt signature
+        if receipt.signature.is_empty() {
+            return Err(AnchorError::InvalidSignature("Receipt has no signature.".to_string()));
+        }
+
+        match verify_embedded_signature(&receipt) {
+            Ok(true) => {
+                tracing::debug!("Receipt signature verified successfully for executor {}", receipt.executor);
+            }
+            Ok(false) => {
+                return Err(AnchorError::InvalidSignature("Receipt signature verification failed.".to_string()));
+            }
+            Err(e) => {
+                return Err(AnchorError::InvalidSignature(format!("Error during signature verification: {}", e)));
+            }
         }
         
-        // 4. Generate CID for the receipt
+        // TODO: Economic recording step (Phase 3/4)
+        // If the receipt contains verified resource usage, this could trigger an update
+        // in the icn-economics ledger.
+
+        // 4. Generate CID for the (now verified and signed) receipt
         let receipt_cid = receipt.cid()
             .map_err(|e| AnchorError::CidError(e.to_string()))?;
         
@@ -236,8 +245,8 @@ impl ConcreteHostEnvironment {
             .map_err(|e| AnchorError::DagStoreError(e.to_string()))?;
         
         // Log success
-        tracing::info!("Anchored receipt for task: {}, receipt CID: {}", 
-            receipt.task_cid, receipt_cid);
+        tracing::info!("Anchored receipt for job: {}, executor: {}, receipt CID: {}", 
+            receipt.job_id, receipt.executor, receipt_cid);
         
         Ok(())
     }
