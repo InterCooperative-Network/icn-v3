@@ -118,10 +118,7 @@ async fn sample_governed_assignment_test() {
     let job_id_str = job_creation_response["job_id"].as_str().expect("Job ID not found in creation response.");
     let job_id = Cid::try_from(job_id_str).expect("Failed to parse job_id_str as Cid");
 
-    // TODO: Bidding, Assignment & Assertions will go here
-    // For now, this sets up the file and a basic job creation with policy.
-    
-    // Example: Mark job for bidding
+    // Mark job for bidding
     let response_bidding = client
         .post(format!("{}/jobs/{}/begin-bidding", app_address, job_id_str))
         .send()
@@ -129,9 +126,133 @@ async fn sample_governed_assignment_test() {
         .expect("Failed to mark job for bidding.");
     assert_eq!(response_bidding.status().as_u16(), 200, "Failed to mark job for bidding. Response: {:?}", response_bidding.text().await);
 
+    // 6. Define Bidders and Bids
+    let bidder_a_did = Did("did:key:zAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()); // Low Rep
+    let bidder_b_did = Did("did:key:zBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()); // High Rep, High Price
+    let bidder_c_did = Did("did:key:zCccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string()); // Med Rep, Med Price
+    let bidder_d_did = Did("did:key:zDddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string()); // High Rep, Low Price (Expected Winner)
 
-    // Assertions will be added in the next step.
-    assert!(true); // Placeholder
+    // Bid A (Disqualified by min_reputation)
+    let bid_a = Bid {
+        id: None,
+        job_id,
+        bidder: bidder_a_did.clone(),
+        bid_amount: 10, // u64
+        resource_estimate: None,
+        reputation_score: Some(0.6), // Below min_reputation of 0.7
+        submitted_at: chrono::Utc::now(),
+        node_metadata: None,
+        verifiable_reputation_assertion: None,
+    };
+
+    // Bid B
+    let bid_b = Bid {
+        id: None,
+        job_id,
+        bidder: bidder_b_did.clone(),
+        bid_amount: 100,
+        resource_estimate: None,
+        reputation_score: Some(0.9),
+        submitted_at: chrono::Utc::now(),
+        node_metadata: None,
+        verifiable_reputation_assertion: None,
+    };
+
+    // Bid C
+    let bid_c = Bid {
+        id: None,
+        job_id,
+        bidder: bidder_c_did.clone(),
+        bid_amount: 50,
+        resource_estimate: None,
+        reputation_score: Some(0.8),
+        submitted_at: chrono::Utc::now(),
+        node_metadata: None,
+        verifiable_reputation_assertion: None,
+    };
+
+    // Bid D (Expected Winner)
+    let bid_d = Bid {
+        id: None,
+        job_id,
+        bidder: bidder_d_did.clone(),
+        bid_amount: 20,
+        resource_estimate: None,
+        reputation_score: Some(0.95),
+        submitted_at: chrono::Utc::now(),
+        node_metadata: None,
+        verifiable_reputation_assertion: None,
+    };
+
+    // 7. Submit Bids
+    for bid_payload in [&bid_a, &bid_b, &bid_c, &bid_d] {
+        let res = client
+            .post(format!("{}/jobs/{}/bids", app_address, job_id_str))
+            .json(bid_payload)
+            .send()
+            .await
+            .expect("Failed to submit bid");
+        assert_eq!(res.status().as_u16(), 202, "Failed to submit bid for {}. Response: {:?}", bid_payload.bidder.0, res.text().await);
+    }
+
+    // 8. Trigger Assignment
+    let assign_response = client
+        .post(format!("{}/jobs/{}/assign", app_address, job_id_str))
+        .send()
+        .await
+        .expect("Failed to trigger assignment");
+
+    assert_eq!(assign_response.status().as_u16(), 200, "Assignment failed. Response: {:?}", assign_response.text().await);
+
+    #[derive(serde::Deserialize, Debug)] // Add Deserialize here
+    struct AssignJobResponse {
+        message: String,
+        job_id: String,
+        assigned_bidder_did: String,
+        winning_bid_id: i64, 
+        winning_score: f64,
+    }
+
+    let assignment_details: AssignJobResponse = assign_response.json().await.expect("Failed to parse assignment response");
+
+    // 9. Assert Winning Bidder and Score
+    assert_eq!(assignment_details.assigned_bidder_did, bidder_d_did.0, "Incorrect bidder assigned.");
+    // Note: Floating point comparisons can be tricky. Assert within a small epsilon if exact match is problematic.
+    // Expected score for Bidder D: (0.95 * 0.5) + ( (1.0 - 20.0/100.0) * 0.5) = 0.475 + (0.8 * 0.5) = 0.475 + 0.4 = 0.875
+    let expected_score_bidder_d = 0.875;
+    assert!((assignment_details.winning_score - expected_score_bidder_d).abs() < 0.0001, 
+            "Winning score mismatch. Expected: {}, Got: {}", expected_score_bidder_d, assignment_details.winning_score);
+
+    // 10. Verify Job Status is Assigned
+    let job_status_response = client
+        .get(format!("{}/jobs/{}", app_address, job_id_str))
+        .send()
+        .await
+        .expect("Failed to get job details post-assignment.");
+    
+    assert_eq!(job_status_response.status().as_u16(), 200, "Failed to fetch job after assignment.");
+
+    let job_details: serde_json::Value = job_status_response.json().await.expect("Failed to parse job details.");
+    let status_obj = job_details["status"].as_object().expect("Status is not an object");
+
+    // Check for "Assigned" status type by looking for the presence of the "bidder" field within the status object.
+    // The JobStatus enum serializes `Assigned { bidder: Did }` into `{"Assigned": {"bidder": "did:key:..."}}`
+    // or just `{"bidder": "did:key:..."}` if using `#[serde(tag = "status_type", content = "details")]` style not shown here.
+    // Based on current sqlite_store.rs row mapping, it's likely a flat structure like `status_type: "Assigned", status_did: "bidder_did"`
+    // However, `get_job` in `main.rs` returns `json!({ "request": job_req, "status": status })` where `status` is the `JobStatus` enum.
+    // Let's assume JobStatus::Assigned { bidder } serializes to something like `{"Assigned": {"bidder": "did:xxx"}}` or `{"status_type": "Assigned", "bidder": "did:xxx"}`.
+    // The current JobStatus enum definition doesn't specify serde representation details.
+    // A robust way is to deserialize into the JobStatus enum itself if its definition is accessible and serde-compatible.
+    
+    // For simplicity, let's check the assigned_bidder_did from the status object, assuming a structure like `{"Assigned":{"bidder":"did:key:zD..."}}`
+    if let Some(assigned_status) = status_obj.get("Assigned") {
+        assert_eq!(assigned_status["bidder"].as_str().unwrap(), bidder_d_did.0, "Job status does not reflect correct assigned bidder.");
+    } else {
+        panic!("Job status is not 'Assigned'. Status: {:?}", job_details["status"]);
+    }
+
+    // Placeholder removed
+    // assert!(true); 
 }
 
 // We would also need to make the app_router function in main.rs public or move it to lib.rs
