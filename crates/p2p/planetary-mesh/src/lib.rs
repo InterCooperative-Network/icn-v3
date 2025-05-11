@@ -60,7 +60,7 @@ pub enum JobPriority {
 }
 
 /// Status of a job in the system
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum JobStatus {
     /// Job created but not yet submitted to the network
     Created,
@@ -69,10 +69,22 @@ pub enum JobStatus {
     Submitted,
 
     /// Job assigned to a node for execution
-    Assigned { node_id: String },
+    Assigned {
+        node_id: String,
+    },
 
     /// Job execution in progress
-    Running { node_id: String },
+    Running {
+        node_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_stage_index: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_stage_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        progress_percent: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status_message: Option<String>,
+    },
 
     /// Job completed successfully
     Completed {
@@ -85,10 +97,36 @@ pub enum JobStatus {
     Failed {
         node_id: Option<String>,
         error: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stage_index: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stage_id: Option<String>,
     },
 
     /// Job cancelled by the submitter
     Cancelled,
+
+    /// Job pending user input
+    PendingUserInput {
+        node_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stage_index: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stage_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cid: Option<String>,
+    },
+
+    /// Job awaiting next stage
+    AwaitingNextStage {
+        node_id: String,
+        completed_stage_index: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completed_stage_id: Option<String>,
+        next_stage_index: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        next_stage_id: Option<String>,
+    },
 }
 
 /// Compute resource requirements

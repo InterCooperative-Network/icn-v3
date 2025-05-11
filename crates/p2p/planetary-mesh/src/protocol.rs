@@ -29,11 +29,59 @@ pub enum MeshProtocolMessage {
         receipt_cid: String,   // The CID of the anchored ExecutionReceipt
         executor_did: Did,     // The DID of the node that executed the job and produced the receipt
     },
+    /// Sent by an executor node to update the originator (and potentially other interested parties)
+    /// about the status of an ongoing job.
+    JobStatusUpdateV1 {
+        job_id: JobId,
+        /// The DID of the executor node providing the status update.
+        executor_did: Did,
+        /// The new status of the job, using the enhanced `JobStatus` enum from `lib.rs` (parent module).
+        status: super::JobStatus,
+    },
+    /// Carries interactive input from a user/client (likely via the originator) to the job executor.
+    JobInteractiveInputV1 {
+        job_id: JobId,
+        /// The DID of the target executor node for this input.
+        target_executor_did: Did,
+        /// Optional DID of the ultimate user/client providing the input, for auditing or fine-grained response.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_user_did: Option<Did>,
+        /// Sequence number for ordering interactive messages within a job session.
+        sequence_num: u64,
+        /// Optional CID for larger interactive payloads.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload_cid: Option<String>,
+        /// Optional inline payload for smaller interactive messages.
+        /// One of payload_cid or payload_inline should typically be Some.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload_inline: Option<Vec<u8>>,
+    },
+    /// Carries interactive output from an executing job to the originator (and then to the user/client).
+    JobInteractiveOutputV1 {
+        job_id: JobId,
+        /// The DID of the executor node sending the output.
+        executor_did: Did,
+        /// The DID of the job originator to whom this output is addressed.
+        target_originator_did: Did,
+        /// Sequence number for ordering interactive messages.
+        sequence_num: u64,
+        /// Optional CID for larger interactive payloads.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload_cid: Option<String>,
+        /// Optional inline payload for smaller interactive messages.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload_inline: Option<Vec<u8>>,
+        /// Indicates if this is a chunk of a larger stream of output and if it's the final one.
+        #[serde(default)] // defaults to false
+        is_final_chunk: bool,
+        /// Optional key or identifier for this piece of output, if the job produces multiple named outputs.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_key: Option<String>,
+    },
     // Future message types:
     // JobBidV1 { job_id: JobId, executor_did: Did, bid_amount_tokens: u64, specific_commitments: Option<String> },
     // AcceptBidV1 { job_id: JobId, winning_executor_did: Did },
     // RejectBidV1 { job_id: JobId, executor_did: Did, reason: Option<String> },
-    // JobStatusUpdateV1 { job_id: JobId, status: JobStatus, executor_did: Did, message: Option<String> },
     // ResultAnnouncementV1 { job_id: JobId, executor_did: Did, result_cid: String, receipt_cid: String },
 }
 
