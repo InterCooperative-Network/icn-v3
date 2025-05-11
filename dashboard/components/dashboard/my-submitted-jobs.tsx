@@ -1,4 +1,4 @@
-"""import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MeshJob, JobReceiptLink } from '@/types/mesh'; // Assuming types are in @/types/mesh
 
 // Mock shadcn/ui components - replace with actual imports
@@ -93,7 +93,7 @@ export function MySubmittedJobs({ onViewReceipt }: MySubmittedJobsProps) {
                 fetchedJobs.forEach(job => {
                     fetchJobReceiptLink(job.job_id)
                         .then(link => {
-                            setReceiptLinks(prev => ({ ...prev, [job.job_id]: link }));
+                            setReceiptLinks((prev: Record<string, JobReceiptLink>) => ({ ...prev, [job.job_id]: link }));
                         })
                         .catch(err => console.error(`Failed to fetch receipt link for ${job.job_id}:`, err));
                 });
@@ -134,7 +134,7 @@ export function MySubmittedJobs({ onViewReceipt }: MySubmittedJobsProps) {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {jobs.map((job) => {
+                        {jobs.map((job: MeshJob) => {
                             const status = getJobStatus(job.job_id);
                             const receiptCid = receiptLinks[job.job_id]?.receipt_cid;
                             return (
@@ -169,5 +169,4 @@ export function MySubmittedJobs({ onViewReceipt }: MySubmittedJobsProps) {
             </div>
         </section>
     );
-}
-""" 
+} 

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { MySubmittedJobs } from './my-submitted-jobs';
 import { ExecutionReceiptModal } from './execution-receipt-modal';
+import { AvailableMeshJobs } from './available-mesh-jobs';
+import { RecentReceiptAnnouncements } from './recent-receipt-announcements';
 
 // Placeholder components for sections to be implemented later
 const AvailableMeshJobsPlaceholder = () => (
@@ -29,22 +31,22 @@ export function MeshJobsOverview() {
     };
 
     return (
-        <div className="p-4 md:p-6 space-y-6">
-            <header>
+        <div className="p-4 md:p-6 space-y-8">
+            <header className="mb-8">
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Mesh Compute Dashboard</h1>
                 <p className="text-sm text-gray-600 mt-1">Oversee your submitted jobs, discover available tasks, and view execution receipts from the ICN mesh network.</p>
             </header>
 
             <MySubmittedJobs onViewReceipt={handleViewReceipt} />
             
-            <AvailableMeshJobsPlaceholder />
+            <AvailableMeshJobs />
             
-            <RecentReceiptAnnouncementsPlaceholder />
+            <RecentReceiptAnnouncements onViewReceipt={handleViewReceipt} />
 
             {/* Render the modal conditionally */}
             <ExecutionReceiptModal
-                receiptCid={selectedReceiptCid} // Will be null if no receipt is selected
-                isOpen={!!selectedReceiptCid} // Boolean based on whether a CID is selected
+                receiptCid={selectedReceiptCid}
+                isOpen={!!selectedReceiptCid}
                 onClose={handleCloseModal}
             />
         </div>
