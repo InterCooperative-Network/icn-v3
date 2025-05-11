@@ -7,5 +7,6 @@ pub mod org;
 pub mod trust;
 pub mod mesh;
 pub mod jobs;
+pub mod reputation;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
