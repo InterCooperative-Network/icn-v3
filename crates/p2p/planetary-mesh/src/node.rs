@@ -13,7 +13,8 @@ use std::time::Duration;
 use tokio::time;
 use icn_economics::ResourceType;
 use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile, JobId as IcnJobId, JobStatus as StandardJobStatus, OrganizationScopeIdentifier};
-use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place, ReceiptError, SignError as ReceiptSignError}; // Added for receipt generation
+use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place, ReceiptError, SignError as ReceiptSignError, DagNode};
+use icn_types::reputation::{ReputationProfile, ReputationRecord, ReputationUpdateEvent}; // Added Reputation types
 use cid::Cid; // For storing receipt CIDs
 use chrono::{TimeZone, Utc}; // For timestamp conversion
 use tokio::sync::mpsc; // <<< ADD IMPORT FOR MPSC
@@ -721,8 +722,18 @@ impl MeshNode {
         tracing::info!("[MeshNode] Attempting economic settlement for JobID: {}, Executor: {}, Receipt CID: {}",
                  job_id, receipt.executor, receipt.cid().map_or_else(|e| format!("Error: {}", e), |c| c.to_string()));
 
-        const MOCK_BID_PRICE: u64 = 100; // TODO: Replace with actual bid price retrieval logic.
-        tracing::warn!("[MeshNode] Using MOCK_BID_PRICE: {} for job {}", MOCK_BID_PRICE, job_id);
+        // TODO: BIDDING SYSTEM INTEGRATION REQUIRED FOR ACTUAL PRICE.
+        // The current MOCK_BID_PRICE is a placeholder.
+        // Once the bidding protocol (e.g., JobBidV1 message, Bid struct, and bid storage)
+        // is implemented, this function must be updated to:
+        // 1. Retrieve all bids for the given `job_id`.
+        // 2. Find the specific bid where `bid.bidder == receipt.executor`.
+        // 3. Use `bid.price` (or equivalent field from the implemented Bid struct) for the transfer amount.
+        const MOCK_BID_PRICE: u64 = 100; 
+        tracing::warn!(
+            "[MeshNode] Using MOCK_BID_PRICE: {} for job {}. This is a placeholder until bidding system is implemented.",
+            MOCK_BID_PRICE, job_id
+        );
 
         let originator_did_opt: Option<Did> = {
             let originated_jobs_guard = self.announced_originated_jobs.read().unwrap();
@@ -775,68 +786,115 @@ impl MeshNode {
     }
 
     // Placeholder for triggering reputation update
-    async fn trigger_reputation_update(&self, job_id: &IcnJobId, receipt: &ExecutionReceipt) {
+    async fn trigger_reputation_update(&self, job_id_str: &IcnJobId, receipt: &ExecutionReceipt) {
         let executor_did = &receipt.executor;
-        let timestamp = receipt.execution_end_time; // Or Utc::now().timestamp_millis() if more current time is needed
+        let timestamp_utc = Utc::now();
 
-        let outcome_description = match receipt.status {
-            StandardJobStatus::CompletedSuccess => "CompletedSuccess".to_string(),
-            StandardJobStatus::Failed { ref error, .. } => format!("Failed: {}", error),
-            _ => format!("OtherStatus: {:?}", receipt.status),
+        // Attempt to use the receipt's CID as the job_id for the reputation event, as it's a verifiable anchor.
+        // If the JobId for reputation events *must* be the original job's CID, this will need adjustment.
+        let event_job_cid = match receipt.cid() {
+            Ok(cid) => cid,
+            Err(e) => {
+                tracing::error!(
+                    "[MeshNode] Failed to get receipt CID for reputation event (JobID: {}): {:?}. Skipping reputation update.",
+                    job_id_str, e
+                );
+                return;
+            }
         };
 
         tracing::info!(
-            "[MeshNode] Attempting to trigger reputation update for JobID: {}, Executor: {}, Outcome: {}, Timestamp: {}",
-            job_id, executor_did, outcome_description, timestamp
+            "[MeshNode] Attempting to trigger reputation update for JobID: {}, Executor: {}, ReceiptCID for event: {}",
+            job_id_str, executor_did, event_job_cid
         );
 
         if self.local_runtime_context.is_none() {
             tracing::warn!(
                 "[MeshNode] Reputation update skipped for JobID: {}: No local_runtime_context available.",
-                job_id
+                job_id_str
             );
             return;
         }
 
-        // TODO: Define the actual ReputationUpdateEvent structure based on icn-reputation crate's API.
-        // Example conceptual structure:
-        // enum ConcreteReputationEvent {
-        //     JobSucceeded { job_id: IcnJobId, executor_did: Did, timestamp: u64 },
-        //     JobFailed { job_id: IcnJobId, executor_did: Did, reason: String, timestamp: u64 },
-        // }
-        // let reputation_event = match receipt.status {
-        //     StandardJobStatus::CompletedSuccess => ConcreteReputationEvent::JobSucceeded { 
-        //         job_id: job_id.clone(), 
-        //         executor_did: executor_did.clone(), 
-        //         timestamp 
-        //     },
-        //     StandardJobStatus::Failed { ref error, .. } => ConcreteReputationEvent::JobFailed { 
-        //         job_id: job_id.clone(), 
-        //         executor_did: executor_did.clone(), 
-        //         reason: error.clone(), 
-        //         timestamp 
-        //     },
-        //     _ => {
-        //         tracing::warn!("[MeshNode] No specific reputation event for JobID: {} with status: {:?}", job_id, receipt.status);
-        //         return;
-        //     }
-        // };
+        let reputation_event = match &receipt.status {
+            StandardJobStatus::CompletedSuccess => {
+                let execution_duration_ms = receipt.execution_end_time.saturating_sub(receipt.execution_start_time) * 1000; // Assuming s to ms
+                ReputationUpdateEvent::JobCompletedSuccessfully {
+                    job_id: event_job_cid, // Using receipt's CID
+                    execution_duration_ms: execution_duration_ms as u32, // Ensure type cast is safe
+                    bid_accuracy: 1.0, // Placeholder: TODO: Requires actual bid vs. resource usage
+                    on_time: true,     // Placeholder: TODO: Requires definition of "on time"
+                    anchor_cid: Some(event_job_cid),
+                }
+            }
+            StandardJobStatus::Failed { error, .. } => ReputationUpdateEvent::JobFailed {
+                job_id: event_job_cid, // Using receipt's CID
+                reason: error.clone(),
+                anchor_cid: Some(event_job_cid),
+            },
+            _ => {
+                tracing::warn!(
+                    "[MeshNode] No specific reputation event for JobID: {} with status: {:?}. Skipping reputation update.",
+                    job_id_str, receipt.status
+                );
+                return;
+            }
+        };
 
-        // TODO: Interact with the reputation system/module via local_runtime_context.
-        // This will likely involve calling a method on a reputation engine or service.
-        // Example conceptual call:
-        // if let Some(rt_ctx) = &self.local_runtime_context {
-        //     match rt_ctx.reputation_service.apply_event(reputation_event).await {
-        //         Ok(_) => tracing::info!("[MeshNode] Reputation update applied successfully for JobID: {}, Executor: {}", job_id, executor_did),
-        //         Err(e) => tracing::error!("[MeshNode] Failed to apply reputation update for JobID: {}, Executor: {}: {:?}", job_id, executor_did, e),
-        //     }
-        // }
+        let record = ReputationRecord {
+            timestamp: timestamp_utc,
+            issuer: self.local_node_did.clone(), // The node verifying the receipt and issuing the record
+            subject: executor_did.clone(),       // The node whose reputation is being updated
+            event: reputation_event,
+            anchor: Some(event_job_cid),         // Anchoring to the receipt itself
+            signature: None, // TODO: Consider signing this record with self.local_keypair if needed by reputation system
+        };
 
-        tracing::warn!(
-            "[MeshNode] Placeholder: Actual reputation event creation and application logic needs to be implemented for JobID: {}.
-",
-            job_id
-        );
+        if let Some(rt_ctx) = &self.local_runtime_context {
+            // TODO: Confirm how RuntimeContext provides access to ReputationStore or a client.
+            // This is a PLACEHOLDER and needs to be adapted to the actual RuntimeContext API.
+            // Example: Accessing a reputation store plugin from RuntimeContext
+            // This assumes RuntimeContext has a way to get service extensions or plugins.
+            // The actual method might be rt_ctx.get_reputation_store() or similar.
+            // For the purpose of this scaffold, we'll log the intent and the record.
+            
+            tracing::info!(
+                "[MeshNode] Constructed ReputationRecord for JobID: {}: {:?}. Attempting to submit via RuntimeContext.",
+                job_id_str, record
+            );
+
+            // --- Conceptual Submission Logic (actual implementation depends on RuntimeContext) ---
+            // if let Some(reputation_service_client) = rt_ctx.get_reputation_client() { // Or however it's exposed
+            //     match reputation_service_client.submit_record(record).await {
+            //         Ok(_) => tracing::info!(
+            //             "[MeshNode] Reputation record submitted successfully for JobID: {}, Executor: {}",
+            //             job_id_str, executor_did
+            //         ),
+            //         Err(e) => tracing::error!(
+            //             "[MeshNode] Failed to submit reputation record for JobID: {}, Executor: {}: {:?}",
+            //             job_id_str, executor_did, e
+            //         ),
+            //     }
+            // } else {
+            //     tracing::warn!(
+            //         "[MeshNode] Reputation submission skipped: Reputation service/client not available in RuntimeContext for JobID: {}.",
+            //         job_id_str
+            //     );
+            // }
+            tracing::warn!(
+                "[MeshNode] Placeholder: Actual submission of ReputationRecord for JobID: {} via RuntimeContext needs implementation.",
+                job_id_str
+            );
+            // --- End Conceptual Submission Logic ---
+
+        } else {
+            // This case is already handled by the check at the beginning of the function,
+            // but kept for logical completeness if the structure changes.
+            tracing::warn!(
+                "[MeshNode] Reputation update skipped (again) for JobID: {}: No local_runtime_context available post-record creation.",
+                job_id_str
+            );
+        }
     }
 
     pub async fn run_event_loop(&mut self, mut internal_action_rx: mpsc::Receiver<NodeInternalAction>) -> Result<(), Box<dyn Error>> {
