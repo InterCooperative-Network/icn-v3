@@ -33,6 +33,8 @@ use sqlite_store::SqliteStore; // Import the SqliteStore struct
 
 mod reputation_client;
 mod bid_logic;
+mod job_assignment; // Added module
+use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector}; // Added import
 
 enum AppError {
     Internal(anyhow::Error),
@@ -303,49 +305,27 @@ async fn assign_best_bid_handler(
         return Err(AppError::NotFound(format!("No bids found for job {}", job_id_str)));
     }
 
-    // 4. Score bids and select the best one
-    let mut best_bid_opt: Option<(&icn_types::jobs::Bid, f64)> = None;
-
+    // 4. Score bids and select the best one using ExecutorSelector
     // Define weights (could come from config or job request later)
     const DEFAULT_REP_WEIGHT: f64 = 0.7;
     const DEFAULT_PRICE_WEIGHT: f64 = 0.3;
 
-    for bid in &bids {
-        // Ensure bid has an ID, which it should if fetched from the store via list_bids
-        if bid.id.is_none() {
-            tracing::error!(job_id = %job_id_str, bidder_did = %bid.bidder.0, "Bid found without an ID during assignment process");
-            continue; // Skip bids without an ID, though this indicates an issue
-        }
+    let selector = DefaultExecutorSelector::new(DEFAULT_REP_WEIGHT, DEFAULT_PRICE_WEIGHT);
+    
+    let (best_bid, winning_score) = selector
+        .select(&job_request, &bids)?
+        .ok_or_else(|| {
+            tracing::warn!(job_id = %job_id_str, "No suitable bids found after scoring (selector returned None or only non-positive scores)");
+            AppError::NotFound(format!("No suitable bids found for job {} after scoring", job_id_str))
+        })?;
 
-        let score = bid_logic::calculate_bid_selection_score(
-            bid,
-            &job_request,
-            DEFAULT_REP_WEIGHT,
-            DEFAULT_PRICE_WEIGHT,
-        );
-        tracing::debug!(job_id = %job_id_str, bidder_did = %bid.bidder.0, bid_id = bid.id.unwrap(), score = score, "Calculated score for bid");
-
-        if score < 0.0 { // Disqualified
-            tracing::debug!(job_id = %job_id_str, bidder_did = %bid.bidder.0, bid_id = bid.id.unwrap(), "Bid disqualified (score < 0)");
-            continue;
-        }
-
-        if best_bid_opt.is_none() || score > best_bid_opt.unwrap().1 {
-            best_bid_opt = Some((bid, score));
-        }
-    }
-
-    let (best_bid, winning_score) = best_bid_opt.ok_or_else(|| {
-        tracing::warn!(job_id = %job_id_str, "No suitable bids found after scoring");
-        AppError::NotFound(format!("No suitable bids found for job {} after scoring", job_id_str))
-    })?;
-
-    let winning_bid_id = best_bid.id.ok_or_else(|| { // Should always be Some here due to earlier check
-        tracing::error!(job_id = %job_id_str, "Winning bid selected but has no ID");
+    let winning_bid_id = best_bid.id.ok_or_else(|| { 
+        tracing::error!(job_id = %job_id_str, "Winning bid selected but has no ID (this should not happen if bid came from store)");
         AppError::Internal(anyhow::anyhow!("Selected winning bid is missing its ID"))
     })?;
 
     // 5. Call the updated store.assign_job method
+    // The sqlite_store.assign_job expects winning_bid_id (i64) and winning_bidder_did (Did)
     store.assign_job(&job_id, winning_bid_id, best_bid.bidder.clone()).await?;
 
     tracing::info!(
@@ -359,7 +339,7 @@ async fn assign_best_bid_handler(
     Ok(Json(AssignJobResponse {
         message: "Job assigned successfully".to_string(),
         job_id: job_id_str,
-        assigned_bidder_did: best_bid.bidder.0.clone(),
+        assigned_bidder_did: best_bid.bidder.0.clone(), // Bid is cloned, so its fields are owned
         winning_bid_id,
         winning_score,
     }))
