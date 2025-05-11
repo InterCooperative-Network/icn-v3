@@ -89,11 +89,26 @@ pub enum MeshProtocolMessage {
         /// Including it directly simplifies the executor's lookup.
         job_details: MeshJob,
     },
-    // Future message types:
-    // JobBidV1 { job_id: JobId, executor_did: Did, bid_amount_tokens: u64, specific_commitments: Option<String> },
+    JobBidV1 {
+        job_id: JobId,
+        bidder: Did,
+        price: u64,
+        comment: Option<String>,
+    },
     // AcceptBidV1 { job_id: JobId, winning_executor_did: Did },
     // RejectBidV1 { job_id: JobId, executor_did: Did, reason: Option<String> },
     // ResultAnnouncementV1 { job_id: JobId, executor_did: Did, result_cid: String, receipt_cid: String },
+}
+
+/// Represents a bid made by an executor for a job.
+/// This struct is intended for storage within MeshNode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bid {
+    pub job_id: JobId,
+    pub bidder: Did,
+    pub price: u64,
+    pub timestamp: i64,
+    pub comment: Option<String>,
 }
 
 /// Describes the capabilities of an executor node on the mesh network.

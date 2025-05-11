@@ -35,6 +35,9 @@ use icn_mesh_receipts::{verify_embedded_signature}; // Ensure verify_embedded_si
 use serde_cbor; // For deserializing the receipt CBOR
 use tokio::sync::oneshot; // Added for Kademlia query response
 
+// If reqwest is added as a dependency for submitting reputation records
+use reqwest;
+
 // Helper to create job-specific interest topic strings
 fn job_interest_topic_string(job_id: &IcnJobId) -> String {
     format!("/icn/mesh/jobs/{}/interest/v1", job_id)
@@ -91,6 +94,9 @@ pub struct MeshNode {
     // For Kademlia receipt queries
     #[allow(clippy::type_complexity)] // To allow complex type for HashMap value with oneshot sender
     receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>,
+    reputation_service_url: Option<String>, // Added for reputation service URL
+    http_client: reqwest::Client, // Added http_client
+    pub bids: Arc<RwLock<HashMap<IcnJobId, Vec<crate::protocol::Bid>>>>, // Added for storing bids
 }
 
 impl MeshNode {
@@ -101,7 +107,7 @@ impl MeshNode {
         local_runtime_context: Option<Arc<RuntimeContext>>,
         // ADDITION: Test listener sender parameter
         test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
-        receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>::new(Mutex::new(HashMap::new())),
+        reputation_service_url: Option<String>, // Added parameter
     ) -> Result<(Self, mpsc::Receiver<NodeInternalAction>), Box<dyn Error>> {
         let local_libp2p_keypair = libp2p::identity::Keypair::generate_ed25519(); // Or convert from IcnKeyPair if compatible
         let local_peer_id = PeerId::from(local_libp2p_keypair.public());
@@ -168,7 +174,10 @@ impl MeshNode {
             internal_action_tx,
             // For Kademlia receipt queries
             #[allow(clippy::type_complexity)] // To allow complex type for HashMap value with oneshot sender
-            receipt_queries,
+            receipt_queries: Arc::new(Mutex::new(HashMap::new())),
+            reputation_service_url, // Store the URL
+            http_client: reqwest::Client::new(), // Initialize the client
+            bids: Arc::new(RwLock::new(HashMap::new())), // Initialize bids
         }, internal_action_rx_for_event_loop))
     }
 
@@ -850,48 +859,41 @@ impl MeshNode {
             signature: None, // TODO: Consider signing this record with self.local_keypair if needed by reputation system
         };
 
-        if let Some(rt_ctx) = &self.local_runtime_context {
-            // TODO: Confirm how RuntimeContext provides access to ReputationStore or a client.
-            // This is a PLACEHOLDER and needs to be adapted to the actual RuntimeContext API.
-            // Example: Accessing a reputation store plugin from RuntimeContext
-            // This assumes RuntimeContext has a way to get service extensions or plugins.
-            // The actual method might be rt_ctx.get_reputation_store() or similar.
-            // For the purpose of this scaffold, we'll log the intent and the record.
-            
+        if let Some(base_url) = &self.reputation_service_url {
+            let client = &self.http_client;
+            let url = format!("{}/reputation/records", base_url.trim_end_matches('/'));
+
             tracing::info!(
-                "[MeshNode] Constructed ReputationRecord for JobID: {}: {:?}. Attempting to submit via RuntimeContext.",
-                job_id_str, record
+                "[MeshNode] Submitting ReputationRecord for JobID: {} to URL: {}",
+                job_id_str, url
             );
 
-            // --- Conceptual Submission Logic (actual implementation depends on RuntimeContext) ---
-            // if let Some(reputation_service_client) = rt_ctx.get_reputation_client() { // Or however it's exposed
-            //     match reputation_service_client.submit_record(record).await {
-            //         Ok(_) => tracing::info!(
-            //             "[MeshNode] Reputation record submitted successfully for JobID: {}, Executor: {}",
-            //             job_id_str, executor_did
-            //         ),
-            //         Err(e) => tracing::error!(
-            //             "[MeshNode] Failed to submit reputation record for JobID: {}, Executor: {}: {:?}",
-            //             job_id_str, executor_did, e
-            //         ),
-            //     }
-            // } else {
-            //     tracing::warn!(
-            //         "[MeshNode] Reputation submission skipped: Reputation service/client not available in RuntimeContext for JobID: {}.",
-            //         job_id_str
-            //     );
-            // }
-            tracing::warn!(
-                "[MeshNode] Placeholder: Actual submission of ReputationRecord for JobID: {} via RuntimeContext needs implementation.",
-                job_id_str
-            );
-            // --- End Conceptual Submission Logic ---
-
+            match client.post(&url).json(&record).send().await {
+                Ok(response) => {
+                    if response.status().is_success() || response.status() == reqwest::StatusCode::CREATED {
+                        tracing::info!(
+                            "[MeshNode] Reputation record submitted successfully for JobID: {}, Executor: {}. Status: {}",
+                            job_id_str, executor_did, response.status()
+                        );
+                    } else {
+                        let status = response.status();
+                        let error_body = response.text().await.unwrap_or_else(|_| "<no body>".to_string());
+                        tracing::error!(
+                            "[MeshNode] Failed to submit reputation record for JobID: {}, Executor: {}. Status: {}. Body: {}",
+                            job_id_str, executor_did, status, error_body
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "[MeshNode] HTTP request failed during reputation record submission for JobID: {}, Executor: {}: {:?}",
+                        job_id_str, executor_did, e
+                    );
+                }
+            }
         } else {
-            // This case is already handled by the check at the beginning of the function,
-            // but kept for logical completeness if the structure changes.
             tracing::warn!(
-                "[MeshNode] Reputation update skipped (again) for JobID: {}: No local_runtime_context available post-record creation.",
+                "[MeshNode] Reputation submission skipped for JobID: {}: Reputation service URL not configured.",
                 job_id_str
             );
         }
@@ -1274,9 +1276,35 @@ impl MeshNode {
                                                             // Not the originator, or job not in announced_originated_jobs. Could be an executor seeing its own status update echo.
                                                         }
                                                     } else {
-                                                        eprintln!("Failed to get write lock for announced_originated_jobs while handling status update for {}.
-", job_id);
+                                                        eprintln!("Failed to get write lock for announced_originated_jobs while handling status update for {}.\n", job_id);
                                                     }
+                                                }
+                                                MeshProtocolMessage::JobBidV1 { job_id, bidder, price, comment } => {
+                                                    tracing::info!(
+                                                        "[MeshNode] Received JobBidV1 for JobID: {} from Bidder: {} with Price: {}. Comment: {:?}. Topic: {}",
+                                                        job_id, bidder, price, comment, message.topic
+                                                    );
+
+                                                    let current_timestamp = Utc::now().timestamp();
+                                                    let new_bid = crate::protocol::Bid {
+                                                        job_id: job_id.clone(), // Clone if IcnJobId is String
+                                                        bidder: bidder.clone(),   // Clone Did
+                                                        price,
+                                                        timestamp: current_timestamp,
+                                                        comment: comment.clone(), // Clone Option<String>
+                                                    };
+
+                                                    match self.bids.write() {
+                                                        Ok(mut bids_map) => {
+                                                            bids_map.entry(job_id.clone()).or_default().push(new_bid);
+                                                            tracing::info!("[MeshNode] Stored bid for JobID: {}. Total bids for job: {}", 
+                                                                         job_id, bids_map.get(&job_id).map_or(0, |b_vec| b_vec.len()));
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!("[MeshNode] Failed to get write lock for bids map while storing bid for job {}: {:?}", job_id, e);
+                                                        }
+                                                    }
+                                                    // TODO: If this node is the job originator, it might trigger bid evaluation/selection logic here or in a periodic task.
                                                 }
                                                 // Handle other message types like JobInteractiveInputV1, etc.
                                                 _ => {
