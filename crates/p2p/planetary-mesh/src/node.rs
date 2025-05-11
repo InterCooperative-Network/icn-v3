@@ -38,7 +38,7 @@ pub struct MeshNode {
     pub available_jobs_on_mesh: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
     pub runtime_job_queue_for_announcement: Arc<Mutex<VecDeque<MeshJob>>>,
     pub job_interests_received: Arc<RwLock<HashMap<IcnJobId, Vec<Did>>>>,
-    pub announced_originated_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
+    pub announced_originated_jobs: Arc<RwLock<HashMap<IcnJobId, super::JobManifest>>>,
 
     // State for executor simulation
     pub executing_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
@@ -138,7 +138,43 @@ impl MeshNode {
     }
 
     pub async fn announce_job(&mut self, job: MeshJob) -> Result<(), Box<dyn Error>> {
-        let message = MeshProtocolMessage::JobAnnouncementV1(job.clone());
+        // Create a JobManifest from the MeshJob
+        // This is a simplified conversion; a real one would need more robust parsing and default handling.
+        let compute_requirements = serde_json::from_str::<super::ComputeRequirements>(&job.params.required_resources_json)
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "Failed to parse required_resources_json for job {}: {}. Using default requirements.",
+                    job.job_id,
+                    e
+                );
+                // Provide some default ComputeRequirements
+                super::ComputeRequirements {
+                    min_memory_mb: 0,
+                    min_cpu_cores: 0,
+                    min_storage_mb: 0,
+                    max_execution_time_secs: job.params.max_execution_time_secs.unwrap_or(300), // Default from MeshJob or a const
+                    required_features: Vec::new(),
+                }
+            });
+
+        let manifest = super::JobManifest {
+            id: job.job_id.clone(),
+            submitter_did: job.originator_did.clone(),
+            description: job.params.description.clone().unwrap_or_else(|| "N/A".to_string()),
+            created_at: chrono::Utc::now(), // Or convert from job.submitted_at if it exists and types match
+            expires_at: None, // MeshJob doesn't have this directly
+            wasm_cid: job.params.wasm_cid.clone(),
+            ccl_cid: job.params.ccl_cid.clone(),
+            input_data_cid: job.params.input_data_cid.clone(),
+            output_location: job.params.output_location.clone(),
+            requirements: compute_requirements,
+            priority: super::JobPriority::Medium, // Default priority
+            resource_token: icn_economics::ScopedResourceToken::default(), // Placeholder default
+            trust_requirements: job.params.trust_requirements.clone(),
+            status: super::JobStatus::Submitted, // Initial status for a newly announced job
+        };
+
+        let message = MeshProtocolMessage::JobAnnouncementV1(job.clone()); // Network message still uses MeshJob
         match serde_cbor::to_vec(&message) {
             Ok(serialized_message) => {
                 println!(
@@ -150,7 +186,6 @@ impl MeshNode {
                     .gossipsub
                     .publish(self.job_announcement_topic.clone(), serialized_message)?;
 
-                // Originator subscribes to the interest topic for this job
                 let interest_topic_string = job_interest_topic_string(&job.job_id);
                 let interest_topic = Topic::new(interest_topic_string.clone());
                 match self.swarm.behaviour_mut().gossipsub.subscribe(&interest_topic) {
@@ -158,10 +193,10 @@ impl MeshNode {
                     Err(e) => eprintln!("Failed to subscribe to interest topic {}: {:?}", interest_topic_string, e),
                 }
 
-                // Add to our announced_originated_jobs map
-                if let Ok(mut announced_jobs) = self.announced_originated_jobs.write() {
-                    announced_jobs.insert(job.job_id.clone(), job.clone());
-                    println!("Added job {} to announced_originated_jobs.", job.job_id);
+                // Store the JobManifest in announced_originated_jobs
+                if let Ok(mut announced_jobs_map) = self.announced_originated_jobs.write() {
+                    announced_jobs_map.insert(job.job_id.clone(), manifest.clone()); // Store the manifest
+                    println!("Added job manifest {} to announced_originated_jobs.", job.job_id);
                 } else {
                     eprintln!("Failed to get write lock for announced_originated_jobs while adding job {}.
 ", job.job_id);
@@ -254,6 +289,34 @@ impl MeshNode {
         }
         
         println!("Simulating execution for JobId: {}", job_id);
+
+        // Send a "Running" status update
+        let status_update_running = MeshProtocolMessage::JobStatusUpdateV1 {
+            job_id: job_id.clone(),
+            executor_did: self.local_node_did.clone(),
+            status: super::JobStatus::Running { // Using the detailed JobStatus from lib.rs
+                node_id: self.local_node_did.clone(), // In this context, node_id is the executor's DID string
+                current_stage_index: Some(0),
+                current_stage_id: Some("execution_simulation".to_string()),
+                progress_percent: Some(10),
+                status_message: Some("Execution started".to_string()),
+            },
+        };
+        if let Ok(serialized_status_update) = serde_cbor::to_vec(&status_update_running) {
+            // Determine the topic for job status updates.
+            // For now, let's use the job-specific interest topic, as the originator is subscribed.
+            // A dedicated job-specific status topic could also be an option.
+            let status_topic_string = job_interest_topic_string(&job_id);
+            let status_topic = Topic::new(status_topic_string.clone());
+            if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(status_topic.clone(), serialized_status_update) {
+                eprintln!("Failed to publish JobStatusUpdateV1 (Running) for {}: {:?}", job_id, e);
+            } else {
+                println!("Published JobStatusUpdateV1 (Running) for JobID: {} to topic: {}", job_id, status_topic_string);
+            }
+        } else {
+            eprintln!("Failed to serialize JobStatusUpdateV1 (Running) for {}", job_id);
+        }
+
         tokio::time::sleep(Duration::from_secs(2)).await; // Simulate work
         println!("Execution complete for JobId: {}", job_id);
 
@@ -334,221 +397,362 @@ impl MeshNode {
             }
         }
 
+        // After successful anchoring and before returning Ok(())
+        // Send a "Completed" status update (if successful, otherwise a "Failed" one)
+        let final_status = if self.completed_job_receipt_cids.read().unwrap().contains_key(&job_id) {
+            super::JobStatus::Completed {
+                node_id: self.local_node_did.clone(),
+                receipt_cid: self.completed_job_receipt_cids.read().unwrap().get(&job_id).unwrap().to_string(),
+            }
+        } else {
+            super::JobStatus::Failed {
+                node_id: Some(self.local_node_did.clone()),
+                error: "Execution simulated but receipt anchoring might have failed or was skipped.".to_string(),
+                stage_index: Some(1), // Assuming anchoring is the next stage
+                stage_id: Some("anchoring".to_string()),
+            }
+        };
+
+        let status_update_final = MeshProtocolMessage::JobStatusUpdateV1 {
+            job_id: job_id.clone(),
+            executor_did: self.local_node_did.clone(),
+            status: final_status,
+        };
+        if let Ok(serialized_final_update) = serde_cbor::to_vec(&status_update_final) {
+            let status_topic_string = job_interest_topic_string(&job_id);
+            let status_topic = Topic::new(status_topic_string.clone());
+            if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(status_topic, serialized_final_update) {
+                eprintln!("Failed to publish final JobStatusUpdateV1 for {}: {:?}", job_id, e);
+            } else {
+                 println!("Published final JobStatusUpdateV1 for JobID: {} to topic: {}", job_id, status_topic_string);
+            }
+        } else {
+            eprintln!("Failed to serialize final JobStatusUpdateV1 for {}", job_id);
+        }
+
+        Ok(())
+    }
+
+    async fn assign_job_to_executor(
+        &mut self,
+        job_id: &IcnJobId,
+        target_executor_did: Did,
+    ) -> Result<(), Box<dyn Error>> {
+        let job_details: MeshJob;
+        // Retrieve the job details from announced_originated_jobs
+        {
+            let announced_jobs = self.announced_originated_jobs.read().map_err(|_| "Failed to get read lock for announced_originated_jobs")?;
+            if let Some(job) = announced_jobs.get(job_id) {
+                job_details = job.clone();
+            } else {
+                eprintln!("Cannot assign job {}: Not found in originated jobs.", job_id);
+                return Err(format!("Job {} not found in originated jobs", job_id).into());
+            }
+        }
+
+        println!(
+            "Assigning JobID: {} from Originator DID: {} to Executor DID: {}",
+            job_id, self.local_node_did, target_executor_did
+        );
+
+        let assignment_message = MeshProtocolMessage::AssignJobV1 {
+            job_id: job_id.clone(),
+            originator_did: self.local_node_did.clone(),
+            target_executor_did: target_executor_did.clone(),
+            job_details: job_details.clone(),
+        };
+
+        match serde_cbor::to_vec(&assignment_message) {
+            Ok(serialized_message) => {
+                let interest_topic_string = job_interest_topic_string(job_id);
+                let assignment_topic = Topic::new(interest_topic_string.clone()); // Publish on the job's interest topic
+
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(assignment_topic, serialized_message)?;
+                
+                println!(
+                    "Published AssignJobV1 for JobID: {} to Executor: {} on topic: {}",
+                    job_id, target_executor_did, interest_topic_string
+                );
+
+                if let Ok(mut announced_jobs) = self.announced_originated_jobs.write() {
+                    if let Some(job_entry) = announced_jobs.get_mut(job_id) {
+                        // Placeholder for updating job status. MeshJob might need a status field or a wrapper like JobManifest.
+                        // For now, we assume the local JobManifest (if we were using one) would be updated.
+                        // If MeshJob is directly stored and doesn't have a mutable status, this part needs refinement.
+                        // job_entry.status = StandardJobStatus::Assigned { node_id: target_executor_did.clone() }; 
+                        println!("Originated Job {} status conceptually updated to Assigned to {}", job_id, target_executor_did);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error serializing AssignJobV1 message for job {}: {:?}", job_id, e);
+                return Err(Box::new(e));
+            }
+        }
         Ok(())
     }
 
     pub async fn run_event_loop(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut capability_broadcast_interval = time::interval(Duration::from_secs(30));
-        let mut runtime_job_check_interval = time::interval(Duration::from_secs(5));
-        let mut express_interest_interval = time::interval(Duration::from_secs(15));
-        let mut job_execution_check_interval = time::interval(Duration::from_secs(20)); // New interval for executor simulation
-
-        // Known topic hashes for quick matching
-        let capability_topic_hash = Topic::new(CAPABILITY_TOPIC).hash();
-        let job_announcement_topic_hash = Topic::new(JOB_ANNOUNCEMENT_TOPIC).hash();
+        // Periodic tasks setup
+        let mut capabilities_interval = time::interval(Duration::from_secs(60)); // Broadcast capabilities every 60s
+        let mut job_queue_interval = time::interval(Duration::from_secs(10)); // Check job queue every 10s
+        let mut executor_selection_interval = time::interval(Duration::from_secs(15)); // Check for job interests every 15s
 
         loop {
             tokio::select! {
-                _ = capability_broadcast_interval.tick() => {
+                // Timer for broadcasting capabilities
+                _ = capabilities_interval.tick() => {
                     if let Err(e) = self.broadcast_capabilities().await {
                         eprintln!("Failed to broadcast capabilities: {:?}", e);
                     }
                 }
-                _ = runtime_job_check_interval.tick() => {
-                    let mut job_to_announce = None;
-                    // Try to lock the runtime queue and get a job
-                    match self.runtime_job_queue_for_announcement.lock() {
-                        Ok(mut queue) => {
-                            if let Some(job) = queue.pop_front() {
-                                job_to_announce = Some(job);
+
+                // Timer for checking and announcing jobs from the runtime queue
+                _ = job_queue_interval.tick() => {
+                    let mut jobs_to_announce = Vec::new();
+                    {
+                        if let Ok(mut queue) = self.runtime_job_queue_for_announcement.lock() {
+                            while let Some(job) = queue.pop_front() {
+                                jobs_to_announce.push(job);
                             }
-                        }
-                        Err(e) => {
-                            eprintln!("Error locking runtime_job_queue_for_announcement: {:?}", e);
+                        } else {
+                            eprintln!("Failed to lock runtime_job_queue_for_announcement");
                         }
                     }
-
-                    // If a job was retrieved, announce it
-                    if let Some(job) = job_to_announce {
-                        println!("Dequeued job {} from runtime for announcement.", job.job_id);
-                        if let Err(e) = self.announce_job(job).await {
-                            eprintln!("Failed to announce job from runtime queue: {:?}", e);
-                            // Potentially re-queue the job or handle error
+                    for job in jobs_to_announce {
+                        if let Err(e) = self.announce_job(job.clone()).await {
+                            eprintln!("Failed to announce job {}: {:?}", job.job_id, e);
+                            // Potentially re-queue the job or mark as failed announcement
                         }
                     }
                 }
-                _ = express_interest_interval.tick() => {
-                    // Iterate over available_jobs_on_mesh and express interest if suitable
-                    if let Ok(jobs_map) = self.available_jobs_on_mesh.read() {
-                        for (_job_id, job) in jobs_map.iter() {
-                            // Avoid expressing interest in our own jobs
-                            if job.originator_did != self.local_node_did {
-                                if let Err(e) = self.evaluate_and_express_interest(job).await {
-                                    eprintln!("Error during interest expression for job {}: {:?}", job.job_id, e);
+                
+                // Timer for selecting executors for originated jobs
+                _ = executor_selection_interval.tick() => {
+                    let jobs_to_assign: Vec<(IcnJobId, Did)> = {
+                        let originated_jobs = self.announced_originated_jobs.read().unwrap_or_else(|e| {
+                            eprintln!("Failed to get read lock on originated_jobs: {}", e);
+                            Default::default()
+                        });
+                        let interests = self.job_interests_received.read().unwrap_or_else(|e| {
+                            eprintln!("Failed to get read lock on job_interests: {}", e);
+                            Default::default()
+                        });
+                        
+                        let mut assignments = Vec::new();
+                        for (job_id, _job_details) in originated_jobs.iter() {
+                            // Simple selection: if we originated it and it has interests, pick the first interested party.
+                            // And ensure we haven't already assigned it (needs better state tracking for assigned jobs).
+                            // This is a placeholder for more sophisticated selection logic.
+                            if let Some(interested_dids) = interests.get(job_id) {
+                                if !interested_dids.is_empty() {
+                                    // TODO: Add logic to ensure a job isn't assigned multiple times.
+                                    // This might involve checking job_details.status or a separate tracking map.
+                                    println!("Job {} has {} interested parties. Selecting first one.", job_id, interested_dids.len());
+                                    assignments.push((job_id.clone(), interested_dids[0].clone()));
                                 }
                             }
                         }
-                    } else {
-                        eprintln!("Failed to get read lock on available_jobs_on_mesh for expressing interest.");
-                    }
-                }
-                _ = job_execution_check_interval.tick() => {
-                    let mut job_to_execute: Option<MeshJob> = None;
-                    if let Ok(available_map) = self.available_jobs_on_mesh.read() {
-                        for (_id, job) in available_map.iter() {
-                            // Simple selection: not originated by self, and not already completed/executing
-                            if job.originator_did != self.local_node_did && 
-                               !self.executing_jobs.read().unwrap().contains_key(&job.job_id) &&
-                               !self.completed_job_receipt_cids.read().unwrap().contains_key(&job.job_id) {
-                                
-                                // TODO: Add more sophisticated suitability check here, e.g., based on expressed interest or resource matching
-                                println!("Considering job {} for execution.", job.job_id);
-                                job_to_execute = Some(job.clone());
-                                break; // Take the first suitable one for now
-                            }
+                        assignments
+                    };
+
+                    for (job_id, executor_did) in jobs_to_assign {
+                         // Before assigning, we should lock `announced_originated_jobs` and update its status
+                         // or use another mechanism to prevent re-assignment.
+                         // For this example, we proceed directly.
+                        if let Err(e) = self.assign_job_to_executor(&job_id, executor_did.clone()).await {
+                            eprintln!("Failed to assign job {} to {}: {:?}", job_id, executor_did, e);
                         }
                     }
-
-                    if let Some(job) = job_to_execute {
-                        // Spawn as a new task to avoid blocking the event loop
-                        let self_clone = Arc::new(self.clone_for_async_tasks()); 
-                        tokio::spawn(async move {
-                            if let Err(e) = self_clone.simulate_execution_and_anchor_receipt(job).await {
-                                eprintln!("Error during simulated execution and anchoring: {:?}", e);
-                            }
-                        });
-                    }
                 }
+
+                // Swarm events
                 event = self.swarm.select_next_some() => {
                     match event {
-                        SwarmEvent::Behaviour(MeshBehaviourEvent::Mdns(mdns_event)) => match mdns_event {
-                            libp2p::mdns::Event::Discovered(list) => {
-                                for (peer_id, _multiaddr) in list {
-                                    println!("mDNS discovered a new peer: {}", peer_id);
-                                    self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                                }
-                            }
-                            libp2p::mdns::Event::Expired(list) => {
-                                for (peer_id, _multiaddr) in list {
-                                    println!("mDNS peer expired: {}", peer_id);
-                                    self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
-                                }
-                            }
-                        }
-                        SwarmEvent::Behaviour(MeshBehaviourEvent::Gossipsub(gossip_event)) => match gossip_event {
-                            libp2p::gossipsub::Event::Message {
-                                propagation_source: peer_id,
-                                message_id: id,
-                                message,
-                            } => {
-                                trace!(
-                                    "Received gossipsub message with id: {} from peer: {:?}, topic: {:?}",
-                                    id, peer_id, message.topic
-                                );
-                                if message.topic == CAPABILITY_TOPIC {
-                                    match serde_cbor::from_slice::<MeshProtocolMessage>(&message.data) {
-                                        Ok(protocol_message) => match protocol_message {
-                                            MeshProtocolMessage::CapabilityAdvertisementV1(capability) => {
-                                                println!(
-                                                    "Rxd CAPABILITY from {}: DID: {}, Res: {:?}, Eng: {:?}, Load: {}, Region: {:?}",
-                                                    peer_id, capability.node_did, capability.available_resources,
-                                                    capability.supported_wasm_engines, capability.current_load_factor, capability.geographical_region
-                                                );
-                                            }
-                                            _ => {
-                                                eprintln!("Rxd unexpected msg type on CAPABILITY topic from {}", peer_id);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Failed to deserialize CAPABILITY msg from {}: {:?}", peer_id, e);
+                        SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
+                            MeshBehaviourEvent::Mdns(mdns_event) => {
+                                match mdns_event {
+                                    libp2p::mdns::Event::Discovered(list) => {
+                                        for (peer_id, _multiaddr) in list {
+                                            println!("mDNS discovered a new peer: {}", peer_id);
+                                            // Optionally add to known peers or attempt to connect for gossipsub
+                                            self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                                         }
                                     }
-                                } else if message.topic == JOB_ANNOUNCEMENT_TOPIC {
+                                    libp2p::mdns::Event::Expired(list) => {
+                                        for (peer_id, _multiaddr) in list {
+                                            println!("mDNS peer has expired: {}", peer_id);
+                                            self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                                        }
+                                    }
+                                }
+                            }
+                            MeshBehaviourEvent::Gossipsub(gossip_event) => {
+                                if let libp2p::gossipsub::Event::Message {
+                                    propagation_source: _peer_id,
+                                    message_id: _id,
+                                    message,
+                                } = gossip_event
+                                {
                                     match serde_cbor::from_slice::<MeshProtocolMessage>(&message.data) {
-                                        Ok(protocol_message) => match protocol_message {
-                                            MeshProtocolMessage::JobAnnouncementV1(received_job) => {
-                                                println!(
-                                                    "Rxd JOB_ANNOUNCEMENT from {}: JobID: {}, Originator: {}, WASM: {}, Submitted: {}",
-                                                    peer_id, received_job.job_id, received_job.originator_did,
-                                                    received_job.params.wasm_cid, received_job.submitted_at
-                                                );
-                                                match self.available_jobs_on_mesh.write() {
-                                                    Ok(mut jobs_map) => {
-                                                        let job_id_clone = received_job.job_id.clone();
-                                                        jobs_map.insert(received_job.job_id.clone(), received_job);
-                                                        // Safe to unwrap as we just inserted it.
-                                                        println!("Stored job {} in available_jobs_on_mesh.", jobs_map.get(&job_id_clone).unwrap().job_id);
+                                        Ok(protocol_message) => {
+                                            // println!("Received Gossipsub message: {:?} from topic: {}", protocol_message.name(), message.topic);
+                                            match protocol_message {
+                                                MeshProtocolMessage::CapabilityAdvertisementV1(capability) => {
+                                                    println!("Received CapabilityAdvertisementV1 from DID: {}", capability.node_did);
+                                                    // TODO: Store or process capability information
+                                                }
+                                                MeshProtocolMessage::JobAnnouncementV1(job) => {
+                                                    println!("Received JobAnnouncementV1 for JobID: {} on topic {}", job.job_id, message.topic);
+                                                    // Store the job if not already known
+                                                    if let Ok(mut available) = self.available_jobs_on_mesh.write() {
+                                                        available.entry(job.job_id.clone()).or_insert_with(|| job.clone());
                                                     }
-                                                    Err(e) => {
-                                                        eprintln!("Error locking available_jobs_on_mesh for write: {:?}", e);
+                                                    // Evaluate and potentially express interest
+                                                    let mut self_clone_for_interest = self.clone_for_async_tasks();
+                                                    let job_clone_for_interest = job.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = self_clone_for_interest.evaluate_and_express_interest(&job_clone_for_interest).await {
+                                                            eprintln!("Error evaluating/expressing interest for job {}: {:?}", job_clone_for_interest.job_id, e);
+                                                        }
+                                                    });
+                                                }
+                                                MeshProtocolMessage::JobInterestV1 { job_id, executor_did } => {
+                                                    println!("Received JobInterestV1 for JobID: {} from Executor DID: {} on topic {}", job_id, executor_did, message.topic);
+                                                    if let Ok(announced_jobs) = self.announced_originated_jobs.read() {
+                                                        if announced_jobs.contains_key(&job_id) {
+                                                            // This node originated the job
+                                                            if let Ok(mut interests) = self.job_interests_received.write() {
+                                                                interests.entry(job_id.clone()).or_default().push(executor_did.clone());
+                                                                println!("Recorded interest for job {} from executor {}", job_id, executor_did);
+                                                            }
+                                                        } else {
+                                                            // Not the originator, or not tracking this job as originated. Log or ignore.
+                                                        }
                                                     }
                                                 }
-                                            }
-                                            _ => {
-                                                eprintln!("Rxd unexpected msg type on JOB_ANNOUNCEMENT topic from {}", peer_id);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Failed to deserialize JOB_ANNOUNCEMENT msg from {}: {:?}", peer_id, e);
-                                        }
-                                    }
-                                } else if message.topic == RECEIPT_AVAILABILITY_TOPIC_HASH {
-                                    match serde_json::from_slice::<MeshProtocolMessage>(&message.data) {
-                                        Ok(MeshProtocolMessage::ExecutionReceiptAvailableV1 {
-                                            job_id,
-                                            receipt_cid,
-                                            executor_did,
-                                        }) => {
-                                            info!(
-                                                "Received ExecutionReceiptAvailableV1 from {:?} for JobId: {}, Receipt CID: {}, Executor: {}",
-                                                peer_id, job_id, receipt_cid, executor_did
-                                            );
-
-                                            match Cid::try_from(receipt_cid.as_str()) {
-                                                Ok(parsed_cid) => {
-                                                    self.discovered_receipt_announcements
-                                                        .write()
-                                                        .await
-                                                        .insert(job_id.clone(), (parsed_cid, executor_did.clone()));
-                                                    info!("Stored discovered receipt announcement for JobId: {}", job_id);
-
-                                                    if self.announced_originated_jobs.read().await.contains_key(&job_id) {
-                                                        info!(
-                                                            "This node originated JobId: {}. Receipt is now available from Executor: {} with CID: {}.",
-                                                            job_id, executor_did, receipt_cid
+                                                MeshProtocolMessage::AssignJobV1 {
+                                                    job_id,
+                                                    originator_did,
+                                                    target_executor_did,
+                                                    job_details,
+                                                } => {
+                                                    if target_executor_did == self.local_node_did {
+                                                        println!(
+                                                            "Received AssignJobV1 for JobID: {} from Originator: {}. This node is chosen executor.",
+                                                            job_id, originator_did
                                                         );
+                                                        let mut should_execute = false;
+                                                        {
+                                                            let mut executing_map = self.executing_jobs.write().unwrap();
+                                                            let completed_map = self.completed_job_receipt_cids.read().unwrap();
+                                                            if !executing_map.contains_key(&job_id) && !completed_map.contains_key(&job_id) {
+                                                                println!("Job {} not currently executing/completed. Accepting assignment.", job_id);
+                                                                executing_map.insert(job_id.clone(), job_details.clone());
+                                                                should_execute = true;
+                                                            } else {
+                                                                println!("Job {} already executing/completed. Ignoring duplicate assignment.", job_id);
+                                                            }
+                                                        }
+                                                        if should_execute {
+                                                            let self_clone_exec = self.clone_for_async_tasks();
+                                                            tokio::spawn(async move {
+                                                                println!("Spawning task to execute job: {}", job_details.job_id);
+                                                                if let Err(e) = self_clone_exec.simulate_execution_and_anchor_receipt(job_details).await {
+                                                                    eprintln!("Error during execution for job {}: {:?}", job_id, e);
+                                                                    // TODO: Update job status to Failed, notify originator
+                                                                }
+                                                            });
+                                                        }
+                                                    } else {
+                                                        // Assignment for another executor, log or ignore.
                                                     }
                                                 }
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to parse receipt_cid '{}' from ExecutionReceiptAvailableV1 (from {:?}) for JobId {}: {:?}", 
-                                                        receipt_cid, peer_id, job_id, e
+                                                MeshProtocolMessage::ExecutionReceiptAvailableV1{ job_id, receipt_cid, executor_did } => {
+                                                    println!("Received ExecutionReceiptAvailableV1 for JobID: {} with CID: {} from {}", job_id, receipt_cid, executor_did);
+                                                    if let Ok(mut announcements) = self.discovered_receipt_announcements.write() {
+                                                        if let Ok(cid_obj) = Cid::try_from(receipt_cid.clone()) { // Convert String to Cid
+                                                            announcements.insert(job_id, (cid_obj, executor_did));
+                                                        } else {
+                                                            eprintln!("Failed to parse receipt_cid {} into Cid object.", receipt_cid);
+                                                        }
+                                                    }
+                                                }
+                                                MeshProtocolMessage::JobStatusUpdateV1 { job_id, executor_did, status } => {
+                                                    println!(
+                                                        "Received JobStatusUpdateV1 for JobID: {} from Executor: {}, New Status: {:?}, on topic: {}",
+                                                        job_id, executor_did, status, message.topic
                                                     );
+                                                    // If this node originated the job, update its status.
+                                                    if let Ok(mut originated_jobs) = self.announced_originated_jobs.write() {
+                                                        if let Some(originated_job_entry) = originated_jobs.get_mut(&job_id) {
+                                                            // We need to update the status within MeshJob or its wrapper.
+                                                            // Assuming MeshJob itself doesn't have a mutable status directly usable here,
+                                                            // this highlights the need for JobManifest or a similar mutable structure
+                                                            // for the originator to track detailed status.
+                                                            // For now, we just log the reception.
+                                                            println!("Originator received status update for job {}: {:?}", job_id, status);
+                                                            
+                                                            // Example of how it *could* look if MeshJob had a status field:
+                                                            // originated_job_entry.status = status.into_standard_job_status(); // Assuming a conversion method
+
+                                                            // If the status is Completed or Failed, the originator might unsubscribe from the job's interest topic.
+                                                            match status {
+                                                                super::JobStatus::Completed { .. } | super::JobStatus::Failed { .. } => {
+                                                                    let interest_topic_string = job_interest_topic_string(&job_id);
+                                                                    let interest_topic = Topic::new(interest_topic_string.clone());
+                                                                    if self.swarm.behaviour_mut().gossipsub.unsubscribe(&interest_topic).is_ok() {
+                                                                        println!("Unsubscribed from interest topic {} after job terminal state.", interest_topic_string);
+                                                                    } else {
+                                                                        eprintln!("Failed to unsubscribe from interest topic {} after job terminal state.", interest_topic_string);
+                                                                    }
+                                                                    // Also potentially remove from job_interests_received for this job_id
+                                                                    if let Ok(mut interests) = self.job_interests_received.write() {
+                                                                        interests.remove(&job_id);
+                                                                        println!("Cleared interests for job {} after terminal state.", job_id);
+                                                                    }
+                                                                }
+                                                                _ => {}
+                                                            }
+                                                        } else {
+                                                            // Not the originator, or job not in announced_originated_jobs. Could be an executor seeing its own status update echo.
+                                                        }
+                                                    } else {
+                                                        eprintln!("Failed to get write lock for announced_originated_jobs while handling status update for {}.
+", job_id);
+                                                    }
+                                                }
+                                                // Handle other message types like JobInteractiveInputV1, etc.
+                                                _ => {
+                                                    // println!("Received unhandled MeshProtocolMessage type: {}", protocol_message.name());
                                                 }
                                             }
-                                } else {
-                                    trace!("Received message on unhandled topic: {:?} from {:?}", message.topic, peer_id);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Failed to deserialize MeshProtocolMessage: {:?}. Data: {:?}", e, message.data);
+                                        }
+                                    }
                                 }
+                                // Handle other gossipsub events if necessary (e.g., Subscription, Unsubscription)
+                                _ => {}
                             }
-                            libp2p::gossipsub::Event::Subscribed { peer_id, topic } => {
-                                println!(
-                                    "Peer {} subscribed to topic: {:?}",
-                                    peer_id,
-                                    topic
-                                );
-                            }
-                            _ => { /* Other gossipsub events */ }
                         }
                         SwarmEvent::NewListenAddr { address, .. } => {
-                            println!("Local node listening on: {}", address);
+                            println!("MeshNode listening on {}", address);
                         }
-                        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                            println!("Connection established with: {}", peer_id);
+                        SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                            println!("Connection established with peer: {}, endpoint: {:?}", peer_id, endpoint);
                         }
                         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                            println!("Connection closed with: {}. Cause: {:?}", peer_id, cause);
+                            println!("Connection closed with peer: {}, cause: {:?}", peer_id, cause.map(|c| c.to_string()));
                         }
-                        _ => { /* Other swarm events */ }
+                        // Handle other swarm events as needed
+                        _ => { // Exhaustive match for other SwarmEvents
+                            // println!("Unhandled SwarmEvent: {:?}", event);
+                        }
                     }
                 }
             }

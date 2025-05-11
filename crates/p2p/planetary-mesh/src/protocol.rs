@@ -78,6 +78,17 @@ pub enum MeshProtocolMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         output_key: Option<String>,
     },
+    /// Sent by the job originator to a selected executor to officially assign a job.
+    AssignJobV1 {
+        job_id: JobId,
+        /// The DID of the job originator who is assigning the job.
+        originator_did: Did,
+        /// The DID of the executor node being assigned the job.
+        target_executor_did: Did,
+        /// The full MeshJob details (or a CID to it if already announced and cached by executor).
+        /// Including it directly simplifies the executor's lookup.
+        job_details: MeshJob,
+    },
     // Future message types:
     // JobBidV1 { job_id: JobId, executor_did: Did, bid_amount_tokens: u64, specific_commitments: Option<String> },
     // AcceptBidV1 { job_id: JobId, winning_executor_did: Did },
