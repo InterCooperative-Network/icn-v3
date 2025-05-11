@@ -98,6 +98,15 @@ pub struct JobFailureDetails {
     failure_anchor_cid: Option<Cid>,
 }
 
+#[derive(serde::Serialize)]
+struct AssignJobResponse {
+    message: String,
+    job_id: String,
+    assigned_bidder_did: String,
+    winning_bid_id: i64,
+    winning_score: f64,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
@@ -267,63 +276,93 @@ async fn submit_bid(
 async fn assign_best_bid_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Path(job_id_str): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
-    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e)))?;
+) -> Result<Json<AssignJobResponse>, AppError> {
+    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| {
+        AppError::BadRequest(format!("Invalid job ID format: {} - {}", job_id_str, e))
+    })?;
 
-    let (job_request, current_status) = store.get_job(&job_id).await
-        .map_err(AppError::Internal)?
-        .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
-    
-    match current_status {
-        JobStatus::Bidding => { /* Proceed */ }
-        _ => return Err(AppError::BadRequest(format!("Job {} is not in Bidding state and cannot have a bid assigned. Current status: {:?}", job_id, current_status))),
+    tracing::info!(job_id = %job_id_str, "Attempting to assign best bid for job");
+
+    // 1. Fetch job details and current status
+    let (job_request, current_status) = store.get_job(&job_id).await?
+        .ok_or_else(|| AppError::NotFound(format!("Job with ID {} not found", job_id_str)))?;
+
+    // 2. Ensure job is in Bidding state
+    if !matches!(current_status, JobStatus::Bidding) {
+        tracing::warn!(job_id = %job_id_str, current_status = ?current_status, "Job not in Bidding state, cannot assign");
+        return Err(AppError::BadRequest(format!(
+            "Job {} is not in Bidding state, currently: {:?}",
+            job_id_str, current_status
+        )));
     }
 
-    let bids = store.list_bids(&job_id).await.map_err(AppError::Internal)?;
+    // 3. Fetch all bids for the job
+    let bids = store.list_bids(&job_id).await?;
     if bids.is_empty() {
-        tracing::info!("No bids found for job {}. Cannot assign.", job_id);
-        return Err(AppError::NotFound(format!("No bids available for job {}", job_id)));
+        tracing::warn!(job_id = %job_id_str, "No bids found for job, cannot assign");
+        return Err(AppError::NotFound(format!("No bids found for job {}", job_id_str)));
     }
 
-    let mut best_bid: Option<&Bid> = None;
-    let mut highest_score = f64::NEG_INFINITY;
+    // 4. Score bids and select the best one
+    let mut best_bid_opt: Option<(&icn_types::jobs::Bid, f64)> = None;
+
+    // Define weights (could come from config or job request later)
+    const DEFAULT_REP_WEIGHT: f64 = 0.7;
+    const DEFAULT_PRICE_WEIGHT: f64 = 0.3;
 
     for bid in &bids {
+        // Ensure bid has an ID, which it should if fetched from the store via list_bids
+        if bid.id.is_none() {
+            tracing::error!(job_id = %job_id_str, bidder_did = %bid.bidder.0, "Bid found without an ID during assignment process");
+            continue; // Skip bids without an ID, though this indicates an issue
+        }
+
         let score = bid_logic::calculate_bid_selection_score(
-            bid, 
-            &job_request, 
-            bid_logic::DEFAULT_REP_WEIGHT, 
-            bid_logic::DEFAULT_PRICE_WEIGHT
+            bid,
+            &job_request,
+            DEFAULT_REP_WEIGHT,
+            DEFAULT_PRICE_WEIGHT,
         );
-        tracing::debug!("Calculated score {} for bid from {} on job {}", score, bid.bidder.0, job_id);
-        if score > highest_score {
-            highest_score = score;
-            best_bid = Some(bid);
+        tracing::debug!(job_id = %job_id_str, bidder_did = %bid.bidder.0, bid_id = bid.id.unwrap(), score = score, "Calculated score for bid");
+
+        if score < 0.0 { // Disqualified
+            tracing::debug!(job_id = %job_id_str, bidder_did = %bid.bidder.0, bid_id = bid.id.unwrap(), "Bid disqualified (score < 0)");
+            continue;
+        }
+
+        if best_bid_opt.is_none() || score > best_bid_opt.unwrap().1 {
+            best_bid_opt = Some((bid, score));
         }
     }
 
-    if let Some(winner) = best_bid {
-        if highest_score < 0.0 {
-            tracing::info!("No bids for job {} met the minimum score threshold (all scores <= 0 or disqualified).", job_id);
-            return Err(AppError::NotFound(format!("No suitable bids found for job {} after scoring.", job_id)));
-        }
+    let (best_bid, winning_score) = best_bid_opt.ok_or_else(|| {
+        tracing::warn!(job_id = %job_id_str, "No suitable bids found after scoring");
+        AppError::NotFound(format!("No suitable bids found for job {} after scoring", job_id_str))
+    })?;
 
-        store.assign_job(&job_id, winner.bidder.clone()).await.map_err(AppError::Internal)?;
-        tracing::info!(
-            "Job {} assigned to bidder {} with score {}. Winning bid: {:?}",
-            job_id, winner.bidder.0, highest_score, winner
-        );
-        Ok(AxumJson(json!({
-            "message": "Job assigned successfully",
-            "job_id": job_id.to_string(),
-            "assigned_bidder": winner.bidder.0,
-            "winning_score": highest_score,
-            "winning_bid": winner
-        })).into_response())
-    } else {
-        tracing::info!("No eligible bid found for job {} after selection process.", job_id);
-        Err(AppError::NotFound(format!("No eligible bid found for assignment on job {}", job_id)))
-    }
+    let winning_bid_id = best_bid.id.ok_or_else(|| { // Should always be Some here due to earlier check
+        tracing::error!(job_id = %job_id_str, "Winning bid selected but has no ID");
+        AppError::Internal(anyhow::anyhow!("Selected winning bid is missing its ID"))
+    })?;
+
+    // 5. Call the updated store.assign_job method
+    store.assign_job(&job_id, winning_bid_id, best_bid.bidder.clone()).await?;
+
+    tracing::info!(
+        job_id = %job_id_str,
+        assigned_bidder_did = %best_bid.bidder.0,
+        winning_bid_id = winning_bid_id,
+        winning_score = winning_score,
+        "Successfully assigned job"
+    );
+
+    Ok(Json(AssignJobResponse {
+        message: "Job assigned successfully".to_string(),
+        job_id: job_id_str,
+        assigned_bidder_did: best_bid.bidder.0.clone(),
+        winning_bid_id,
+        winning_score,
+    }))
 }
 
 async fn start_job_handler(
