@@ -69,6 +69,7 @@ use crate::models::{
 };
 use crate::websocket::{websocket_routes, WebSocketState};
 use crate::auth::{JwtConfig, revocation::{TokenRevocationStore, InMemoryRevocationStore}};
+use crate::mesh_handlers::{list_announced_receipts_handler, DiscoveredReceiptsState};
 
 /// Type alias for the Axum application state
 pub type AppState = (
@@ -76,6 +77,7 @@ pub type AppState = (
     Arc<WebSocketState>,
     Arc<JwtConfig>,
     Arc<dyn TokenRevocationStore>,
+    DiscoveredReceiptsState,
 );
 
 /// API documentation
@@ -124,7 +126,7 @@ pub fn create_app(app_state: AppState) -> Router {
     let openapi = ApiDoc::openapi();
     
     // Extract components from the app state
-    let (db, ws_state, jwt_config, token_revocation_store) = app_state.clone();
+    let (db, ws_state, jwt_config, token_revocation_store, discovered_receipts_state) = app_state.clone();
     
     // Create WebSocket router with its own state
     let ws_router = websocket_routes()
@@ -168,6 +170,9 @@ pub fn create_app(app_state: AppState) -> Router {
         
         // Governance routes (community scoped)
         .route("/api/v1/community/:community_id/governance", post(process_community_governance_action))
+        
+        // Add the new mesh API route
+        .route("/api/v1/mesh/receipts/announced", get(list_announced_receipts_handler))
         
         // Monitoring routes
         .route("/internal/metrics-ui", get(metrics_dashboard_handler))

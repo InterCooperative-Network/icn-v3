@@ -17,6 +17,12 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+use std::env;
+use tokio::sync::RwLock as TokioRwLock;
+use std::collections::HashMap;
+use icn_identity::Did;
+use icn_types::mesh::JobId as IcnJobId;
+use cid::Cid;
 
 // Import models and handlers from the crate
 // use icn_agoranet::models::*; // No longer needed directly here
@@ -28,6 +34,7 @@ mod models;
 mod org_handlers;
 mod websocket;
 mod transfers;
+mod mesh_handlers;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -163,8 +170,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize token revocation store
     let token_revocation_store = Arc::new(auth::revocation::InMemoryRevocationStore::new()) as Arc<dyn auth::revocation::TokenRevocationStore>;
     
-    // Create state tuple
-    let app_state = (db, ws_state, jwt_config, token_revocation_store);
+    // TODO: Initialize or get access to the MeshNode instance
+    // let mesh_node = MeshNode::new(...).await?; // Example initialization
+    // let discovered_receipts_state: Arc<TokioRwLock<HashMap<IcnJobId, (Cid, Did)>>> = 
+    //     mesh_node.discovered_receipt_announcements.clone();
+
+    // For now, as a placeholder, let's create an empty state for it.
+    // In a real setup, this would come from your MeshNode instance.
+    let discovered_receipts_state: Arc<TokioRwLock<HashMap<IcnJobId, (Cid, Did)>>> = 
+        Arc::new(TokioRwLock::new(HashMap::new()));
+
+    // Create state tuple - adding the new discovered_receipts_state
+    let app_state = (
+        db, 
+        ws_state, 
+        jwt_config, 
+        token_revocation_store,
+        discovered_receipts_state, // Added new state component
+    );
 
     // Get server address from env var
     let address = env::var("LISTEN_ADDR")
