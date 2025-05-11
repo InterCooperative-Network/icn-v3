@@ -22,6 +22,11 @@ use icn_runtime::context::RuntimeContext;
 use icn_runtime::host_environment::ConcreteHostEnvironment; // For calling anchor_receipt
 
 use libp2p::gossipsub::TopicHash;
+use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, ValidationMode};
+use libp2p::swarm::{Swarm, SwarmEvent};
+use libp2p::{Multiaddr, PeerId};
+// ADDITION: For the test listener channel
+use tokio::sync::broadcast as tokio_broadcast;
 
 // Helper to create job-specific interest topic strings
 fn job_interest_topic_string(job_id: &IcnJobId) -> String {
@@ -36,72 +41,89 @@ pub struct MeshNode {
     local_keypair: IcnKeyPair, // Store keypair for signing receipts
     capability_gossip_topic: Topic,
     job_announcement_topic: Topic,
+    receipt_announcement_topic: Topic,
+    job_interest_base_topic_prefix: String,
     pub available_jobs_on_mesh: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
-    pub runtime_job_queue_for_announcement: Arc<Mutex<VecDeque<MeshJob>>>,
+    pub runtime_job_queue: Arc<Mutex<VecDeque<MeshJob>>>,
     pub job_interests_received: Arc<RwLock<HashMap<IcnJobId, Vec<Did>>>>,
     pub announced_originated_jobs: Arc<RwLock<HashMap<IcnJobId, super::JobManifest>>>,
-
-    // State for executor simulation
+    pub assigned_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
     pub executing_jobs: Arc<RwLock<HashMap<IcnJobId, super::JobManifest>>>,
     pub completed_job_receipt_cids: Arc<RwLock<HashMap<IcnJobId, Cid>>>,
-    pub assigned_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
-    
-    // Access to local runtime context for anchoring receipts
-    runtime_context: Option<Arc<RuntimeContext>>, 
+    pub local_runtime_context: Option<Arc<RuntimeContext>>,
     pub discovered_receipt_announcements: Arc<RwLock<HashMap<IcnJobId, (Cid, Did)>>>,
+    // ADDITION: Test hook for listening to JobStatusUpdateV1 messages received by this node
+    pub test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
 }
 
 impl MeshNode {
     pub async fn new(
-        identity_keypair: IcnKeyPair, // Primary identity keypair
-        listen_addr_opt: Option<String>,
+        icn_keypair: IcnKeyPair,
+        listen_address_str: Option<String>,
         runtime_job_queue: Arc<Mutex<VecDeque<MeshJob>>>,
         local_runtime_context: Option<Arc<RuntimeContext>>,
+        // ADDITION: Test listener sender parameter
+        test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
     ) -> Result<Self, Box<dyn Error>> {
-        
-        // Derive libp2p keypair from the icn_identity::KeyPair secret key bytes
-        // This assumes icn_identity::KeyPair's secret key part can be exposed or converted to a compatible format.
-        // ed25519_dalek::SigningKey has to_bytes() -> [u8; 32], which is a seed.
-        // libp2p ed25519 SecretKey can be from_bytes (seed).
-        let libp2p_secret_key = Libp2pSecretKey::from_bytes(identity_keypair.to_bytes())?;
-        let p2p_keypair = Libp2pKeypair::Ed25519(libp2p_secret_key.into());
-        
-        let local_peer_id = PeerId::from(p2p_keypair.public());
-        let local_node_did_for_ops = identity_keypair.did.clone();
+        let local_libp2p_keypair = libp2p::identity::Keypair::generate_ed25519(); // Or convert from IcnKeyPair if compatible
+        let local_peer_id = PeerId::from(local_libp2p_keypair.public());
+        tracing::info!("Local Peer ID: {}", local_peer_id);
+        let local_node_did = icn_keypair.did.clone();
+        tracing::info!("Local Node DID (from ICN KeyPair): {}", local_node_did);
 
-        println!("Local Peer ID: {}", local_peer_id);
-        println!("Local Node DID for operations: {}", local_node_did_for_ops);
+        let transport = libp2p::development_transport(local_libp2p_keypair.clone()).await?;
 
-        let transport = libp2p::development_transport(p2p_keypair.clone()).await?;
-        let behaviour = MeshBehaviour::new(&p2p_keypair)?;
+        let mut gossipsub_config = gossipsub::GossipsubConfigBuilder::default();
+        gossipsub_config.validation_mode(ValidationMode::Strict);
+        let gossipsub_config = gossipsub_config.build()
+            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
+        let mut behaviour = MeshBehaviour {
+            gossipsub: Gossipsub::new(MessageAuthenticity::Signed(local_libp2p_keypair.clone()), gossipsub_config)
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?,
+            kademlia: Kademlia::new(local_peer_id, MemoryStore::new(local_peer_id)),
+            mdns: Mdns::new(MdnsConfig::default()).await?,
+        };
+
+        let capability_gossip_topic = Topic::new(CAPABILITY_TOPIC);
+        behaviour.gossipsub.subscribe(&capability_gossip_topic)?;
+        let job_announcement_topic = Topic::new(JOB_ANNOUNCEMENT_TOPIC);
+        behaviour.gossipsub.subscribe(&job_announcement_topic)?;
+        let receipt_announcement_topic = Topic::new(RECEIPT_AVAILABILITY_TOPIC_HASH);
+        behaviour.gossipsub.subscribe(&receipt_announcement_topic)?;
+        let job_interest_base_topic_prefix = JOB_INTEREST_TOPIC_PREFIX.to_string();
+
         let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
-
-        let listen_addr = listen_addr_opt
-            .unwrap_or_else(|| "/ip4/0.0.0.0/tcp/0".to_string())
-            .parse()?;
-        swarm.listen_on(listen_addr)?;
-
-        let announced_originated_jobs = Arc::new(RwLock::new(HashMap::new()));
-        let completed_job_receipt_cids = Arc::new(RwLock::new(HashMap::new()));
-        let assigned_jobs = Arc::new(RwLock::new(HashMap::new()));
-        let discovered_receipt_announcements = Arc::new(RwLock::new(HashMap::new()));
+        if let Some(addr_str) = listen_address_str {
+            let listen_address: Multiaddr = addr_str.parse()?;
+            swarm.listen_on(listen_address.clone())?;
+            tracing::info!("Listening on specified address: {}", addr_str);
+        } else {
+            swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+            swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
+            tracing::info!("Listening on default TCP IPv4 and IPv6 any port / any interface.");
+        }
 
         Ok(Self {
             swarm,
             local_peer_id,
-            local_node_did: local_node_did_for_ops,
-            local_keypair: identity_keypair,
-            capability_gossip_topic: Topic::new(CAPABILITY_TOPIC),
-            job_announcement_topic: Topic::new(JOB_ANNOUNCEMENT_TOPIC),
+            local_node_did,
+            local_keypair: icn_keypair,
+            capability_gossip_topic,
+            job_announcement_topic,
+            receipt_announcement_topic,
+            job_interest_base_topic_prefix,
             available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
-            runtime_job_queue_for_announcement: runtime_job_queue,
+            runtime_job_queue,
             job_interests_received: Arc::new(RwLock::new(HashMap::new())),
-            announced_originated_jobs,
+            announced_originated_jobs: Arc::new(RwLock::new(HashMap::new())),
+            assigned_jobs: Arc::new(RwLock::new(HashMap::new())),
             executing_jobs: Arc::new(RwLock::new(HashMap::new())),
-            completed_job_receipt_cids,
-            assigned_jobs,
-            runtime_context: local_runtime_context,
-            discovered_receipt_announcements,
+            completed_job_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
+            local_runtime_context,
+            discovered_receipt_announcements: Arc::new(RwLock::new(HashMap::new())),
+            // ADDITION: Store the test listener sender
+            test_job_status_listener_tx,
         })
     }
 
@@ -355,7 +377,7 @@ impl MeshNode {
         println!("Receipt signed for JobId: {}", job_id);
 
         // Anchor receipt via local runtime context
-        if let Some(rt_ctx) = &self.runtime_context {
+        if let Some(rt_ctx) = &self.local_runtime_context {
             let host_env = ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
             // anchor_receipt expects the receipt by value
             match host_env.anchor_receipt(receipt.clone()).await {
@@ -437,66 +459,64 @@ impl MeshNode {
         Ok(())
     }
 
-    async fn assign_job_to_executor(
+    pub async fn assign_job_to_executor(
         &mut self,
         job_id: &IcnJobId,
         target_executor_did: Did,
+        job_details: MeshJob,
+        originator_did: Did,
     ) -> Result<(), Box<dyn Error>> {
-        let job_details: MeshJob;
-        // Retrieve the job details from announced_originated_jobs
-        {
-            let announced_jobs = self.announced_originated_jobs.read().map_err(|_| "Failed to get read lock for announced_originated_jobs")?;
-            if let Some(job) = announced_jobs.get(job_id) {
-                job_details = job.clone();
-            } else {
-                eprintln!("Cannot assign job {}: Not found in originated jobs.", job_id);
-                return Err(format!("Job {} not found in originated jobs", job_id).into());
-            }
-        }
-
-        println!(
-            "Assigning JobID: {} from Originator DID: {} to Executor DID: {}",
-            job_id, self.local_node_did, target_executor_did
+        tracing::info!(
+            "Attempting to publish AssignJobV1 for job_id: {}, target_executor: {}, originator: {}",
+            job_id,
+            target_executor_did,
+            originator_did
         );
 
         let assignment_message = MeshProtocolMessage::AssignJobV1 {
             job_id: job_id.clone(),
-            originator_did: self.local_node_did.clone(),
             target_executor_did: target_executor_did.clone(),
             job_details: job_details.clone(),
+            originator_did: originator_did.clone(),
         };
 
-        match serde_cbor::to_vec(&assignment_message) {
-            Ok(serialized_message) => {
-                let interest_topic_string = job_interest_topic_string(job_id);
-                let assignment_topic = Topic::new(interest_topic_string.clone()); // Publish on the job's interest topic
+        let serialized_message = serde_cbor::to_vec(&assignment_message)?;
+        
+        let topic_str = crate::utils::direct_message_topic_string(&target_executor_did);
+        let topic = Topic::new(topic_str.clone());
 
-                self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .publish(assignment_topic, serialized_message)?;
-                
-                println!(
-                    "Published AssignJobV1 for JobID: {} to Executor: {} on topic: {}",
-                    job_id, target_executor_did, interest_topic_string
+        match self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), serialized_message) {
+            Ok(message_id) => {
+                tracing::info!(
+                    "Published AssignJobV1 to topic '{}' (for executor {}). Message ID: {:?}",
+                    topic_str,
+                    target_executor_did,
+                    message_id
                 );
 
-                if let Ok(mut announced_jobs) = self.announced_originated_jobs.write() {
-                    if let Some(job_entry) = announced_jobs.get_mut(job_id) {
-                        // Placeholder for updating job status. MeshJob might need a status field or a wrapper like JobManifest.
-                        // For now, we assume the local JobManifest (if we were using one) would be updated.
-                        // If MeshJob is directly stored and doesn't have a mutable status, this part needs refinement.
-                        // job_entry.status = StandardJobStatus::Assigned { node_id: target_executor_did.clone() }; 
-                        println!("Originated Job {} status conceptually updated to Assigned to {}", job_id, target_executor_did);
+                // ADDITION: Subscribe to the job's interest topic to listen for status updates
+                let job_interest_topic_str = crate::utils::job_interest_topic_string(job_id);
+                let job_interest_topic = Topic::new(job_interest_topic_str.clone());
+                match self.swarm.behaviour_mut().gossipsub.subscribe(&job_interest_topic) {
+                    Ok(subscribed) => {
+                        if subscribed {
+                            tracing::info!("Node {} successfully subscribed to job interest topic '{}' for status updates.", self.local_node_did, job_interest_topic_str);
+                        } else {
+                            tracing::info!("Node {} already subscribed or no change for job interest topic '{}'.", self.local_node_did, job_interest_topic_str);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Node {} error subscribing to job interest topic '{}': {:?}", self.local_node_did, job_interest_topic_str, e);
+                        // Not returning error, as assignment was published. This is best-effort.
                     }
                 }
+                Ok(())
             }
             Err(e) => {
-                eprintln!("Error serializing AssignJobV1 message for job {}: {:?}", job_id, e);
-                return Err(Box::new(e));
+                tracing::error!("Failed to publish AssignJobV1 to topic '{}': {:?}", topic_str, e);
+                Err(Box::new(e))
             }
         }
-        Ok(())
     }
 
     pub async fn run_event_loop(&mut self) -> Result<(), Box<dyn Error>> {
@@ -518,12 +538,12 @@ impl MeshNode {
                 _ = job_queue_interval.tick() => {
                     let mut jobs_to_announce = Vec::new();
                     {
-                        if let Ok(mut queue) = self.runtime_job_queue_for_announcement.lock() {
+                        if let Ok(mut queue) = self.runtime_job_queue.lock() {
                             while let Some(job) = queue.pop_front() {
                                 jobs_to_announce.push(job);
                             }
                         } else {
-                            eprintln!("Failed to lock runtime_job_queue_for_announcement");
+                            eprintln!("Failed to lock runtime_job_queue");
                         }
                     }
                     for job in jobs_to_announce {
@@ -567,7 +587,7 @@ impl MeshNode {
                          // Before assigning, we should lock `announced_originated_jobs` and update its status
                          // or use another mechanism to prevent re-assignment.
                          // For this example, we proceed directly.
-                        if let Err(e) = self.assign_job_to_executor(&job_id, executor_did.clone()).await {
+                        if let Err(e) = self.assign_job_to_executor(&job_id, executor_did.clone(), job_details.clone(), self.local_node_did.clone()).await {
                             eprintln!("Failed to assign job {} to {}: {:?}", job_id, executor_did, e);
                         }
                     }
@@ -797,25 +817,4 @@ impl MeshNode {
     // Helper to clone necessary Arcs for async tasks spawned from event loop
     // This is a simplified clone; a real one might need more careful consideration of what needs to be Arc<Mutex/RwLock<T>> vs what can be cloned directly.
     // For MeshNode methods that take `&self` or `&mut self` and are called from spawned tasks, `self` needs to be Arc-wrapped.
-    // However, our `simulate_execution_and_anchor_receipt` takes `&self` but acts on Arc fields, so it's okay if the task owns `self_clone`.
-    // This method is primarily for if we needed to pass `MeshNode` itself into a context that requires `'static` lifetime or if the method was `&mut self`.
-    // The current approach of `let self_clone = Arc::new(self.clone_for_async_tasks());` and then calling `self_clone.method()` on it
-    // requires MeshNode to be Clone. Let's make it Clone. The Arcs within it make this a shallow clone, which is what we want.
-    fn clone_for_async_tasks(&self) -> Self {
-        // This relies on MeshNode deriving Clone. The Arcs will be cloned (incrementing ref count).
-        // The KeyPair also needs to be Clone.
-        self.clone()
-    }
-}
-
-// Added helper for MeshProtocolMessage to get a name string for logging
-impl MeshProtocolMessage {
-    fn name(&self) -> &'static str {
-        match self {
-            MeshProtocolMessage::JobAnnouncementV1(_) => "JobAnnouncementV1",
-            MeshProtocolMessage::CapabilityAdvertisementV1(_) => "CapabilityAdvertisementV1",
-            MeshProtocolMessage::JobInterestV1 { .. } => "JobInterestV1",
-            // Add other variants if they exist
-        }
-    }
-} 
+    // However, our `

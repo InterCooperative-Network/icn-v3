@@ -41,8 +41,13 @@ use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector, GovernedE
 
 // ADDITION START
 // Define a type alias for the shared P2P node state
-pub type SharedP2pNode = Arc<TokioMutex<PlanetaryMeshNode>>;
+pub type SharedP2pNode = Arc<tokio::sync::Mutex<PlanetaryMeshNode>>;
 // ADDITION END
+
+use planetary_mesh::node::MeshNode as PlanetaryMeshNode;
+use libp2p::Multiaddr;
+// ADDITION for the test listener channel type
+use planetary_mesh::protocol::MeshProtocolMessage as PlanetaryMeshMessage;
 
 enum AppError {
     Internal(anyhow::Error),
@@ -149,15 +154,17 @@ fn generate_job_cid_from_payload(
     Ok(Cid::new_v1(cid:: известных_кодеков::DAG_CBOR, multihash))
 }
 
-// NEW FUNCTION: run_server
+/// Start the ICN Mesh Jobs server with P2P integration.
 pub async fn run_server(
     database_url: String,
-    p2p_identity_keypair: IcnKeyPair,
-    p2p_explicit_listen_address: Option<String>, // Renamed for clarity
-    reputation_service_url_str: String, // Renamed for clarity
-    http_listen_socket_addr: SocketAddr, // Renamed for clarity
+    p2p_identity: IcnKeyPair,
+    p2p_listen_address: Option<String>,
+    reputation_service_url: String,
+    http_listen_addr: SocketAddr,
+    // ADDITION: Test listener sender parameter for P2P node
+    test_listener_tx: Option<tokio::sync::broadcast::Sender<PlanetaryMeshMessage>>,
 ) -> anyhow::Result<(SocketAddr, Vec<Multiaddr>)> {
-    tracing::info!("run_server: Initializing with DB URL: {}, P2P Listen: {:?}, HTTP Listen: {}", database_url, p2p_explicit_listen_address, http_listen_socket_addr);
+    tracing::info!("run_server: Initializing with DB URL: {}, P2P Listen: {:?}, HTTP Listen: {}", database_url, p2p_listen_address, http_listen_addr);
 
     // --- Database Setup ---
     tracing::info!("run_server: Setting up database at: {}", database_url);
@@ -181,22 +188,21 @@ pub async fn run_server(
     let store: Arc<dyn MeshJobStore> = Arc::new(SqliteStore::new(pool.clone()));
     tracing::info!("run_server: Using SqliteStore for job and bid management.");
 
-    let reputation_service_url = Arc::new(reputation_service_url_str);
-    tracing::info!("run_server: Using reputation service at: {}", *reputation_service_url);
+    let reputation_url = Arc::new(reputation_service_url);
+    tracing::info!("run_server: Using reputation service at: {}", *reputation_url);
 
     // --- P2P Mesh Node Setup ---
-    tracing::info!("run_server: P2P Node DID for icn-mesh-jobs service: {}", p2p_identity_keypair.did);
-    let p2p_node_job_queue: Arc<std::sync::Mutex<VecDeque<MeshJob>>> = Arc::new(std::sync::Mutex::new(VecDeque::new()));
-    let p2p_node_runtime_context = None; 
-
-    let mut p2p_node_instance = PlanetaryMeshNode::new(
-        p2p_identity_keypair, // Use passed-in keypair
-        p2p_explicit_listen_address,
-        p2p_node_job_queue,
-        p2p_node_runtime_context,
+    tracing::info!("run_server: P2P Node DID for icn-mesh-jobs service: {}", p2p_identity.did);
+    let job_queue: Arc<Mutex<VecDeque<MeshJob>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let mut p2p_node = PlanetaryMeshNode::new(
+        p2p_identity,
+        p2p_listen_address.clone(),
+        job_queue,
+        None, // local_runtime_context
+        // ADDITION: Pass the test listener to the P2P node
+        test_listener_tx,
     )
-    .await
-    .map_err(|e| anyhow::anyhow!("run_server: Failed to create PlanetaryMeshNode: {}", e))?;
+    .await?;
     
     // Get P2P listen addresses. Note: `run` must be called for listening to truly start for external purposes,
     // but `new` usually sets up the listener internally. We'll get addresses before spawning run.
@@ -206,22 +212,22 @@ pub async fn run_server(
     // A safer way is to get listeners *after* run() has been called and the node signals readiness,
     // or have PlanetaryMeshNode::new return them.
     // Assuming PlanetaryMeshNode::new makes listen_on calls that are effective immediately for address retrieval.
-    let p2p_listen_addrs = p2p_node_instance.swarm.listeners().cloned().collect::<Vec<_>>();
-    if p2p_listen_addrs.is_empty() {
+    let listen_addrs = p2p_node.swarm.listeners().cloned().collect::<Vec<_>>();
+    if listen_addrs.is_empty() {
         tracing::warn!("run_server: P2P Node reported no listen addresses immediately after creation. This might be an issue for discovery.");
     } else {
-        for addr in &p2p_listen_addrs {
+        for addr in &listen_addrs {
             tracing::info!("run_server: P2P Node listening on: {}", addr);
         }
     }
     
-    let shared_p2p_node: SharedP2pNode = Arc::new(TokioMutex::new(p2p_node_instance));
+    let shared_p2p = Arc::new(tokio::sync::Mutex::new(p2p_node));
 
-    let p2p_node_runner = shared_p2p_node.clone();
+    let runner = shared_p2p.clone();
     tokio::spawn(async move {
         tracing::info!("run_server: Starting P2P Mesh Node event loop...");
         // The lock guard is held for the duration of run(). Ensure run() doesn't deadlock.
-        let mut node_guard = p2p_node_runner.lock().await;
+        let mut node_guard = runner.lock().await;
         if let Err(e) = node_guard.run().await { 
              tracing::error!("run_server: P2P Mesh Node event loop failed: {}", e);
         }
@@ -230,8 +236,8 @@ pub async fn run_server(
 
     // --- HTTP Server Setup ---
     // Bind a TCP listener to get the actual local address, especially if port 0 is used.
-    let http_listener = tokio::net::TcpListener::bind(http_listen_socket_addr).await
-        .map_err(|e| anyhow::anyhow!("run_server: Failed to bind HTTP listener to {}: {}", http_listen_socket_addr, e))?;
+    let http_listener = tokio::net::TcpListener::bind(http_listen_addr).await
+        .map_err(|e| anyhow::anyhow!("run_server: Failed to bind HTTP listener to {}: {}", http_listen_addr, e))?;
     let actual_http_listen_addr = http_listener.local_addr()
         .map_err(|e| anyhow::anyhow!("run_server: Failed to get local address from HTTP listener: {}", e))?;
     
@@ -249,8 +255,8 @@ pub async fn run_server(
         .route("/jobs/:job_id/complete", post(mark_job_completed_handler))
         .route("/jobs/:job_id/fail", post(mark_job_failed_handler))
         .layer(Extension(store.clone()))
-        .layer(Extension(reputation_service_url.clone()))
-        .layer(Extension(shared_p2p_node.clone()));
+        .layer(Extension(reputation_url.clone()))
+        .layer(Extension(shared_p2p.clone()));
 
     tokio::spawn(async move {
         tracing::info!("run_server: ICN Mesh Jobs service HTTP server starting on {}", actual_http_listen_addr);
@@ -264,7 +270,7 @@ pub async fn run_server(
     });
     
     tracing::info!("run_server: HTTP server task has been spawned. Returning bound addresses.");
-    Ok((actual_http_listen_addr, p2p_listen_addrs))
+    Ok((actual_http_listen_addr, listen_addrs))
 }
 
 #[tokio::main]
@@ -309,6 +315,7 @@ async fn main() -> anyhow::Result<()> {
             p2p_listen_addr_env,
             reputation_url_env,
             http_socket_addr,
+            None,
         ).await {
             Ok((http_addr, p2p_addrs)) => {
                 tracing::info!("main: run_server started successfully. HTTP: {}, P2P: {:?}", http_addr, p2p_addrs);
