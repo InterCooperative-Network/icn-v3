@@ -3,6 +3,7 @@ use ed25519_dalek::{
     Keypair as DalekKeypair, PublicKey, SecretKey, Signature, Signer as DalekSigner, Verifier,
 };
 use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
 
 /// A trait for objects that can sign messages
 pub trait Signer {
@@ -123,4 +124,10 @@ pub mod did {
 
         Ok(decoded[2..].to_vec())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Signature {
+    pub algorithm: String,     // e.g., "Ed25519"
+    pub value: Vec<u8>,
 }
