@@ -23,6 +23,7 @@ mod storage;
 use storage::{InMemoryStore, MeshJobStore};
 
 mod reputation_client;
+mod bid_logic;
 
 struct AppError(anyhow::Error);
 impl IntoResponse for AppError {
@@ -73,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/jobs", post(create_job).get(list_jobs))
         .route("/jobs/:job_id", get(get_job))
         .route("/jobs/:job_id/bids", post(submit_bid).get(ws_stream_bids_handler))
+        .route("/jobs/:job_id/assign", post(assign_best_bid_handler))
+        .route("/jobs/:job_id/start", post(start_job_handler))
         .route("/jobs/:job_id/complete", post(mark_job_completed_handler))
         .route("/jobs/:job_id/fail", post(mark_job_failed_handler))
         .layer(Extension(store.clone()))
@@ -103,7 +106,7 @@ async fn get_job(
 ) -> Result<impl IntoResponse, AppError> {
     let job_id = Cid::try_from(job_id_str).map_err(|e| AppError(anyhow::anyhow!(e)))?;
     match store.get_job(&job_id).await? {
-        Some((_req, status)) => Ok(AxumJson(status).into_response()),
+        Some((job_req, status)) => Ok(AxumJson(json!({ "request": job_req, "status": status })).into_response()),
         None => Err(AppError(anyhow::anyhow!("Job not found"))),
     }
 }
@@ -152,6 +155,93 @@ async fn submit_bid(
     Ok(StatusCode::ACCEPTED)
 }
 
+async fn assign_best_bid_handler(
+    Extension(store): Extension<Arc<dyn MeshJobStore>>,
+    Path(job_id_str): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let job_id = Cid::try_from(job_id_str)?;
+
+    let (job_request, current_status) = store.get_job(&job_id).await?
+        .ok_or_else(|| AppError(anyhow::anyhow!("Job not found: {}", job_id)))?;
+    
+    match current_status {
+        JobStatus::Pending | JobStatus::Bidding => { /* Proceed */ }
+        _ => return Err(AppError(anyhow::anyhow!("Job {} is in status {:?} and cannot have a bid assigned.", job_id, current_status))),
+    }
+
+    let bids = store.list_bids(&job_id).await?;
+    if bids.is_empty() {
+        tracing::info!("No bids found for job {}. Cannot assign.", job_id);
+        return Err(AppError(anyhow::anyhow!("No bids available for job {}", job_id)));
+    }
+
+    let mut best_bid: Option<&Bid> = None;
+    let mut highest_score = f64::NEG_INFINITY;
+
+    for bid in &bids {
+        let score = bid_logic::calculate_bid_selection_score(
+            bid, 
+            &job_request, 
+            bid_logic::DEFAULT_REP_WEIGHT, 
+            bid_logic::DEFAULT_PRICE_WEIGHT
+        );
+        tracing::debug!("Calculated score {} for bid from {} on job {}", score, bid.bidder.0, job_id);
+        if score > highest_score {
+            highest_score = score;
+            best_bid = Some(bid);
+        }
+    }
+
+    if let Some(winner) = best_bid {
+        if highest_score < 0.0 {
+            tracing::info!("No bids for job {} met the minimum score threshold (all scores <= 0 or disqualified).", job_id);
+            return Err(AppError(anyhow::anyhow!("No suitable bids found for job {} after scoring.", job_id)));
+        }
+
+        store.assign_job(&job_id, winner.bidder.clone()).await?;
+        tracing::info!(
+            "Job {} assigned to bidder {} with score {}. Winning bid: {:?}",
+            job_id, winner.bidder.0, highest_score, winner
+        );
+        Ok(AxumJson(json!({
+            "message": "Job assigned successfully",
+            "job_id": job_id.to_string(),
+            "assigned_bidder": winner.bidder.0,
+            "winning_score": highest_score,
+            "winning_bid": winner
+        })).into_response())
+    } else {
+        tracing::info!("No eligible bid found for job {} after selection process.", job_id);
+        Err(AppError(anyhow::anyhow!("No eligible bid found for assignment on job {}", job_id)))
+    }
+}
+
+async fn start_job_handler(
+    Extension(store): Extension<Arc<dyn MeshJobStore>>,
+    Path(job_id_str): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let job_id = Cid::try_from(job_id_str.clone())?;
+
+    let (_job_request, current_status) = store.get_job(&job_id).await?
+        .ok_or_else(|| AppError(anyhow::anyhow!("Job not found: {}", job_id)))?;
+
+    match current_status {
+        JobStatus::Assigned { bidder } => {
+            store.update_job_status(&job_id, JobStatus::Running { runner: bidder.clone() }).await?;
+            tracing::info!("Job {} has been started by bidder {}.", job_id, bidder.0);
+            Ok(StatusCode::OK)
+        }
+        JobStatus::Running { runner } => {
+            tracing::info!("Job {} is already running by {}.", job_id, runner.0);
+            Err(AppError(anyhow::anyhow!("Job {} is already running.", job_id)))
+        }
+        _ => {
+            tracing::error!("Job {} is in status {:?} and cannot be started.", job_id, current_status);
+            Err(AppError(anyhow::anyhow!("Job {} cannot be started from its current state: {:?}.", job_id, current_status)))
+        }
+    }
+}
+
 async fn mark_job_completed_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Extension(reputation_url): Extension<Arc<String>>,
@@ -161,19 +251,18 @@ async fn mark_job_completed_handler(
     let job_id = Cid::try_from(job_id_str.clone())?;
     let (_, job_status) = store.get_job(&job_id).await?.ok_or_else(|| AppError(anyhow::anyhow!("Job not found")))?;
 
-    let bidder_did = match job_status {
-        JobStatus::Assigned { bidder } => bidder,
-        JobStatus::Running => {
-            tracing::warn!("Job {} is Running, assuming it was assigned. Need to confirm bidder.", job_id);
-            return Err(AppError(anyhow::anyhow!("Job must be in Assigned state to get bidder for completion.")));
+    let runner_did = match job_status {
+        JobStatus::Running { runner } => runner,
+        _ => {
+            tracing::error!("Job {} is in status {:?} and cannot be marked completed.", job_id, job_status);
+            return Err(AppError(anyhow::anyhow!("Job {} not in Running state. Current state: {:?}.", job_id, job_status)));
         }
-        _ => return Err(AppError(anyhow::anyhow!("Job not in Assignable/Running state to be completed"))),
     };
 
     let record = ReputationRecord {
         timestamp: Utc::now(),
         issuer: MESH_JOBS_SYSTEM_DID.clone(),
-        subject: bidder_did.clone(),
+        subject: runner_did.clone(),
         event: ReputationUpdateEvent::JobCompletedSuccessfully {
             job_id,
             execution_duration_ms: details.execution_duration_ms,
@@ -190,7 +279,7 @@ async fn mark_job_completed_handler(
     }
 
     store.update_job_status(&job_id, JobStatus::Completed).await?;
-    tracing::info!("Marked job {} as Completed. Reputation record submitted for bidder {}.", job_id, bidder_did.0);
+    tracing::info!("Marked job {} as Completed. Reputation record submitted for runner {}.", job_id, runner_did.0);
     Ok(StatusCode::OK)
 }
 
@@ -203,18 +292,18 @@ async fn mark_job_failed_handler(
     let job_id = Cid::try_from(job_id_str.clone())?;
     let (_, job_status) = store.get_job(&job_id).await?.ok_or_else(|| AppError(anyhow::anyhow!("Job not found")))?;
 
-    let bidder_did = match job_status {
-        JobStatus::Assigned { bidder } => bidder,
-        JobStatus::Running => {
-            return Err(AppError(anyhow::anyhow!("Job must be in Assigned state to get bidder for failure reporting.")));
+    let runner_did = match job_status {
+        JobStatus::Running { runner } => runner,
+        _ => {
+            tracing::error!("Job {} is in status {:?} and cannot be marked failed.", job_id, job_status);
+            return Err(AppError(anyhow::anyhow!("Job {} not in Running state. Current state: {:?}.", job_id, job_status)));
         }
-        _ => return Err(AppError(anyhow::anyhow!("Job not in Assignable/Running state to be marked failed"))),
     };
 
     let record = ReputationRecord {
         timestamp: Utc::now(),
         issuer: MESH_JOBS_SYSTEM_DID.clone(),
-        subject: bidder_did.clone(),
+        subject: runner_did.clone(),
         event: ReputationUpdateEvent::JobFailed {
             job_id,
             reason: details.reason.clone(),
@@ -229,7 +318,7 @@ async fn mark_job_failed_handler(
     }
 
     store.update_job_status(&job_id, JobStatus::Failed { reason: details.reason }).await?;
-    tracing::info!("Marked job {} as Failed. Reason: {}. Reputation record submitted for bidder {}.", job_id, store.get_job(&job_id).await.map(|j| format!("{:?}", j.map(|(_,s)|s))).unwrap_or_default(), bidder_did.0);
+    tracing::info!("Marked job {} as Failed. Reason: {}. Reputation record submitted for runner {}.", job_id, store.get_job(&job_id).await.map(|j| format!("{:?}", j.map(|(_,s)|s))).unwrap_or_default(), runner_did.0);
     Ok(StatusCode::OK)
 }
 

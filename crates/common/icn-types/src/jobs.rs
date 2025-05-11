@@ -52,7 +52,7 @@ pub enum JobStatus {
     Pending,
     Bidding,
     Assigned { bidder: Did },
-    Running,
+    Running { runner: Did },
     Completed,
     Failed { reason: String }, // Added a reason field for failure
 }

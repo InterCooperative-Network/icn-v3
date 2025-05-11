@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use cid::Cid;
+use icn_identity::Did;
 use icn_types::jobs::{JobRequest, JobStatus, Bid, ResourceRequirements, ResourceEstimate}; // Added ResourceRequirements, ResourceEstimate for default
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -43,6 +44,9 @@ pub trait MeshJobStore: Send + Sync + 'static {
 
     /// Subscribe to bids for a given job.
     async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>>;
+
+    /// Assign a job to a bidder
+    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<()>;
 }
 
 pub struct InMemoryStore {
@@ -145,5 +149,26 @@ impl MeshJobStore for InMemoryStore {
 
     async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>> {
         Ok(self.get_bid_receiver(job_id).await)
+    }
+
+    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<()> {
+        let mut jobs_guard = self.jobs.write().await;
+        match jobs_guard.get_mut(job_id) {
+            Some((_job_request, current_status)) => {
+                // Ensure job is in a state that can be assigned (e.g., Bidding or Pending)
+                match current_status {
+                    JobStatus::Pending | JobStatus::Bidding => {
+                        *current_status = JobStatus::Assigned { bidder: bidder_did };
+                        Ok(())
+                    }
+                    _ => Err(anyhow::anyhow!(
+                        "Job {} is in status {:?} and cannot be assigned.",
+                        job_id,
+                        current_status
+                    )),
+                }
+            }
+            None => Err(anyhow::anyhow!("Job not found: {}", job_id)),
+        }
     }
 } 
