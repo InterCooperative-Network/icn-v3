@@ -29,6 +29,10 @@ use libp2p::swarm::{Swarm, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 // ADDITION: For the test listener channel
 use tokio::sync::broadcast as tokio_broadcast;
+use libp2p::kad::{store::MemoryStore, Kademlia, KademliaEvent, QueryResult, GetRecordOk, Record, Key as KadKey, QueryId};
+use icn_mesh_receipts::{verify_embedded_signature}; // Ensure verify_embedded_signature is imported
+use serde_cbor; // For deserializing the receipt CBOR
+use tokio::sync::oneshot; // Added for Kademlia query response
 
 // Helper to create job-specific interest topic strings
 fn job_interest_topic_string(job_id: &IcnJobId) -> String {
@@ -43,6 +47,21 @@ enum NodeInternalAction {
         receipt_cid: Cid,
         executor_did: Did,
     },
+}
+
+// Define a simple error type for fetching
+#[derive(Debug, Error)]
+enum FetchError {
+    #[error("Kademlia: Record not found for CID {0}")]
+    KadRecordNotFound(Cid),
+    #[error("Kademlia: GetRecord query failed for CID {0} with error: {1}")]
+    KadQueryError(Cid, String),
+    #[error("Kademlia: GetRecord query timed out for CID {0}")]
+    KadQueryTimeout(Cid),
+    #[error("CBOR deserialization error: {0}")]
+    CborDeserialization(String),
+    #[error("Signature verification failed: {0}")]
+    SignatureVerification(String),
 }
 
 #[derive(Clone)]
@@ -68,6 +87,9 @@ pub struct MeshNode {
     pub test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
     // 2. Add to MeshNode struct:
     pub internal_action_tx: mpsc::Sender<NodeInternalAction>,
+    // For Kademlia receipt queries
+    #[allow(clippy::type_complexity)] // To allow complex type for HashMap value with oneshot sender
+    receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>,
 }
 
 impl MeshNode {
@@ -78,6 +100,7 @@ impl MeshNode {
         local_runtime_context: Option<Arc<RuntimeContext>>,
         // ADDITION: Test listener sender parameter
         test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
+        receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>::new(Mutex::new(HashMap::new())),
     ) -> Result<(Self, mpsc::Receiver<NodeInternalAction>), Box<dyn Error>> {
         let local_libp2p_keypair = libp2p::identity::Keypair::generate_ed25519(); // Or convert from IcnKeyPair if compatible
         let local_peer_id = PeerId::from(local_libp2p_keypair.public());
@@ -142,6 +165,9 @@ impl MeshNode {
             test_job_status_listener_tx,
             // Assign `internal_action_tx` to the struct
             internal_action_tx,
+            // For Kademlia receipt queries
+            #[allow(clippy::type_complexity)] // To allow complex type for HashMap value with oneshot sender
+            receipt_queries,
         }, internal_action_rx_for_event_loop))
     }
 
@@ -650,6 +676,85 @@ impl MeshNode {
         Ok(())
     }
 
+    pub async fn fetch_receipt_cbor_via_kad(&mut self, receipt_cid: &Cid) -> Result<Vec<u8>, FetchError> {
+        let key = KadKey::new(&receipt_cid.to_bytes());
+        tracing::info!("[MeshNode] Initiating Kademlia get_record for receipt CID: {}", receipt_cid);
+
+        let (tx, rx) = oneshot::channel::<Result<Vec<u8>, FetchError>>();
+        let query_id = self.swarm.behaviour_mut().kademlia.get_record(key);
+
+        {
+            let mut queries = self.receipt_queries.lock().unwrap();
+            queries.insert(query_id, tx);
+            tracing::debug!("[MeshNode] Stored Kademlia query_id {:?} for receipt CID: {}", query_id, receipt_cid);
+        }
+
+        // Wait for the Kademlia query to complete or timeout
+        match tokio::time::timeout(Duration::from_secs(30), rx).await { // 30 second timeout
+            Ok(Ok(Ok(data))) => {
+                tracing::info!("[MeshNode] Kademlia get_record successful for receipt CID: {}. Data length: {}", receipt_cid, data.len());
+                Ok(data)
+            }
+            Ok(Ok(Err(fetch_err))) => {
+                tracing::warn!("[MeshNode] Kademlia get_record failed for receipt CID {}: {:?}", receipt_cid, fetch_err);
+                Err(fetch_err)
+            }
+            Ok(Err(_recv_err)) => {
+                // Oneshot channel was dropped, likely because Kademlia handler couldn't send a result (e.g. panic or unexpected shutdown)
+                tracing::error!("[MeshNode] Kademlia get_record query oneshot channel dropped for receipt CID {}. This is unexpected.", receipt_cid);
+                Err(FetchError::KadQueryError(*receipt_cid, "Oneshot channel receiver error".to_string()))
+            }
+            Err(_timeout_err) => {
+                tracing::warn!("[MeshNode] Kademlia get_record timed out for receipt CID: {}", receipt_cid);
+                // Remove the query from the map to prevent stale entries if Kademlia eventually responds
+                {
+                    let mut queries = self.receipt_queries.lock().unwrap();
+                    queries.remove(&query_id);
+                }
+                Err(FetchError::KadQueryTimeout(*receipt_cid))
+            }
+        }
+    }
+
+    // Placeholder for triggering economic settlement
+    async fn trigger_economic_settlement(&self, job_id: &IcnJobId, receipt: &ExecutionReceipt) {
+        // TODO: Retrieve bid price for the job_id
+        // TODO: Interact with icn-economics via RuntimeContext or host calls to perform transfer
+        tracing::info!("[MeshNode] Placeholder: Triggering economic settlement for JobID: {}, Executor: {}, Receipt CID: {}",
+                 job_id, receipt.executor, receipt.cid().map_or_else(|e| format!("Error: {}", e), |c| c.to_string()));
+        // Example:
+        // if let Some(ctx) = &self.local_runtime_context {
+        //     let bid_price = self.get_winning_bid_price_for_job(job_id).await; // Needs implementation
+        //     if let Some(price) = bid_price {
+        //         // Assuming originator is self.local_node_did or fetched from job details
+        //         let originator_did = self.announced_originated_jobs.read().unwrap().get(job_id).map(|m| m.submitter_did.clone());
+        //         if let Some(orig_did) = originator_did {
+        //              // This is conceptual; actual call depends on how Economics is exposed
+        //             // let result = ctx.economics.transfer(&orig_did, None, None, &receipt.executor, None, None, ResourceType::Token, price, &ctx.resource_ledger).await;
+        //             // tracing::info!("Economic settlement result for job {}: {:?}", job_id, result);
+        //         }
+        //     }
+        // }
+    }
+
+    // Placeholder for triggering reputation update
+    async fn trigger_reputation_update(&self, _job_id: &IcnJobId, receipt: &ExecutionReceipt) {
+        // TODO: Convert receipt.status to a ReputationUpdateEvent
+        // TODO: Interact with an icn-reputation service/system
+        tracing::info!("[MeshNode] Placeholder: Triggering reputation update for Executor: {}, Status: {:?}, Receipt CID: {}",
+                 receipt.executor, receipt.status, receipt.cid().map_or_else(|e| format!("Error: {}", e), |c| c.to_string()));
+        // Example:
+        // let event_type = match receipt.status {
+        //     StandardJobStatus::CompletedSuccess => Some(ReputationUpdateEvent::JobCompletedSuccessfully { /* ...details... */ }),
+        //     StandardJobStatus::Failed { .. } => Some(ReputationUpdateEvent::JobFailed { /* ...details... */ }),
+        //     _ => None,
+        // };
+        // if let Some(event) = event_type {
+        //     // Send this event to the reputation system
+        //     // self.reputation_updater_client.submit_event(&receipt.executor, event).await;
+        // }
+    }
+
     pub async fn run_event_loop(&mut self, mut internal_action_rx: mpsc::Receiver<NodeInternalAction>) -> Result<(), Box<dyn Error>> {
         // Periodic tasks setup
         let mut capabilities_interval = time::interval(Duration::from_secs(60)); // Broadcast capabilities every 60s
@@ -856,14 +961,135 @@ impl MeshNode {
                                                         tracing::trace!("AssignJobV1 for job {} is not for this node ({}). Ignoring.", job_id, self.local_node_did);
                                                     }
                                                 }
-                                                MeshProtocolMessage::ExecutionReceiptAvailableV1{ job_id, receipt_cid, executor_did } => {
-                                                    println!("Received ExecutionReceiptAvailableV1 for JobID: {} with CID: {} from {}", job_id, receipt_cid, executor_did);
-                                                    if let Ok(mut announcements) = self.discovered_receipt_announcements.write() {
-                                                        if let Ok(cid_obj) = Cid::try_from(receipt_cid.clone()) {
-                                                            announcements.insert(job_id, (cid_obj, executor_did));
-                                                        } else {
-                                                            eprintln!("Failed to parse receipt_cid {} into Cid object.", receipt_cid);
+                                                MeshProtocolMessage::ExecutionReceiptAvailableV1 { job_id, receipt_cid, executor_did } => {
+                                                    println!(
+                                                        "Received ExecutionReceiptAvailableV1 for JobID: {} from Executor DID: {} with Receipt CID: {} on topic {}",
+                                                        job_id, executor_did, receipt_cid, message.topic
+                                                    );
+                                                    let parsed_receipt_cid = match Cid::try_from(receipt_cid.as_str()) {
+                                                        Ok(cid) => cid,
+                                                        Err(e) => {
+                                                            eprintln!("[MeshNode] Failed to parse receipt_cid string {} for job {}: {}", receipt_cid, job_id, e);
+                                                            continue; // Skip processing this message
                                                         }
+                                                    };
+
+                                                    if let Ok(mut discovered_receipts) = self.discovered_receipt_announcements.write() {
+                                                        discovered_receipts.insert(job_id.clone(), (parsed_receipt_cid, executor_did.clone()));
+                                                        println!("[MeshNode] Stored receipt announcement for job {}.", job_id);
+                                                    } else {
+                                                        eprintln!("[MeshNode] Failed to get write lock for discovered_receipt_announcements for job {}.", job_id);
+                                                        // Continue, as we might still want to process if we are the originator
+                                                    }
+
+                                                    // Check if this node is the originator of the job
+                                                    let is_originator = self.announced_originated_jobs.read().unwrap().contains_key(&job_id);
+
+                                                    if is_originator {
+                                                        println!("[MeshNode] This node is the originator for job {}. Attempting to fetch and verify receipt {}.", job_id, parsed_receipt_cid);
+
+                                                        // Call the updated Kademlia fetch function
+                                                        let cbor_data_result = self.fetch_receipt_cbor_via_kad(&parsed_receipt_cid).await;
+
+                                                        match cbor_data_result { 
+                                                            Ok(cbor_data) => {
+                                                                println!("[MeshNode] Successfully fetched CBOR data for receipt CID: {}", parsed_receipt_cid);
+                                                                match serde_cbor::from_slice::<ExecutionReceipt>(&cbor_data) {
+                                                                    Ok(receipt) => {
+                                                                        // Calculate CID from the received and deserialized receipt data
+                                                                        let actual_receipt_cid = match receipt.cid() {
+                                                                            Ok(cid) => cid,
+                                                                            Err(e) => {
+                                                                                tracing::error!("[MeshNode] Failed to calculate CID from deserialized receipt for JobID {}: {:?}. Announced CID was {}. Skipping.", job_id, e, parsed_receipt_cid);
+                                                                                continue; // Skip processing this message
+                                                                            }
+                                                                        };
+
+                                                                        // Compare with announced CID
+                                                                        if actual_receipt_cid != parsed_receipt_cid {
+                                                                            tracing::error!("[MeshNode] CID mismatch! Announced CID {} does not match calculated CID {} for deserialized receipt (JobID {}). Skipping.", parsed_receipt_cid, actual_receipt_cid, job_id);
+                                                                            continue; // Skip processing this message
+                                                                        }
+                                                                        tracing::info!("[MeshNode] Successfully deserialized ExecutionReceipt, CID {} matches announced. JobID: {}", actual_receipt_cid, job_id);
+
+                                                                        // Security check: ensure the executor in the receipt matches the one in the announcement
+                                                                        if receipt.executor != executor_did {
+                                                                            eprintln!("[MeshNode] Receipt verification failed: Executor DID mismatch. Announced: {}, In Receipt: {}. JobID: {}", executor_did, receipt.executor, job_id);
+                                                                            continue; // Skip processing this message
+                                                                        }
+
+                                                                        match verify_embedded_signature(&receipt) {
+                                                                            Ok(true) => {
+                                                                                tracing::info!("[MeshNode] SUCCESS: Receipt signature VERIFIED for JobID: {}, Receipt CID: {}, Executor: {}",
+                                                                                                job_id, actual_receipt_cid, executor_did);
+
+                                                                                // ANCHORING LOGIC STARTS HERE
+                                                                                if let Some(rt_ctx) = &self.local_runtime_context {
+                                                                                    tracing::info!("[MeshNode] Attempting to anchor verified receipt for JobID: {}, Receipt CID: {}", job_id, actual_receipt_cid);
+                                                                                    match receipt.to_dag_node() {
+                                                                                        Ok(dag_node) => {
+                                                                                            match rt_ctx.receipt_store.write() {
+                                                                                                Ok(mut store) => {
+                                                                                                    if store.dag_nodes.contains_key(&actual_receipt_cid) {
+                                                                                                        tracing::info!("[MeshNode] Receipt CID {} already present in local store. Skipping re-anchoring.", actual_receipt_cid);
+                                                                                                    } else {
+                                                                                                        store.dag_nodes.insert(actual_receipt_cid, dag_node);
+                                                                                                        tracing::info!("[MeshNode] Successfully anchored receipt CID {} locally for JobID: {}.", actual_receipt_cid, job_id);
+                                                                                                    }
+                                                                                                }
+                                                                                                Err(e) => {
+                                                                                                    tracing::error!("[MeshNode] Failed to acquire lock on receipt_store for anchoring receipt CID {}: {:?}", actual_receipt_cid, e);
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                        Err(e) => {
+                                                                                            tracing::error!("[MeshNode] Failed to convert ExecutionReceipt to DagNode for CID {}: {:?}", actual_receipt_cid, e);
+                                                                                        }
+                                                                                    }
+                                                                                } else {
+                                                                                    tracing::warn!("[MeshNode] No local_runtime_context available. Skipping local anchoring of verified receipt CID {} for JobID: {}.", actual_receipt_cid, job_id);
+                                                                                }
+                                                                                // ANCHORING LOGIC ENDS HERE
+
+                                                                                // Trigger post-verification actions
+                                                                                let self_clone = self.clone_for_async_tasks(); // Assuming such a helper exists or can be made
+                                                                                let job_id_clone = job_id.clone();
+                                                                                let receipt_clone = receipt.clone();
+                                                                                tokio::spawn(async move {
+                                                                                    self_clone.trigger_economic_settlement(&job_id_clone, &receipt_clone).await;
+                                                                                });
+
+                                                                                let self_clone_rep = self.clone_for_async_tasks();
+                                                                                let job_id_clone_rep = job_id.clone();
+                                                                                // let receipt_clone_rep = receipt.clone(); // uncomment if needed, receipt already cloned
+                                                                                tokio::spawn(async move {
+                                                                                    self_clone_rep.trigger_reputation_update(&job_id_clone_rep, &receipt).await;
+                                                                                });
+
+                                                                            }
+                                                                            Ok(false) => {
+                                                                                eprintln!("[MeshNode] Receipt verification FAILED: Invalid signature for JobID: {}, Receipt CID: {}, Executor: {}",
+                                                                                            job_id, parsed_receipt_cid, executor_did);
+                                                                            }
+                                                                            Err(e) => {
+                                                                                eprintln!("[MeshNode] Error during receipt signature verification for JobID: {}: {:?}. Receipt CID: {}",
+                                                                                            job_id, e, parsed_receipt_cid);
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        eprintln!("[MeshNode] Failed to deserialize CBOR to ExecutionReceipt for CID: {}: {}. Data len: {}", parsed_receipt_cid, e, cbor_data.len());
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("[MeshNode] Failed to fetch receipt CBOR data for CID {}: {:?}", parsed_receipt_cid, e);
+                                                                // TODO: Implement retry logic or add to a pending queue?
+                                                            }
+                                                        }
+                                                    } else {
+                                                        // Not the originator, just discovered the announcement.
+                                                        // Might be interested for other reasons in the future (e.g. federation member verifying all receipts)
                                                     }
                                                 }
                                                 MeshProtocolMessage::JobStatusUpdateV1 { job_id, executor_did, status } => {
@@ -923,6 +1149,64 @@ impl MeshNode {
                                 }
                                 // Handle other gossipsub events if necessary (e.g., Subscription, Unsubscription)
                                 _ => {}
+                            }
+                            MeshBehaviourEvent::Kademlia(kademlia_event) => {
+                                match kademlia_event {
+                                    KademliaEvent::OutboundQueryProgressed {
+                                        id, 
+                                        result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(record))),
+                                        .. 
+                                    } => {
+                                        tracing::debug!("[KAD] GetRecord FoundRecord for QueryId: {:?}. PeerId: {:?}", id, record.peer);
+                                        if let Some(tx) = self.receipt_queries.lock().unwrap().remove(&id) {
+                                            tracing::info!("[KAD] Found pending receipt query for QueryId: {:?}. Sending record value.", id);
+                                            if let Err(e) = tx.send(Ok(record.record.value)) {
+                                                tracing::error!("[KAD] Failed to send Kademlia record value to oneshot channel for QueryId {:?}: (value not logged for brevity)", id);
+                                            }
+                                        } else {
+                                            tracing::warn!("[KAD] GetRecord FoundRecord for QueryId: {:?}, but no pending oneshot sender found. Was it a different type of query or timed out?", id);
+                                        }
+                                    }
+                                    KademliaEvent::OutboundQueryProgressed {
+                                        id, 
+                                        result: QueryResult::GetRecord(Ok(GetRecordOk::FinishedWithNoRecords)),
+                                        .. 
+                                    } => {
+                                        tracing::debug!("[KAD] GetRecord FinishedWithNoRecords for QueryId: {:?}", id);
+                                        if let Some(tx) = self.receipt_queries.lock().unwrap().remove(&id) {
+                                            tracing::info!("[KAD] Found pending receipt query for QueryId: {:?}. Sending KadRecordNotFound error.", id);
+                                            // We need the original CID to construct KadRecordNotFound error.
+                                            // This is a limitation of this approach; ideally, store CID with sender.
+                                            // For now, sending a generic query error.
+                                            // To fix this, the HashMap value could be (oneshot::Sender<...>, Cid).
+                                            if let Err(e) = tx.send(Err(FetchError::KadQueryError(Cid::default(), "FinishedWithNoRecords".to_string()))) { // Placeholder CID
+                                                tracing::error!("[KAD] Failed to send Kademlia KadRecordNotFound to oneshot channel for QueryId {:?}: {:?}", id, e);
+                                            }
+                                        } else {
+                                            tracing::warn!("[KAD] GetRecord FinishedWithNoRecords for QueryId {:?}, but no pending oneshot sender. Timed out?", id);
+                                        }
+                                    }
+                                    KademliaEvent::OutboundQueryProgressed {
+                                        id, 
+                                        result: QueryResult::GetRecord(Err(err)),
+                                        .. 
+                                    } => {
+                                        tracing::warn!("[KAD] GetRecord errored for QueryId: {:?}: {:?}", id, err);
+                                        if let Some(tx) = self.receipt_queries.lock().unwrap().remove(&id) {
+                                            tracing::info!("[KAD] Found pending receipt query for QueryId: {:?}. Sending KadQueryError.", id);
+                                            // Similar to above, we need the original CID for a better error message.
+                                            if let Err(e) = tx.send(Err(FetchError::KadQueryError(Cid::default(), err.to_string()))) { // Placeholder CID
+                                                tracing::error!("[KAD] Failed to send Kademlia KadQueryError to oneshot channel for QueryId {:?}: {:?}", id, e);
+                                            }
+                                        } else {
+                                            tracing::warn!("[KAD] GetRecord errored for QueryId {:?}, but no pending oneshot sender. Timed out?", id);
+                                        }
+                                    }
+                                    // Handle other Kademlia events like PutRecord results, routing updates etc. if needed.
+                                    _ => { 
+                                        // tracing::trace!("[KAD] Unhandled KademliaEvent: {:?}", kademlia_event);
+                                    }
+                                }
                             }
                         }
                         SwarmEvent::NewListenAddr { address, .. } => {
