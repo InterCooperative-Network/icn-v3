@@ -49,3 +49,4 @@ build/
 *.log
 .cache/
 .temp/
+repomix-output.xml
