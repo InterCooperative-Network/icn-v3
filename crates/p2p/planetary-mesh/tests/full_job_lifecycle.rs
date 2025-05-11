@@ -18,7 +18,7 @@ use planetary_mesh::node::MeshNode; // Assuming MeshNode is public or pub(crate)
 use planetary_mesh::node::InternalNodeAction; 
 use planetary_mesh::protocol::{MeshProtocolMessage, JobManifest, Bid, AssignJobV1, ExecutionReceiptAvailableV1};
 use tokio::sync::mpsc::{self, Receiver, Sender}; // Ensure Sender is imported from mpsc
-use planetary_mesh::node::{NodeCommand}; // Import NodeCommand
+use planetary_mesh::node::{NodeCommand, KnownReceiptInfo, TestObservedReputationSubmission}; // Import TestObservedReputationSubmission
 
 // Mock or minimal reputation service URL for testing
 const MOCK_REPUTATION_SERVICE_URL: &str = "http://127.0.0.1:12345"; // Placeholder
@@ -123,6 +123,8 @@ async fn test_full_job_lifecycle() {
     let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node_instance)); // Placeholder
     let originator_receipt_store_dag_nodes = Arc::clone(&planetary_mesh::node::test_utils::get_receipt_store_dag_nodes_arc(&originator_node_instance)); // Placeholder
     let originator_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&originator_node_instance)); // Placeholder
+    let originator_known_receipt_cids = Arc::clone(&planetary_mesh::node::test_utils::get_known_receipt_cids_arc(&originator_node_instance)); // Placeholder
+    let originator_observed_reputation_submissions = Arc::clone(&planetary_mesh::node::test_utils::get_test_observed_reputation_submissions_arc(&originator_node_instance));
     
     let executor_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node_instance)); // Placeholder
     let executor_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node_instance)); // Placeholder
@@ -287,13 +289,28 @@ async fn test_full_job_lifecycle() {
     println!("Economic settlement verified. Executor 1 balance: {}", executor1_final_balance);
     // We'd also check originator's balance: assert_eq!(originator_final_balance, INITIAL_ORIGINATOR_BALANCE - bid_price);
 
+    // Verify reputation record is "submitted" by checking our observed list
+    println!("Waiting for reputation submission to be observed for job {}...", job_id);
+    let captured_receipt_cid = _receipt_cid; // Use the receipt_cid obtained earlier
 
-    // Verify reputation record is "submitted"
-    // This would ideally involve a mock HTTP server that receives the reputation record.
-    // For now, we'll assume the code path was triggered.
-    // We could add a log in `submit_reputation_record_http` and check for that log in tests,
-    // or have a test-only hook.
-    println!("Reputation update submission assumed to be triggered for executor {} regarding job {}.", executor1_did, job_id);
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let observed_submissions = originator_observed_reputation_submissions.read().unwrap();
+            if let Some(submission) = observed_submissions.iter().find(|s| {
+                s.job_id == job_id && 
+                s.executor_did == executor1_did && 
+                s.anchor_cid == captured_receipt_cid
+            }) {
+                println!("Observed reputation submission: {:?}", submission);
+                // Assert on the details of the submission
+                assert_eq!(submission.outcome, StandardJobStatus::Completed, "Reputation outcome mismatch."); // Or Succeeded, depending on your logic
+                // assert_eq!(submission.timestamp, expected_timestamp_from_receipt); // If needed
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await.expect("Timed out waiting for observed reputation submission");
+    println!("Reputation update submission successfully verified for executor {} regarding job {}.", executor1_did, job_id);
 
 
     // 8. Assertions (more can be added)
@@ -408,6 +425,10 @@ mod test_utils {
         node.known_receipt_cids.clone()
     }
 
+    // Add accessor for the new test_observed_reputation_submissions field
+    pub fn get_test_observed_reputation_submissions_arc(node: &MeshNode) -> Arc<RwLock<Vec<TestObservedReputationSubmission>>> {
+        node.test_observed_reputation_submissions.clone()
+    }
 
     // Updated command functions to use the Sender<NodeCommand>
     pub async fn command_originator_to_announce_job(
