@@ -19,6 +19,7 @@ use planetary_mesh::node::InternalNodeAction;
 use planetary_mesh::protocol::{MeshProtocolMessage, JobManifest, Bid, AssignJobV1, ExecutionReceiptAvailableV1};
 use tokio::sync::mpsc::{self, Receiver, Sender}; // Ensure Sender is imported from mpsc
 use planetary_mesh::node::{NodeCommand, KnownReceiptInfo, TestObservedReputationSubmission}; // Import TestObservedReputationSubmission
+use icn_types::jobs::policy::ExecutionPolicy; // Ensure ExecutionPolicy is imported
 
 // Mock or minimal reputation service URL for testing
 const MOCK_REPUTATION_SERVICE_URL: &str = "http://127.0.0.1:12345"; // Placeholder
@@ -49,16 +50,19 @@ async fn setup_node(
 #[tokio::test]
 #[ignore] // Ignored by default as it will be a longer-running integration test
 async fn test_full_job_lifecycle() {
-    // 1. Setup: Create keypairs and DIDs for originator and executor(s)
+    // 1. Setup: Create keypairs and DIDs
     let originator_kp = IcnKeyPair::generate();
     let originator_did = originator_kp.did.clone();
+    
     let executor1_kp = IcnKeyPair::generate();
     let executor1_did = executor1_kp.did.clone();
-    // let executor2_kp = IcnKeyPair::generate();
-    // let executor2_did = executor2_kp.did.clone();
+    
+    let executor2_kp = IcnKeyPair::generate(); // New: Executor 2 Keypair
+    let executor2_did = executor2_kp.did.clone(); // New: Executor 2 DID
 
     println!("Originator DID: {}", originator_did);
     println!("Executor 1 DID: {}", executor1_did);
+    println!("Executor 2 DID: {}", executor2_did); // New: Print Executor 2 DID
 
     // 2. Initialize MeshNodes and get command senders
     let (originator_node_instance, originator_internal_rx, originator_command_tx) = 
@@ -68,267 +72,200 @@ async fn test_full_job_lifecycle() {
     let (executor1_node_instance, executor1_internal_rx, executor1_command_tx) = 
         setup_node(executor1_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), Some(MOCK_REPUTATION_SERVICE_URL.to_string()))
         .await.expect("Failed to setup executor1 node");
+
+    // New: Setup Executor 2 Node
+    let (executor2_node_instance, executor2_internal_rx, executor2_command_tx) = 
+        setup_node(executor2_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), Some(MOCK_REPUTATION_SERVICE_URL.to_string()))
+        .await.expect("Failed to setup executor2 node");
     
-    let originator_peer_id = originator_node_instance.local_peer_id();
-    let executor1_peer_id = executor1_node_instance.local_peer_id();
+    let _originator_peer_id = originator_node_instance.local_peer_id();
+    let _executor1_peer_id = executor1_node_instance.local_peer_id();
+    let _executor2_peer_id = executor2_node_instance.local_peer_id(); // New: Executor 2 Peer ID
 
-    println!("Originator Peer ID: {}", originator_peer_id);
-    println!("Executor 1 Peer ID: {}", executor1_peer_id);
-
-    // Start the event loops for each node in separate tokio tasks
+    // Start the event loops for each node
     let originator_handle = tokio::spawn(async move { originator_node_instance.run_event_loop(originator_internal_rx).await });
     let executor1_handle = tokio::spawn(async move { executor1_node_instance.run_event_loop(executor1_internal_rx).await });
+    let executor2_handle = tokio::spawn(async move { executor2_node_instance.run_event_loop(executor2_internal_rx).await }); // New: Start Executor 2 loop
 
-    // Allow some time for nodes to start up and discover each other (mDNS or Kademlia)
-    // In a real test, explicit peering or waiting for discovery events would be better.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(5)).await; // Increased sleep for 3 nodes
 
+    // Define an ExecutionPolicy for the job
+    let job_execution_policy = ExecutionPolicy {
+        min_reputation_score: Some(70.0), // Example: Min reputation of 70
+        max_price: Some(150),             // Example: Max price of 150
+        preferred_regions: None,          // Example: No region preference for now
+        weight_price: Some(0.4),          // Example: Price weight
+        weight_reputation: Some(0.6),     // Example: Reputation weight (higher than price)
+        required_ccl_level: None,
+        custom_policy_script: None,
+    };
 
     // 3. Create and Announce Job by Originator
-    let job_id: IcnJobId = format!("test-job-{}", Utc::now().timestamp_millis());
+    let job_id: IcnJobId = format!("test-policy-job-{}", Utc::now().timestamp_millis());
     let mesh_job_params = MeshJobParams {
-        wasm_cid: "bafyreibmicpv3gzfxmlsx7qvyfigt765hsdgdnkrhdk2qdsdlvgnpvchuq".to_string(), // Example CID
+        wasm_cid: "bafyreibmicpv3gzfxmlsx7qvyfigt765hsdgdnkrhdk2qdsdlvgnpvchuq".to_string(),
         ccl_cid: None,
-        description: Some("A test job for the full lifecycle".to_string()),
+        description: Some("A test job with an execution policy".to_string()),
+        execution_policy: Some(job_execution_policy.clone()), // Attach the policy
         required_resources_json: r#"{"min_cpu_cores": 1, "min_memory_mb": 128}"#.to_string(),
         max_execution_time_secs: Some(60),
         output_location: None,
         is_interactive: false,
         stages: None,
-        workflow_type: icn_types::mesh::WorkflowType::SingleWasmModule,
-        execution_policy: None,
+        workflow_type: icn_types::mesh::WorkflowType::SingleWasmModule,        
         trust_requirements: None,
     };
     let job_to_announce = MeshJob {
         job_id: job_id.clone(),
         params: mesh_job_params,
         originator_did: originator_did.clone(),
-        originator_org_scope: Some(OrganizationScopeIdentifier::Personal(originator_did.clone())), // Example scope
+        originator_org_scope: Some(OrganizationScopeIdentifier::Personal(originator_did.clone())),
         submission_timestamp: Utc::now().timestamp(),
     };
 
-    // Accessing the swarm directly for this is not ideal for a test, prefer a method on MeshNode
-    // For now, assume announce_job handles publishing.
-    // Let's assume MeshNode has a way to get its state for assertions, e.g., Arc<RwLock<InnerState>>
-    // Or, we'll use helper functions to query state via channels if available.
-    
-    // We need direct access to the `MeshNode`'s fields for assertions or use methods.
-    // For this test, we'll assume direct access to Arc<RwLock<...>> fields is possible for checks.
-    // This might require making them pub(crate) or providing accessor methods.
-    // If MeshNode instance is moved into the tokio::spawn, we need another way to interact with its state.
-    // Let's clone the Arcs for the state variables we need to check.
-
-    let originator_announced_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_announced_originated_jobs_arc(&originator_node_instance)); // Placeholder for actual access
-    let originator_bids = Arc::clone(&planetary_mesh::node::test_utils::get_bids_arc(&originator_node_instance)); // Placeholder
-    let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node_instance)); // Placeholder
-    let originator_receipt_store_dag_nodes = Arc::clone(&planetary_mesh::node::test_utils::get_receipt_store_dag_nodes_arc(&originator_node_instance)); // Placeholder
-    let originator_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&originator_node_instance)); // Placeholder
-    let originator_known_receipt_cids = Arc::clone(&planetary_mesh::node::test_utils::get_known_receipt_cids_arc(&originator_node_instance)); // Placeholder
+    // Clone Arcs for state checking
+    let originator_bids = Arc::clone(&planetary_mesh::node::test_utils::get_bids_arc(&originator_node_instance));
+    let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node_instance));
+    let originator_known_receipt_cids = Arc::clone(&planetary_mesh::node::test_utils::get_known_receipt_cids_arc(&originator_node_instance));
     let originator_observed_reputation_submissions = Arc::clone(&planetary_mesh::node::test_utils::get_test_observed_reputation_submissions_arc(&originator_node_instance));
+    let originator_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&originator_node_instance));
     
-    let executor_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node_instance)); // Placeholder
-    let executor_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node_instance)); // Placeholder
-    let executor_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&executor1_node_instance)); // Placeholder
+    let executor1_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node_instance));
+    let executor1_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node_instance));
+    let executor1_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&executor1_node_instance));
 
+    // New: State Arcs for Executor 2
+    let executor2_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor2_node_instance));
+    let executor2_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor2_node_instance));
+    let executor2_balance_store = Arc::clone(&planetary_mesh::node::test_utils::get_balance_store_arc(&executor2_node_instance));
+
+    // Set Mock Reputations on Originator Node
+    let mut mock_reputations = HashMap::new();
+    mock_reputations.insert(executor1_did.clone(), 75.0); // Executor 1: Rep 75
+    mock_reputations.insert(executor2_did.clone(), 90.0); // Executor 2: Rep 90 (higher)
+    
+    println!("Setting mock reputations on originator: {:?}", mock_reputations);
+    test_utils::command_node_to_set_mock_reputations(&originator_command_tx, mock_reputations)
+        .await
+        .expect("Failed to send SetMockReputations command to originator");
 
     // Originator announces the job
-    println!("Announcing job: {}", job_id);
-    // Use the command sender to announce the job
+    println!("Announcing job with policy: {}", job_id);
     test_utils::command_originator_to_announce_job(&originator_command_tx, job_to_announce.clone())
         .await
         .expect("Failed to send AnnounceJob command to originator");
     println!("Job {} announcement command sent to originator", job_id);
 
-
-    // 4. Executor Nodes Submit Bids
+    // 4. Executors Submit Bids
+    // Executor 1 waits for job and submits bid
     println!("Executor 1 waiting for job announcement...");
     timeout(Duration::from_secs(10), async {
         loop {
-            if executor_available_jobs.read().unwrap().contains_key(&job_id) {
-                println!("Executor 1 found job {} on the mesh.", job_id);
-                break;
-            }
+            if executor1_available_jobs.read().unwrap().contains_key(&job_id) { break; }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }).await.expect("Executor 1 timed out waiting for job announcement");
+    let bid_price_ex1 = 100; // Lower price
+    let bid_by_executor1 = Bid { job_id: job_id.clone(), executor_did: executor1_did.clone(), price: bid_price_ex1, timestamp: Utc::now().timestamp() };
+    println!("Executor 1 submitting bid (Price: {}, MockRep: 75.0) for job {}", bid_price_ex1, job_id);
+    test_utils::command_executor_to_submit_bid(&executor1_command_tx, bid_by_executor1.clone()).await.expect("Executor 1 failed to submit bid");
 
-    let bid_price = 100; // Example bid price
-    let bid_by_executor1 = Bid {
-        job_id: job_id.clone(),
-        executor_did: executor1_did.clone(),
-        price: bid_price,
-        timestamp: Utc::now().timestamp(),
-        //execution_guarantees: None, // Add if needed
-    };
-    
-    println!("Executor 1 submitting bid for job {}", job_id);
-    // Use the command sender to submit the bid
-    test_utils::command_executor_to_submit_bid(&executor1_command_tx, bid_by_executor1.clone())
-        .await
-        .expect("Failed to send SubmitBid command to executor1");
-    println!("Executor 1 submitted bid command for job {}", job_id);
-
-
-    // 5. Originator Selects Bid and Assigns Job
-    println!("Originator waiting for bids...");
+    // New: Executor 2 waits for job and submits bid
+    println!("Executor 2 waiting for job announcement...");
     timeout(Duration::from_secs(10), async {
         loop {
-            let bids_map = originator_bids.read().unwrap();
-            if let Some(bids_for_job) = bids_map.get(&job_id) {
-                if !bids_for_job.is_empty() {
-                    println!("Originator found {} bid(s) for job {}.", bids_for_job.len(), job_id);
-                    assert_eq!(bids_for_job[0].executor_did, executor1_did, "Bid not from expected executor.");
-                    assert_eq!(bids_for_job[0].price, bid_price, "Bid price mismatch.");
-                    break;
-                }
-            }
+            if executor2_available_jobs.read().unwrap().contains_key(&job_id) { break; }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    }).await.expect("Originator timed out waiting for bids");
+    }).await.expect("Executor 2 timed out waiting for job announcement");
+    let bid_price_ex2 = 120; // Slightly higher price, but higher reputation
+    let bid_by_executor2 = Bid { job_id: job_id.clone(), executor_did: executor2_did.clone(), price: bid_price_ex2, timestamp: Utc::now().timestamp() };
+    println!("Executor 2 submitting bid (Price: {}, MockRep: 90.0) for job {}", bid_price_ex2, job_id);
+    test_utils::command_executor_to_submit_bid(&executor2_command_tx, bid_by_executor2.clone()).await.expect("Executor 2 failed to submit bid");
 
-    println!("Originator waiting for job assignment to occur...");
-    // The assignment happens via executor_selection_interval in MeshNode's event loop.
-    // We need to wait for AssignJobV1 to be sent by originator and received by executor.
-    timeout(Duration::from_secs(15), async { // Increased timeout for selection interval
+    // 5. Originator Selects Bid and Assigns Job (Expect Executor 2 to win due to policy)
+    let expected_winner_did = executor2_did.clone();
+    let expected_winning_price = bid_price_ex2;
+
+    println!("Originator waiting for bids and policy-based assignment (expecting {} to win)..", expected_winner_did);
+    timeout(Duration::from_secs(20), async { // Increased timeout for selection interval + 2 bids
         loop {
-            // Check if originator marked it as assigned
+            let assigned_job_details_ex1 = executor1_assigned_jobs.read().unwrap();
+            let assigned_job_details_ex2 = executor2_assigned_jobs.read().unwrap();
+            
             let is_assigned_by_originator = originator_assigned_by_originator.read().unwrap().contains(&job_id);
-            // Check if executor received the assignment
-            let is_assigned_to_executor = executor_assigned_jobs.read().unwrap().contains_key(&job_id);
+            let is_assigned_to_expected_winner = assigned_job_details_ex2.contains_key(&job_id);
+            let is_assigned_to_other_executor = assigned_job_details_ex1.contains_key(&job_id);
 
-            if is_assigned_by_originator && is_assigned_to_executor {
-                println!("Job {} successfully assigned to Executor 1.", job_id);
-                let assigned_job_details = executor_assigned_jobs.read().unwrap();
-                let (_manifest, assigned_bid) = assigned_job_details.get(&job_id).unwrap();
-                assert_eq!(assigned_bid.executor_did, executor1_did);
-                assert_eq!(assigned_bid.price, bid_price);
+            if is_assigned_by_originator && is_assigned_to_expected_winner {
+                assert!(!is_assigned_to_other_executor, "Job incorrectly assigned to executor 1 as well!");
+                println!("Job {} successfully assigned to expected winner: {}.", job_id, expected_winner_did);
+                let (_manifest, assigned_bid) = assigned_job_details_ex2.get(&job_id).unwrap();
+                assert_eq!(assigned_bid.executor_did, expected_winner_did, "Assigned to wrong executor DID.");
+                assert_eq!(assigned_bid.price, expected_winning_price, "Assigned with wrong price.");
+                break;
+            }
+            if is_assigned_by_originator && is_assigned_to_other_executor {
+                 panic!("Job {} was incorrectly assigned to Executor 1 instead of expected Executor 2!", job_id);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }).await.expect("Timed out waiting for job assignment to the expected winner (Executor 2)");
+
+    // 6. Winning Executor (Executor 2) Executes Job and Announces Receipt
+    println!("Winning Executor ({}) triggering execution for job {}...", expected_winner_did, job_id);
+    let mut receipt_cid_found: Option<Cid> = None;
+    println!("Originator waiting for execution receipt announcement from {} for job {}...", expected_winner_did, job_id);
+    timeout(Duration::from_secs(15), async { // Increased timeout for execution + announcement
+        loop {
+            let known_cids_map = originator_known_receipt_cids.read().unwrap();
+            if let Some(cid) = known_cids_map.iter().find_map(|(c, info)| {
+                if info.job_id == job_id && info.executor_did == expected_winner_did { Some(*c) } else { None }
+            }) {
+                println!("Originator received announcement for receipt CID: {} for job {} from {}", cid, job_id, expected_winner_did);
+                receipt_cid_found = Some(cid);
                 break;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-    }).await.expect("Timed out waiting for job assignment confirmation");
+    }).await.expect("Originator timed out waiting for execution receipt announcement from expected winner");
+    let captured_receipt_cid = receipt_cid_found.expect("Receipt CID not found after wait");
 
-
-    // 6. Executor Executes Job and Announces Receipt
-    println!("Executor 1 triggering execution for job {}...", job_id);
-    // To call trigger_execution_for_job, we need JobManifest and Bid. Executor has this in `assigned_jobs`.
-    // This step might be automatically triggered by the executor's event loop upon receiving AssignJobV1.
-    // If not, we'd call a method on executor1_node. For now, assume it's handled internally
-    // or a test helper is needed.
-    // Let's assume the executor node automatically calls `trigger_execution_for_job`
-    // when an `AssignJobV1` is processed and the job is in its `assigned_jobs`.
-    // We then wait for the `ExecutionReceiptAvailableV1` to be announced by the executor
-    // and received by the originator.
-
-    // To verify, we can check if the originator has seen the receipt announcement.
-    // The originator stores known receipt CIDs or processes them.
-    // Let's assume a placeholder for originator_node.known_receipt_cids or similar state:
-    let originator_known_receipt_cids = Arc::clone(&planetary_mesh::node::test_utils::get_known_receipt_cids_arc(&originator_node_instance)); // Placeholder
-    let mut receipt_cid_found: Option<Cid> = None;
-
-    println!("Originator waiting for execution receipt announcement for job {}...", job_id);
-    timeout(Duration::from_secs(10), async {
-        loop {
-            // This check is a bit indirect. Ideally, we'd listen for ExecutionReceiptAvailableV1
-            // or check a state variable that explicitly tracks receipts for originated jobs.
-            // For now, we'll check if a receipt related to the job appears in the originator's dag_store
-            // after it has been fetched and verified.
-            let dag_nodes = originator_receipt_store_dag_nodes.read().unwrap();
-            for (cid, node) in dag_nodes.iter() {
-                // Deserialize node to ExecutionReceipt and check job_id
-                // This is complex, so for now, let's assume if any receipt comes in for this job, it's good.
-                // A better check would be to find the specific receipt for this job_id.
-                // The receipt itself contains the job_id.
-                // The `trigger_economic_settlement` and `trigger_reputation_update` are called after anchoring.
-                // So checking for balance change might be a good proxy too.
-                // Let's assume `known_receipt_cids` stores CID -> (JobId, ExecutorDid)
-                let known_cids_map = originator_known_receipt_cids.read().unwrap(); // This map needs to exist.
-                if let Some(cid) = known_cids_map.iter().find_map(|(c, (j_id, exec_did))| {
-                    if *j_id == job_id && *exec_did == executor1_did { Some(*c) } else { None }
-                }) {
-                    println!("Originator received announcement for receipt CID: {} for job {}", cid, job_id);
-                    receipt_cid_found = Some(cid);
-                    break;
-                }
-            }
-            if receipt_cid_found.is_some() { break; }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }).await.expect("Originator timed out waiting for execution receipt announcement");
-    
-    let _receipt_cid = receipt_cid_found.expect("Receipt CID not found after wait");
-
-
-    // 7. Originator Fetches, Verifies, Anchors Receipt, and Settles
-    // This is largely handled by the originator's event loop upon receiving ExecutionReceiptAvailableV1.
-    // We need to verify the outcomes.
-
-    println!("Verifying receipt anchoring, economic settlement, and reputation update...");
+    // 7. Originator Fetches, Verifies, Anchors Receipt, and Settles with Winning Executor
+    println!("Verifying receipt anchoring, economic settlement with {}, and reputation update...", expected_winner_did);
     tokio::time::sleep(Duration::from_secs(5)).await; // Give time for async post-receipt processing
 
-    // Verify receipt is anchored
-    // This check is already implicitly part of finding receipt_cid_found if it checks dag_store.
-    // We can make it more explicit by fetching the receipt by CID from originator's store.
-    // assert!(originator_node_instance.local_runtime_context.as_ref().unwrap().receipt_store.dag_nodes.read().unwrap().contains_key(&receipt_cid));
-    // println!("Receipt {} successfully anchored by originator.", receipt_cid);
+    // Verify economic settlement with Executor 2
+    let executor2_final_balance = executor2_balance_store.read().unwrap().get(&expected_winner_did).copied().unwrap_or(0);
+    assert_eq!(executor2_final_balance, expected_winning_price, "Executor 2 balance incorrect after settlement.");
+    let executor1_final_balance = executor1_balance_store.read().unwrap().get(&executor1_did).copied().unwrap_or(0);
+    assert_eq!(executor1_final_balance, 0, "Executor 1 balance should be unchanged."); // Executor 1 should not have been paid
+    println!("Economic settlement verified. {} balance: {}", expected_winner_did, executor2_final_balance);
 
-    // Verify economic settlement
-    // Initial balances are usually 0 or some default if not set. RuntimeContext sets them to 0.
-    let originator_final_balance = originator_balance_store.read().unwrap().get(&originator_did).copied().unwrap_or(0);
-    let executor1_final_balance = executor_balance_store.read().unwrap().get(&executor1_did).copied().unwrap_or(0);
-
-    // Assuming originator starts with more than `bid_price` or we mock initial balances.
-    // For this test, let's assume they start at 0 and originator gets a magic top-up or goes into negative.
-    // A proper setup would involve pre-funding the originator.
-    // For simplicity, let's check executor's balance increased by bid_price.
-    // And originator's decreased (or check relative if not starting at 0).
-    // For now, let's assume `RuntimeContext` allows direct balance manipulation for tests or starts with enough.
-    // We will assume the `transfer_balance_direct` works.
-    // Let's check if executor's balance is now `bid_price` (assuming it started at 0).
-    assert_eq!(executor1_final_balance, bid_price, "Executor 1 balance incorrect after settlement.");
-    println!("Economic settlement verified. Executor 1 balance: {}", executor1_final_balance);
-    // We'd also check originator's balance: assert_eq!(originator_final_balance, INITIAL_ORIGINATOR_BALANCE - bid_price);
-
-    // Verify reputation record is "submitted" by checking our observed list
-    println!("Waiting for reputation submission to be observed for job {}...", job_id);
-    let captured_receipt_cid = _receipt_cid; // Use the receipt_cid obtained earlier
-
+    // Verify reputation record is "submitted" for the winning executor (Executor 2)
+    println!("Waiting for reputation submission to be observed for job {} (executor {})..", job_id, expected_winner_did);
     timeout(Duration::from_secs(10), async {
         loop {
             let observed_submissions = originator_observed_reputation_submissions.read().unwrap();
             if let Some(submission) = observed_submissions.iter().find(|s| {
                 s.job_id == job_id && 
-                s.executor_did == executor1_did && 
+                s.executor_did == expected_winner_did && 
                 s.anchor_cid == captured_receipt_cid
             }) {
-                println!("Observed reputation submission: {:?}", submission);
-                // Assert on the details of the submission
-                assert_eq!(submission.outcome, StandardJobStatus::Completed, "Reputation outcome mismatch."); // Or Succeeded, depending on your logic
-                // assert_eq!(submission.timestamp, expected_timestamp_from_receipt); // If needed
+                println!("Observed reputation submission for {}: {:?}", expected_winner_did, submission);
+                assert_eq!(submission.outcome, StandardJobStatus::Completed, "Reputation outcome mismatch for winner.");
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    }).await.expect("Timed out waiting for observed reputation submission");
-    println!("Reputation update submission successfully verified for executor {} regarding job {}.", executor1_did, job_id);
-
-
-    // 8. Assertions (more can be added)
-    // - Check job status (e.g., originator_node_instance.completed_job_receipt_cids should contain this job)
-    // let completed_receipts = originator_node_instance.completed_job_receipt_cids.read().unwrap();
-    // assert!(completed_receipts.get(&job_id).map_or(false, |cid_set| cid_set.contains(&receipt_cid)));
-    // println!("Job {} status verified as completed with receipt {}.", job_id, receipt_cid);
-    
-    // More detailed assertions:
-    // - Originator's view of the job as completed.
-    // - Executor's view of the job as completed.
-    // - No unexpected errors in logs (if using a log capture mechanism).
-
+    }).await.expect("Timed out waiting for observed reputation submission for the correct executor");
+    println!("Reputation update submission successfully verified for executor {} regarding job {}.", expected_winner_did, job_id);
 
     // 9. Teardown: Shutdown nodes gracefully
     println!("Test steps completed. Tearing down nodes.");
     originator_handle.abort();
     executor1_handle.abort();
+    executor2_handle.abort(); // New: Teardown Executor 2
 
     match originator_handle.await {
         Ok(Err(e)) => eprintln!("Originator event loop error: {:?}", e),
@@ -342,9 +279,15 @@ async fn test_full_job_lifecycle() {
         Err(e) => eprintln!("Executor 1 event loop panicked: {:?}", e),
         _ => {}
     }
+    match executor2_handle.await {
+        Ok(Err(e)) => eprintln!("Executor 2 event loop error: {:?}", e),
+        Err(e) if e.is_cancelled() => println!("Executor 2 event loop aborted successfully."),
+        Err(e) => eprintln!("Executor 2 event loop panicked: {:?}", e),
+        _ => {}
+    }
 
     println!("Test finished.");
-    assert!(true, "Full job lifecycle test completed basic checks.");
+    assert!(true, "Full job lifecycle test with policy completed basic checks.");
 }
 
 // Helper module for accessing MeshNode internals in tests.
@@ -447,5 +390,15 @@ mod test_utils {
         tx.send(NodeCommand::SubmitBid(bid))
             .await
             .map_err(|e| format!("Failed to send SubmitBid command: {:?}", e))
+    }
+
+    // New command function to set mock reputations
+    pub async fn command_node_to_set_mock_reputations(
+        tx: &Sender<NodeCommand>,
+        reputations: HashMap<Did, f64>,
+    ) -> Result<(), String> {
+        tx.send(NodeCommand::SetMockReputations(reputations))
+            .await
+            .map_err(|e| format!("Failed to send SetMockReputations command: {:?}", e))
     }
 }

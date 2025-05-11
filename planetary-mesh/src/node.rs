@@ -6,11 +6,14 @@ use icn_types::mesh::{JobStatus as StandardJobStatus, ExecutionReceipt};
 use icn_types::reputation::{ReputationRecord, ReputationUpdateEvent};
 use cid::Cid;
 use icn_identity::Did;
+use icn_types::jobs::policy::ExecutionPolicy;
+use std::cmp::Ordering;
 
 #[derive(Debug)]
 pub enum NodeCommand {
     AnnounceJob(MeshJob),
     SubmitBid(Bid),
+    SetMockReputations(HashMap<Did, f64>),
 }
 
 pub struct MeshNode {
@@ -31,6 +34,7 @@ pub struct MeshNode {
     pub known_receipt_cids: Arc<RwLock<HashMap<Cid, KnownReceiptInfo>>>,
     pub(crate) command_rx: Receiver<NodeCommand>,
     pub test_observed_reputation_submissions: Arc<RwLock<Vec<TestObservedReputationSubmission>>>,
+    pub mock_reputation_store: Arc<RwLock<HashMap<Did, f64>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +51,61 @@ pub struct TestObservedReputationSubmission {
     pub outcome: StandardJobStatus,
     pub anchor_cid: Cid,
     pub timestamp: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoredBid {
+    pub bid: Bid,
+    pub score: f64,
+}
+
+fn evaluate_bid_against_policy(
+    bid: &Bid,
+    policy: &ExecutionPolicy,
+    executor_reputation_score: f64,
+) -> Option<ScoredBid> {
+    if let Some(max_price) = policy.max_price {
+        if bid.price > max_price {
+            tracing::debug!(
+                "Bid from {} for job {} rejected: price {} > max_price {}",
+                bid.executor_did, bid.job_id, bid.price, max_price
+            );
+            return None;
+        }
+    }
+
+    if let Some(min_rep) = policy.min_reputation_score {
+        if executor_reputation_score < min_rep {
+            tracing::debug!(
+                "Bid from {} for job {} rejected: reputation {} < min_reputation_score {}",
+                bid.executor_did, bid.job_id, executor_reputation_score, min_rep
+            );
+            return None;
+        }
+    }
+
+    let max_price_for_scoring = policy.max_price.unwrap_or(bid.price * 2);
+    let price_component = if max_price_for_scoring > 0 {
+        (1.0 - (bid.price as f64 / max_price_for_scoring as f64)).max(0.0).min(1.0)
+    } else {
+        1.0
+    }
+
+    let reputation_component = (executor_reputation_score / 100.0).max(0.0).min(1.0);
+
+    let total_score =
+        policy.weight_price.unwrap_or(0.5) * price_component +
+        policy.weight_reputation.unwrap_or(0.5) * reputation_component;
+    
+    tracing::debug!(
+        "Bid from {} for job {} scored: price_comp={}, rep_comp={}, total_score={}",
+        bid.executor_did, bid.job_id, price_component, reputation_component, total_score
+    );
+
+    Some(ScoredBid {
+        bid: bid.clone(),
+        score: total_score,
+    })
 }
 
 impl MeshNode {
@@ -82,6 +141,7 @@ impl MeshNode {
                 known_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
                 command_rx,
                 test_observed_reputation_submissions: Arc::new(RwLock::new(Vec::new())),
+                mock_reputation_store: Arc::new(RwLock::new(HashMap::new())),
             },
             internal_action_rx,
         ))
@@ -117,6 +177,15 @@ impl MeshNode {
                             if let Err(e) = self.publish_bid_message(bid).await {
                                 tracing::error!("Error submitting bid from command: {:?}", e);
                             }
+                        }
+                        NodeCommand::SetMockReputations(reputations) => {
+                            tracing::info!("Received SetMockReputations command. Updating mock reputations.");
+                            let mut store = self.mock_reputation_store.write().unwrap();
+                            store.clear();
+                            for (did, score) in reputations {
+                                store.insert(did, score);
+                            }
+                            tracing::debug!("Mock reputation store updated: {:?}", store);
                         }
                     }
                 },
@@ -245,6 +314,80 @@ impl MeshNode {
             }
             _ => {
                 tracing::trace!("Unhandled or placeholder internal action: {:?}", action);
+            }
+        }
+        Ok(())
+    }
+
+    async fn select_executor_for_originated_jobs(&mut self) -> Result<(), anyhow::Error> {
+        let mut jobs_to_assign: Vec<(IcnJobId, JobManifest, MeshJob, Bid)> = Vec::new();
+        let mut assigned_this_round = HashSet::new();
+
+        let originated_jobs_map = self.announced_originated_jobs.read().unwrap().clone();
+        let current_bids_map = self.bids.read().unwrap().clone();
+        let current_mock_reputations = self.mock_reputation_store.read().unwrap().clone();
+
+        for (job_id, (_job_manifest, original_mesh_job)) in originated_jobs_map.iter() {
+            if self.assigned_by_originator.read().unwrap().contains(job_id) {
+                continue;
+            }
+
+            if let Some(bids_for_job) = current_bids_map.get(job_id) {
+                if bids_for_job.is_empty() {
+                    continue;
+                }
+
+                let winning_bid_opt: Option<Bid> = 
+                    if let Some(policy) = &original_mesh_job.params.execution_policy {
+                        tracing::info!("Job {} has an execution policy. Evaluating bids against policy.", job_id);
+                        
+                        let scored_bids: Vec<ScoredBid> = bids_for_job.iter().filter_map(|bid| {
+                            let mock_rep = current_mock_reputations.get(&bid.executor_did).copied().unwrap_or(50.0);
+                            evaluate_bid_against_policy(bid, policy, mock_rep)
+                        }).collect();
+
+                        if scored_bids.is_empty() {
+                            tracing::warn!("No bids for job {} met policy criteria or scored positively.", job_id);
+                            None
+                        } else {
+                            scored_bids.iter()
+                                .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
+                                .map(|scored_bid| {
+                                    tracing::info!(
+                                        "Policy-based selection for job {}: Winning bid from {} with score {}",
+                                        job_id, scored_bid.bid.executor_did, scored_bid.score
+                                    );
+                                    scored_bid.bid.clone()
+                                })
+                        }
+                    } else {
+                        tracing::info!("Job {} has no execution policy or policy evaluation yielded no winner. Selecting by lowest price.", job_id);
+                        bids_for_job.iter().min_by_key(|b| b.price).cloned()
+                    };
+
+                if let Some(winning_bid) = winning_bid_opt {
+                    let job_manifest_for_assignment = _job_manifest.clone();
+
+                    jobs_to_assign.push((
+                        job_id.clone(),
+                        job_manifest_for_assignment,
+                        original_mesh_job.clone(),
+                        winning_bid,
+                    ));
+                    assigned_this_round.insert(job_id.clone());
+                }
+            }
+        }
+
+        for (job_id, job_manifest, _original_mesh_job, winning_bid) in jobs_to_assign {
+            match self.assign_job_to_executor(&job_manifest, winning_bid.clone()).await {
+                Ok(_) => {
+                    tracing::info!("Successfully assigned job {} to executor {}", job_id, winning_bid.executor_did);
+                    self.assigned_by_originator.write().unwrap().insert(job_id.clone());
+                }
+                Err(e) => {
+                    tracing::error!("Failed to assign job {} to executor {}: {:?}", job_id, winning_bid.executor_did, e);
+                }
             }
         }
         Ok(())
