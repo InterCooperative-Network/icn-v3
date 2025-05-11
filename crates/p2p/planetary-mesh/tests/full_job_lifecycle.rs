@@ -290,6 +290,296 @@ async fn test_full_job_lifecycle() {
     assert!(true, "Full job lifecycle test with policy completed basic checks.");
 }
 
+// New test function for policy edge case: low reputation
+#[tokio::test]
+#[ignore] // Mark as ignored for now, can be run explicitly
+async fn test_policy_rejects_all_bidders_due_to_low_reputation() {
+    // 1. Setup: Keypairs and DIDs for originator and two executors
+    let originator_kp = IcnKeyPair::generate();
+    let originator_did = originator_kp.did.clone();
+    let executor1_kp = IcnKeyPair::generate();
+    let executor1_did = executor1_kp.did.clone();
+    let executor2_kp = IcnKeyPair::generate();
+    let executor2_did = executor2_kp.did.clone();
+
+    println!("LOW_REP_TEST: Originator DID: {}", originator_did);
+    println!("LOW_REP_TEST: Executor 1 DID: {}", executor1_did);
+    println!("LOW_REP_TEST: Executor 2 DID: {}", executor2_did);
+
+    // 2. Initialize MeshNodes and get command senders
+    let (originator_node_instance, originator_internal_rx, originator_command_tx) = 
+        setup_node(originator_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
+        .await.expect("LOW_REP_TEST: Failed to setup originator node");
+    
+    let (executor1_node_instance, executor1_internal_rx, executor1_command_tx) = 
+        setup_node(executor1_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
+        .await.expect("LOW_REP_TEST: Failed to setup executor1 node");
+
+    let (executor2_node_instance, executor2_internal_rx, executor2_command_tx) = 
+        setup_node(executor2_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
+        .await.expect("LOW_REP_TEST: Failed to setup executor2 node");
+    
+    // Start event loops
+    let originator_handle = tokio::spawn(async move { originator_node_instance.run_event_loop(originator_internal_rx).await });
+    let executor1_handle = tokio::spawn(async move { executor1_node_instance.run_event_loop(executor1_internal_rx).await });
+    let executor2_handle = tokio::spawn(async move { executor2_node_instance.run_event_loop(executor2_internal_rx).await });
+
+    tokio::time::sleep(Duration::from_secs(5)).await; // Allow nodes to start and discover
+
+    // 3. Define an ExecutionPolicy with a high min_reputation_score
+    let job_execution_policy = ExecutionPolicy {
+        min_reputation_score: Some(80.0), // Min reputation of 80
+        max_price: Some(200),             // Max price (not the limiting factor here)
+        weight_price: Some(0.5),
+        weight_reputation: Some(0.5),
+        preferred_regions: None,
+        required_ccl_level: None,
+        custom_policy_script: None,
+    };
+
+    // 4. Create and Announce Job by Originator
+    let job_id: IcnJobId = format!("test-low-rep-reject-{}", Utc::now().timestamp_millis());
+    let mesh_job_params = MeshJobParams {
+        wasm_cid: "bafyreibmicpv3gzfxmlsx7qvyfigt765hsdgdnkrhdk2qdsdlvgnpvchuq".to_string(),
+        description: Some("Test job: policy should reject all due to low reputation".to_string()),
+        execution_policy: Some(job_execution_policy.clone()),
+        required_resources_json: r#"{}"#.to_string(), // Minimal resources
+        max_execution_time_secs: Some(60),
+        output_location: None,
+        is_interactive: false,
+        stages: None,
+        workflow_type: icn_types::mesh::WorkflowType::SingleWasmModule,
+        ccl_cid: None,
+        trust_requirements: None,
+    };
+    let job_to_announce = MeshJob {
+        job_id: job_id.clone(),
+        params: mesh_job_params,
+        originator_did: originator_did.clone(),
+        originator_org_scope: Some(OrganizationScopeIdentifier::Personal(originator_did.clone())),
+        submission_timestamp: Utc::now().timestamp(),
+    };
+
+    // Clone Arcs for state checking
+    let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node_instance));
+    let executor1_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node_instance));
+    let executor1_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node_instance));
+    let executor2_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor2_node_instance));
+    let executor2_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor2_node_instance));
+
+    // 5. Set Mock Reputations on Originator Node (both below policy threshold)
+    let mut mock_reputations = HashMap::new();
+    mock_reputations.insert(executor1_did.clone(), 60.0); // Executor 1: Rep 60 (below 80)
+    mock_reputations.insert(executor2_did.clone(), 75.0); // Executor 2: Rep 75 (below 80)
+    
+    println!("LOW_REP_TEST: Setting mock reputations on originator: {:?}", mock_reputations);
+    test_utils::command_node_to_set_mock_reputations(&originator_command_tx, mock_reputations)
+        .await
+        .expect("LOW_REP_TEST: Failed to send SetMockReputations command");
+
+    // Originator announces the job
+    println!("LOW_REP_TEST: Announcing job {}: policy min_rep=80", job_id);
+    test_utils::command_originator_to_announce_job(&originator_command_tx, job_to_announce.clone())
+        .await
+        .expect("LOW_REP_TEST: Failed to send AnnounceJob command");
+
+    // 6. Executors Submit Bids (prices are within policy limits)
+    // Executor 1 waits for job and submits bid
+    println!("LOW_REP_TEST: Executor 1 waiting for job announcement...");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if executor1_available_jobs.read().unwrap().contains_key(&job_id) { break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await.expect("LOW_REP_TEST: Executor 1 timed out waiting for job announcement");
+    let bid_by_executor1 = Bid { job_id: job_id.clone(), executor_did: executor1_did.clone(), price: 100, timestamp: Utc::now().timestamp() };
+    println!("LOW_REP_TEST: Executor 1 (Rep 60) submitting bid for job {}", job_id);
+    test_utils::command_executor_to_submit_bid(&executor1_command_tx, bid_by_executor1.clone()).await.expect("LOW_REP_TEST: Executor 1 failed to submit bid");
+
+    // Executor 2 waits for job and submits bid
+    println!("LOW_REP_TEST: Executor 2 waiting for job announcement...");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if executor2_available_jobs.read().unwrap().contains_key(&job_id) { break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await.expect("LOW_REP_TEST: Executor 2 timed out waiting for job announcement");
+    let bid_by_executor2 = Bid { job_id: job_id.clone(), executor_did: executor2_did.clone(), price: 110, timestamp: Utc::now().timestamp() };
+    println!("LOW_REP_TEST: Executor 2 (Rep 75) submitting bid for job {}", job_id);
+    test_utils::command_executor_to_submit_bid(&executor2_command_tx, bid_by_executor2.clone()).await.expect("LOW_REP_TEST: Executor 2 failed to submit bid");
+
+    // 7. Assertions: No assignment should occur
+    println!("LOW_REP_TEST: Waiting to confirm NO job assignment occurs due to low reputation...");
+    // Wait for a duration longer than the typical assignment interval to be reasonably sure.
+    // The select_executor_for_originated_jobs interval in MeshNode is key here.
+    // Assuming it's around 10-15 seconds, waiting for 20-25 seconds should be sufficient.
+    tokio::time::sleep(Duration::from_secs(25)).await; 
+
+    let is_assigned_by_originator = originator_assigned_by_originator.read().unwrap().contains(&job_id);
+    assert!(!is_assigned_by_originator, "LOW_REP_TEST: Job {} was unexpectedly assigned by originator!", job_id);
+
+    let executor1_has_job = executor1_assigned_jobs.read().unwrap().contains_key(&job_id);
+    assert!(!executor1_has_job, "LOW_REP_TEST: Job {} was unexpectedly assigned to Executor 1!", job_id);
+
+    let executor2_has_job = executor2_assigned_jobs.read().unwrap().contains_key(&job_id);
+    assert!(!executor2_has_job, "LOW_REP_TEST: Job {} was unexpectedly assigned to Executor 2!", job_id);
+
+    println!("LOW_REP_TEST: Confirmed: Job {} was NOT assigned, as expected due to low reputation of all bidders.", job_id);
+
+    // 8. Teardown
+    println!("LOW_REP_TEST: Test steps completed. Tearing down nodes.");
+    originator_handle.abort();
+    executor1_handle.abort();
+    executor2_handle.abort();
+    // Optional: await handles and check for errors, but for this test, primary check is no assignment.
+
+    println!("LOW_REP_TEST: Finished.");
+    assert!(true, "Test for policy rejecting all bidders due to low reputation completed."); 
+}
+
+// New test function for policy edge case: high price
+#[tokio::test]
+#[ignore] // Mark as ignored for now, can be run explicitly
+async fn test_policy_rejects_all_bidders_due_to_high_price() {
+    // 1. Setup: Keypairs and DIDs for originator and two executors
+    let originator_kp = IcnKeyPair::generate();
+    let originator_did = originator_kp.did.clone();
+    let executor1_kp = IcnKeyPair::generate();
+    let executor1_did = executor1_kp.did.clone();
+    let executor2_kp = IcnKeyPair::generate();
+    let executor2_did = executor2_kp.did.clone();
+
+    println!("HIGH_PRICE_TEST: Originator DID: {}", originator_did);
+    println!("HIGH_PRICE_TEST: Executor 1 DID: {}", executor1_did);
+    println!("HIGH_PRICE_TEST: Executor 2 DID: {}", executor2_did);
+
+    // 2. Initialize MeshNodes
+    let (originator_node_instance, originator_internal_rx, originator_command_tx) = 
+        setup_node(originator_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
+        .await.expect("HIGH_PRICE_TEST: Failed to setup originator node");
+    
+    let (executor1_node_instance, executor1_internal_rx, executor1_command_tx) = 
+        setup_node(executor1_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
+        .await.expect("HIGH_PRICE_TEST: Failed to setup executor1 node");
+
+    let (executor2_node_instance, executor2_internal_rx, executor2_command_tx) = 
+        setup_node(executor2_kp.clone(), Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
+        .await.expect("HIGH_PRICE_TEST: Failed to setup executor2 node");
+    
+    // Start event loops
+    let originator_handle = tokio::spawn(async move { originator_node_instance.run_event_loop(originator_internal_rx).await });
+    let executor1_handle = tokio::spawn(async move { executor1_node_instance.run_event_loop(executor1_internal_rx).await });
+    let executor2_handle = tokio::spawn(async move { executor2_node_instance.run_event_loop(executor2_internal_rx).await });
+
+    tokio::time::sleep(Duration::from_secs(5)).await; // Allow nodes to start and discover
+
+    // 3. Define an ExecutionPolicy with a low max_price
+    let job_execution_policy = ExecutionPolicy {
+        min_reputation_score: Some(70.0), // Min reputation (not the limiting factor here)
+        max_price: Some(100),             // Max price of 100
+        weight_price: Some(0.5),
+        weight_reputation: Some(0.5),
+        preferred_regions: None,
+        required_ccl_level: None,
+        custom_policy_script: None,
+    };
+
+    // 4. Create and Announce Job by Originator
+    let job_id: IcnJobId = format!("test-high-price-reject-{}", Utc::now().timestamp_millis());
+    let mesh_job_params = MeshJobParams {
+        wasm_cid: "bafyreibmicpv3gzfxmlsx7qvyfigt765hsdgdnkrhdk2qdsdlvgnpvchuq".to_string(),
+        description: Some("Test job: policy should reject all due to high price".to_string()),
+        execution_policy: Some(job_execution_policy.clone()),
+        required_resources_json: r#"{}"#.to_string(), // Minimal resources
+        max_execution_time_secs: Some(60),
+        output_location: None,
+        is_interactive: false,
+        stages: None,
+        workflow_type: icn_types::mesh::WorkflowType::SingleWasmModule,
+        ccl_cid: None,
+        trust_requirements: None,
+    };
+    let job_to_announce = MeshJob {
+        job_id: job_id.clone(),
+        params: mesh_job_params,
+        originator_did: originator_did.clone(),
+        originator_org_scope: Some(OrganizationScopeIdentifier::Personal(originator_did.clone())),
+        submission_timestamp: Utc::now().timestamp(),
+    };
+
+    // Clone Arcs for state checking
+    let originator_assigned_by_originator = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_by_originator_arc(&originator_node_instance));
+    let executor1_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor1_node_instance));
+    let executor1_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor1_node_instance));
+    let executor2_available_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_available_jobs_on_mesh_arc(&executor2_node_instance));
+    let executor2_assigned_jobs = Arc::clone(&planetary_mesh::node::test_utils::get_assigned_jobs_arc(&executor2_node_instance));
+
+    // 5. Set Mock Reputations on Originator Node (both high, acceptable)
+    let mut mock_reputations = HashMap::new();
+    mock_reputations.insert(executor1_did.clone(), 80.0);
+    mock_reputations.insert(executor2_did.clone(), 85.0);
+    
+    println!("HIGH_PRICE_TEST: Setting mock reputations on originator: {:?}", mock_reputations);
+    test_utils::command_node_to_set_mock_reputations(&originator_command_tx, mock_reputations)
+        .await
+        .expect("HIGH_PRICE_TEST: Failed to send SetMockReputations command");
+
+    // Originator announces the job
+    println!("HIGH_PRICE_TEST: Announcing job {}: policy max_price=100", job_id);
+    test_utils::command_originator_to_announce_job(&originator_command_tx, job_to_announce.clone())
+        .await
+        .expect("HIGH_PRICE_TEST: Failed to send AnnounceJob command");
+
+    // 6. Executors Submit Bids (prices are all ABOVE policy limits)
+    // Executor 1 waits for job and submits bid
+    println!("HIGH_PRICE_TEST: Executor 1 waiting for job announcement...");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if executor1_available_jobs.read().unwrap().contains_key(&job_id) { break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await.expect("HIGH_PRICE_TEST: Executor 1 timed out waiting for job announcement");
+    let bid_by_executor1 = Bid { job_id: job_id.clone(), executor_did: executor1_did.clone(), price: 110, timestamp: Utc::now().timestamp() }; // Price 110 > 100
+    println!("HIGH_PRICE_TEST: Executor 1 (Price 110) submitting bid for job {}", job_id);
+    test_utils::command_executor_to_submit_bid(&executor1_command_tx, bid_by_executor1.clone()).await.expect("HIGH_PRICE_TEST: Executor 1 failed to submit bid");
+
+    // Executor 2 waits for job and submits bid
+    println!("HIGH_PRICE_TEST: Executor 2 waiting for job announcement...");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if executor2_available_jobs.read().unwrap().contains_key(&job_id) { break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }).await.expect("HIGH_PRICE_TEST: Executor 2 timed out waiting for job announcement");
+    let bid_by_executor2 = Bid { job_id: job_id.clone(), executor_did: executor2_did.clone(), price: 120, timestamp: Utc::now().timestamp() }; // Price 120 > 100
+    println!("HIGH_PRICE_TEST: Executor 2 (Price 120) submitting bid for job {}", job_id);
+    test_utils::command_executor_to_submit_bid(&executor2_command_tx, bid_by_executor2.clone()).await.expect("HIGH_PRICE_TEST: Executor 2 failed to submit bid");
+
+    // 7. Assertions: No assignment should occur
+    println!("HIGH_PRICE_TEST: Waiting to confirm NO job assignment occurs due to high prices...");
+    tokio::time::sleep(Duration::from_secs(25)).await; 
+
+    let is_assigned_by_originator = originator_assigned_by_originator.read().unwrap().contains(&job_id);
+    assert!(!is_assigned_by_originator, "HIGH_PRICE_TEST: Job {} was unexpectedly assigned by originator!", job_id);
+
+    let executor1_has_job = executor1_assigned_jobs.read().unwrap().contains_key(&job_id);
+    assert!(!executor1_has_job, "HIGH_PRICE_TEST: Job {} was unexpectedly assigned to Executor 1!", job_id);
+
+    let executor2_has_job = executor2_assigned_jobs.read().unwrap().contains_key(&job_id);
+    assert!(!executor2_has_job, "HIGH_PRICE_TEST: Job {} was unexpectedly assigned to Executor 2!", job_id);
+
+    println!("HIGH_PRICE_TEST: Confirmed: Job {} was NOT assigned, as expected due to high prices of all bidders.", job_id);
+
+    // 8. Teardown
+    println!("HIGH_PRICE_TEST: Test steps completed. Tearing down nodes.");
+    originator_handle.abort();
+    executor1_handle.abort();
+    executor2_handle.abort();
+
+    println!("HIGH_PRICE_TEST: Finished.");
+    assert!(true, "Test for policy rejecting all bidders due to high price completed."); 
+}
+
 // Helper module for accessing MeshNode internals in tests.
 // This is a placeholder for how you might access internal state.
 // Ideally, MeshNode provides methods or uses channels for state observation in tests.
