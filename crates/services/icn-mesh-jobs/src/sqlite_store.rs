@@ -15,6 +15,7 @@ use std::str::FromStr; // Required for Cid::from_str if that's how try_from is i
 use serde_json; // Ensure this is imported
 use icn_identity::Did; // Ensure Did is imported
 use sqlx::Acquire; // For transactions
+use icn_types::mesh::MeshJobParams; // Added for clarity, though JobRequest imports it
 
 // Assuming AppError is defined in lib.rs or a common error module for the crate
 // and has From implementations for anyhow::Error, sqlx::Error, serde_json::Error
@@ -33,14 +34,7 @@ use crate::AppError;
 
 // Helper to generate CID for a JobRequest
 // This is a basic implementation. In a production system, you'd use a canonical serialization format.
-fn generate_job_cid(req: &JobRequest) -> Result<Cid> {
-    let bytes = serde_json::to_vec(req).map_err(|e| anyhow::anyhow!("Failed to serialize JobRequest for CID generation: {}", e))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let hash_bytes = hasher.finalize();
-    let multihash = Multihash::wrap(Code::Sha2_256.into(), &hash_bytes)?;
-    Ok(Cid::new_v1(0x55, multihash)) // 0x55 is raw binary
-}
+// fn generate_job_cid(req: &JobRequest) -> Result<Cid> { ... }
 
 pub struct SqliteStore {
     pub pool: Arc<SqlitePool>,
@@ -72,42 +66,40 @@ struct DbBidRow {
 #[async_trait]
 impl MeshJobStore for SqliteStore {
     async fn insert_job(&self, job_request: JobRequest) -> Result<Cid, AppError> {
-        let job_request_json = serde_json::to_string(&job_request)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize job request: {}", e)))?;
-
-        let job_cid = generate_job_cid(&job_request)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to generate job CID: {}", e)))?;
+        // job_request.id is now the authoritative CID, pre-generated.
+        let job_cid_str = job_request.id.to_string();
         
-        let job_cid_str = job_cid.to_string();
+        let params_json = serde_json::to_string(&job_request.params)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize job_request.params: {}", e)))?;
+        
+        let originator_did_str = job_request.originator_did.0.clone(); // Assuming Did is a tuple struct Did(String)
 
         // Initial status for a new job is Pending
         let status_type = "Pending"; // From JobStatus::Pending
 
-        // Convert Option<DateTime<Utc>> to Option<i64> (Unix timestamp)
-        let deadline_timestamp = job_request.deadline.map(|dt| dt.timestamp());
+        // Deadline is now Option<u64> directly from params
+        let deadline_timestamp = job_request.params.deadline;
 
-        // Store wasm_cid separately for potential indexing, though JobRequest JSON also has it.
-        let wasm_cid_str = job_request.wasm_cid.to_string();
-        let description = job_request.description.clone();
-
+        // wasm_cid and description are now inside params_json.
+        // If needed for direct query/indexing, they could be extracted from job_request.params here.
+        // For now, we assume they are accessed via deserializing params_json.
 
         sqlx::query!(
             r#"
-            INSERT INTO jobs (job_id, request_json, status_type, deadline, wasm_cid, description)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO jobs (job_id, originator_did, params_json, status_type, deadline)
+            VALUES ($1, $2, $3, $4, $5)
             "#,
             job_cid_str,
-            job_request_json,
+            originator_did_str,
+            params_json,
             status_type,
-            deadline_timestamp,
-            wasm_cid_str,
-            description
+            deadline_timestamp // This is Option<u64>, compatible with INTEGER NULL
         )
         .execute(&*self.pool)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert job into database: {}", e)))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert job into database: {}. Job ID: {}, Originator: {}, Params: {}, Deadline: {:?}", e, job_cid_str, originator_did_str, params_json, deadline_timestamp)))?;
 
-        Ok(job_cid)
+        Ok(job_request.id)
     }
 
     async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>, AppError> {
@@ -115,7 +107,9 @@ impl MeshJobStore for SqliteStore {
 
         // Define a struct that matches the expected row structure from the database
         struct JobRow {
-            request_json: String,
+            // job_id is taken from the function argument job_id: &Cid
+            originator_did: String,
+            params_json: String,
             status_type: String,
             status_did: Option<String>,
             status_reason: Option<String>,
@@ -124,7 +118,7 @@ impl MeshJobStore for SqliteStore {
         let job_row_opt = sqlx::query_as!(
             JobRow,
             r#"
-            SELECT request_json, status_type, status_did, status_reason
+            SELECT originator_did, params_json, status_type, status_did, status_reason
             FROM jobs
             WHERE job_id = $1
             "#,
@@ -136,8 +130,16 @@ impl MeshJobStore for SqliteStore {
 
         match job_row_opt {
             Some(row) => {
-                let job_request: JobRequest = serde_json::from_str(&row.request_json)
-                    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize job request: {}", e)))?;
+                let params: MeshJobParams = serde_json::from_str(&row.params_json)
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize MeshJobParams for job {}: {}", job_id_str, e)))?;
+                
+                let originator_did = Did(row.originator_did);
+
+                let job_request = JobRequest {
+                    id: *job_id, // Use the input job_id CID
+                    params,
+                    originator_did,
+                };
 
                 let job_status = match row.status_type.as_str() {
                     "Pending" => JobStatus::Pending,
@@ -542,25 +544,27 @@ impl MeshJobStore for SqliteStore {
         Ok(())
     }
 
-    async fn list_jobs_for_worker(&self, worker_did: &icn_identity::Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>, AppError> {
+    async fn list_jobs_for_worker(&self, worker_did: &icn_identity::Did) -> Result<Vec<(JobRequest, JobStatus)>, AppError> {
         let worker_did_str = worker_did.0.clone();
 
         #[derive(sqlx::FromRow)]
         struct WorkerJobRow {
-            job_id: String,
-            request_json: String,
+            job_id: String,         // To be parsed as Cid for JobRequest.id
+            originator_did: String, // To be parsed as Did for JobRequest.originator_did
+            params_json: String,    // To be deserialized into MeshJobParams for JobRequest.params
             status_type: String,
             status_did: Option<String>,
             status_reason: Option<String>,
         }
 
-        let rows = sqlx::query_as!( // Using query_as! directly if the struct fields match column names and types
+        let rows = sqlx::query_as!(
             WorkerJobRow,
             r#"
-            SELECT job_id, request_json, status_type, status_did, status_reason
+            SELECT job_id, originator_did, params_json, status_type, status_did, status_reason
             FROM jobs
             WHERE (status_type = 'Assigned' AND status_did = $1)
                OR (status_type = 'Running' AND status_did = $1)
+            ORDER BY created_at DESC -- Or some other relevant ordering
             "#,
             worker_did_str
         )
@@ -571,32 +575,33 @@ impl MeshJobStore for SqliteStore {
         let mut worker_jobs = Vec::new();
         for row in rows {
             let job_cid = Cid::try_from(row.job_id.as_str())
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse job_id as Cid: {}", e)))?;
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse job_id as Cid for worker job {}: {}", row.job_id, e)))?;
             
-            let job_request: JobRequest = serde_json::from_str(&row.request_json)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize job request: {}", e)))?;
+            let params: MeshJobParams = serde_json::from_str(&row.params_json)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize MeshJobParams for worker job {}: {}", row.job_id, e)))?;
+
+            let originator_did = Did(row.originator_did);
+
+            let job_request = JobRequest {
+                id: job_cid,
+                params,
+                originator_did,
+            };
 
             let job_status = match row.status_type.as_str() {
-                "Pending" => JobStatus::Pending, // Should not occur based on WHERE clause but good to be exhaustive
-                "Bidding" => JobStatus::Bidding, // Should not occur
+                // "Pending" and "Bidding" should not occur based on WHERE clause but good to be exhaustive if query changes
                 "Assigned" => {
-                    let bidder_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status")))?;
-                    // We already filtered by worker_did, so this should match.
+                    let bidder_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status in worker job {}", job_request.id))))?;
                     JobStatus::Assigned { bidder: icn_identity::Did(bidder_did_str) }
                 }
                 "Running" => {
-                    let runner_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status")))?;
-                    // We already filtered by worker_did, so this should match.
+                    let runner_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status in worker job {}", job_request.id))))?;
                     JobStatus::Running { runner: icn_identity::Did(runner_did_str) }
                 }
-                "Completed" => JobStatus::Completed, // Should not occur
-                "Failed" => { // Should not occur
-                    let reason = row.status_reason.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing reason for Failed status")))?;
-                    JobStatus::Failed { reason }
-                }
-                _ => return Err(AppError::Internal(anyhow::anyhow!("Unknown job status type '{}' for job {}", row.status_type, row.job_id))),
+                // "Completed" and "Failed" should not occur based on WHERE clause
+                _ => return Err(AppError::Internal(anyhow::anyhow!("Unexpected job status type '{}' for worker job {}", row.status_type, job_request.id))),
             };
-            worker_jobs.push((job_cid, job_request, job_status));
+            worker_jobs.push((job_request, job_status)); // Changed from (job_cid, job_request, job_status)
         }
         Ok(worker_jobs)
     }

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use icn_economics::ResourceType;
 use icn_identity::Did; // Assuming Did is available from icn_identity
 use crate::org::{CooperativeId, CommunityId}; // Assuming these are in icn_types::org
+use crate::jobs::policy::ExecutionPolicy; // New import
 
 /// Quality of Service profile for a Mesh Job
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +98,10 @@ pub struct MeshJobParams {
     /// Optional CID of a schema describing the expected structure of the final job output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_output_schema_cid: Option<String>,
+
+    /// Optional execution policy for this job.
+    #[serde(skip_serializing_if = "Option::is_none")] // Add skip_serializing_if for consistency
+    pub execution_policy: Option<ExecutionPolicy>, // ✅ New field
 }
 
 impl Default for MeshJobParams {
@@ -113,6 +118,7 @@ impl Default for MeshJobParams {
             stages: None,
             is_interactive: false,
             expected_output_schema_cid: None,
+            execution_policy: None, // Add to default
         }
     }
 }

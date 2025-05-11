@@ -278,7 +278,7 @@ async fn submit_bid(
 async fn assign_best_bid_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Path(job_id_str): Path<String>,
-) -> Result<Json<AssignJobResponse>, AppError> {
+) -> Result<AxumJson<AssignJobResponse>, AppError> {
     let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| {
         AppError::BadRequest(format!("Invalid job ID format: {} - {}", job_id_str, e))
     })?;
@@ -305,61 +305,42 @@ async fn assign_best_bid_handler(
         return Err(AppError::NotFound(format!("No bids found for job {}", job_id_str)));
     }
 
-    // 4. Dynamic selector choice based on policy presence (mocked via job_request.metadata)
+    // 4. Determine ExecutorSelector based on ExecutionPolicy in JobRequest.params
     let selector: Box<dyn ExecutorSelector> = {
-        // Mock example: Assume policy could be derived from job metadata.
-        // This assumes job_request has a field like `metadata: Option<std::collections::HashMap<String, String>>`
-        // or that JobRequest from icn_types::jobs::JobRequest can be interpreted as such.
-        let use_governed_policy = job_request.metadata.as_ref() // Check if metadata exists
-            .and_then(|meta| meta.get("selector"))          // Get "selector" value
-            .map_or(false, |val| val == "governed");        // Check if it's "governed"
-
-        if use_governed_policy {
-            let metadata_map = job_request.metadata.as_ref().unwrap(); // Safe due to check above
-            let policy = ExecutionPolicy {
-                rep_weight: metadata_map.get("rep_weight").and_then(|s| s.parse().ok()).unwrap_or(0.7),
-                price_weight: metadata_map.get("price_weight").and_then(|s| s.parse().ok()).unwrap_or(0.3),
-                region_filter: metadata_map.get("region_filter").cloned(),
-                min_reputation: metadata_map.get("min_reputation").and_then(|s| s.parse().ok()),
-            };
+        // Assumes `job_request` (of type icn_types::jobs::JobRequest) now has a `params` field
+        // of type `icn_types::mesh::MeshJobParams` which in turn contains `execution_policy`.
+        // This requires `icn_types::jobs::JobRequest` to be refactored.
+        if let Some(policy) = &job_request.params.execution_policy {
             tracing::info!(policy = ?policy, "Using GovernedExecutorSelector for job {}", job_id_str);
-            Box::new(GovernedExecutorSelector { policy })
+            Box::new(GovernedExecutorSelector::new(policy.clone()))
         } else {
-            tracing::info!("Using DefaultExecutorSelector for job {}", job_id_str);
-            // Using hardcoded weights as per user's example for the default case here.
-            // Previously these were constants: const DEFAULT_REP_WEIGHT: f64 = 0.7; const DEFAULT_PRICE_WEIGHT: f64 = 0.3;
+            tracing::info!("No execution policy found in job_request.params, using DefaultExecutorSelector for job {}", job_id_str);
+            // Provide default weights for DefaultExecutorSelector if its constructor requires them.
+            // These were 0.7 and 0.3 in the previous version.
             Box::new(DefaultExecutorSelector::new(0.7, 0.3))
         }
     };
+
+    // 5. Select the best bid
+    let winning_bid_tuple = selector.select(&job_request, &bids)?
+        .ok_or_else(|| AppError::NotFound(format!("No acceptable bids found for job {} based on policy", job_id_str)))?;
     
-    let (best_bid, winning_score) = selector
-        .select(&job_request, &bids)?
-        .ok_or_else(|| {
-            // Retaining more informative error message
-            tracing::warn!(job_id = %job_id_str, "No suitable bids found after scoring (selector returned None)");
-            AppError::NotFound(format!("No suitable bids found for job {} after scoring", job_id_str))
-        })?;
+    let (winning_bid, winning_score) = winning_bid_tuple;
 
-    let winning_bid_id = best_bid.id.ok_or_else(|| { 
-        tracing::error!(job_id = %job_id_str, "Winning bid selected but has no ID (this should not happen if bid came from store)");
-        AppError::Internal(anyhow::anyhow!("Selected winning bid is missing its ID for job {}", job_id_str))
-    })?;
+    // Ensure winning_bid.id is present
+    let winning_bid_id = winning_bid.id.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Winning bid {} has no ID", winning_bid.bidder)))?;
 
-    // 5. Call the updated store.assign_job method
-    store.assign_job(&job_id, winning_bid_id, best_bid.bidder.clone()).await?;
+    // 6. Update job status to Assigned
+    store.assign_job(&job_id, winning_bid.bidder.clone()).await?;
 
-    tracing::info!(
-        job_id = %job_id_str,
-        assigned_bidder_did = %best_bid.bidder.0,
-        winning_bid_id = winning_bid_id,
-        winning_score = winning_score,
-        "Successfully assigned job"
-    );
+    tracing::info!(job_id = %job_id_str, bidder = %winning_bid.bidder, score = winning_score, "Assigned job to bidder");
 
-    Ok(Json(AssignJobResponse {
+    // 7. TODO: Notify the winning bidder (e.g., via P2P message or another notification system)
+
+    Ok(AxumJson(AssignJobResponse {
         message: "Job assigned successfully".to_string(),
         job_id: job_id_str,
-        assigned_bidder_did: best_bid.bidder.0.clone(),
+        assigned_bidder_did: winning_bid.bidder.0, // Assuming Did is a tuple struct Did(String)
         winning_bid_id,
         winning_score,
     }))

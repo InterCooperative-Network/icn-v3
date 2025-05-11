@@ -4,30 +4,26 @@ use icn_identity::Did;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
-// Assuming TokenAmount and DID are defined elsewhere, possibly in a common types module or imported.
-// For now, let's use placeholders.
+use crate::mesh::MeshJobParams;
+
 /// Amount of ICN tokens (in the smallest indivisible unit)
 pub type TokenAmount = u64;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Refactored JobRequest to hold MeshJobParams and essential identifiers.
+/// This is the primary structure used by the icn-mesh-jobs service to define a job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] // Eq and Hash might be problematic if MeshJobParams contains f64 directly or indirectly.
 pub struct JobRequest {
-    pub wasm_cid: Cid,
-    pub description: String,
-    pub requirements: ResourceRequirements,
-    pub deadline: Option<DateTime<Utc>>,
-    pub metadata: Option<HashMap<String, String>>,
+    /// Unique identifier for the job, typically a CID.
+    pub id: Cid,
+    /// The detailed parameters defining the job, including execution policy.
+    pub params: MeshJobParams,
+    /// DID of the entity that originated/submitted the job.
+    pub originator_did: Did,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ResourceRequirements {
-    pub cpu: u32,
-    pub memory_mb: u32,
-    pub storage_mb: u32,
-    pub bandwidth: u32, // Assuming kbps or similar unit
-}
-
-// Placeholder for ResourceEstimate, assuming it's similar to ResourceRequirements for now
-// or could be more detailed, e.g., including estimated duration.
+/// Placeholder for ResourceEstimate, assuming it's similar to ResourceRequirements for now
+/// or could be more detailed, e.g., including estimated duration.
+/// This is used in the Bid struct.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResourceEstimate {
     pub cpu: u32,
