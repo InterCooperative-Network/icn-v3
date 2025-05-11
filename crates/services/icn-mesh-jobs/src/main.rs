@@ -39,6 +39,11 @@ mod bid_logic;
 mod job_assignment; // Added module
 use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector, GovernedExecutorSelector, ExecutionPolicy}; // Updated import
 
+// ADDITION START
+// Define a type alias for the shared P2P node state
+pub type SharedP2pNode = Arc<TokioMutex<PlanetaryMeshNode>>;
+// ADDITION END
+
 enum AppError {
     Internal(anyhow::Error),
     Forbidden(String),
@@ -185,6 +190,47 @@ async fn main() -> anyhow::Result<()> {
     let reputation_service_url = Arc::new(env::var("REPUTATION_SERVICE_URL").unwrap_or_else(|_| "http://localhost:8081".to_string()));
     tracing::info!("Using reputation service at: {}", *reputation_service_url);
 
+    // --- P2P Mesh Node Setup --- // ADDED SECTION START
+    // 1. Create/Load Identity for icn-mesh-jobs service
+    // In a real deployment, this keypair should be loaded securely from configuration.
+    let p2p_identity_keypair = IcnKeyPair::generate(); 
+    tracing::info!("P2P Node DID for icn-mesh-jobs service: {}", p2p_identity_keypair.did);
+
+    // 2. Prepare arguments for MeshNode::new
+    // This queue is for jobs this node might announce if it were an originator.
+    // For icn-mesh-jobs, it might mainly listen and send specific messages, so this queue might not be heavily used by this service.
+    let p2p_node_job_queue: Arc<std::sync::Mutex<VecDeque<MeshJob>>> = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    // icn-mesh-jobs service does not typically anchor receipts itself, so local_runtime_context can be None.
+    let p2p_node_runtime_context = None; 
+    // Allow P2P listen address to be configured via environment variable, or default to auto-assign.
+    let p2p_listen_address = env::var("ICN_MESH_JOBS_P2P_LISTEN_ADDRESS").ok();
+    tracing::info!("Attempting to use P2P listen address: {:?}", p2p_listen_address);
+
+    // 3. Instantiate PlanetaryMeshNode
+    let p2p_node_instance = PlanetaryMeshNode::new(
+        p2p_identity_keypair,
+        p2p_listen_address, // Option<String>
+        p2p_node_job_queue,
+        p2p_node_runtime_context,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to create PlanetaryMeshNode for icn-mesh-jobs: {}", e))?;
+    
+    let shared_p2p_node: SharedP2pNode = Arc::new(TokioMutex::new(p2p_node_instance));
+
+    // 4. Run the P2P node's event loop in a separate task
+    let p2p_node_runner = shared_p2p_node.clone();
+    tokio::spawn(async move {
+        tracing::info!("Starting P2P Mesh Node event loop for icn-mesh-jobs service...");
+        let mut node_guard = p2p_node_runner.lock().await;
+        // Ensure `run()` method is public and designed for this invocation.
+        if let Err(e) = node_guard.run().await { 
+             tracing::error!("P2P Mesh Node event loop for icn-mesh-jobs service failed: {}", e);
+        }
+    });
+    tracing::info!("P2P Mesh Node task for icn-mesh-jobs service has been spawned.");
+    // --- P2P Mesh Node Setup --- // ADDED SECTION END
+
     let app = Router::new()
         .route("/jobs", post(create_job).get(list_jobs))
         .route("/jobs/by-worker/:worker_did", get(get_jobs_for_worker_handler))
@@ -196,7 +242,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/jobs/:job_id/complete", post(mark_job_completed_handler))
         .route("/jobs/:job_id/fail", post(mark_job_failed_handler))
         .layer(Extension(store.clone()))
-        .layer(Extension(reputation_service_url));
+        .layer(Extension(reputation_service_url.clone()))
+        .layer(Extension(shared_p2p_node.clone())); // ADDED P2P Node to Axum state
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("ICN Mesh Jobs service listening on {}", addr);
@@ -329,16 +376,17 @@ async fn submit_bid(
 
 async fn assign_best_bid_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
+    Extension(p2p_node_state): Extension<SharedP2pNode>,
     Path(job_id_str): Path<String>,
 ) -> Result<AxumJson<AssignJobResponse>, AppError> {
-    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| {
+    let job_id_cid = Cid::try_from(job_id_str.clone()).map_err(|e| {
         AppError::BadRequest(format!("Invalid job ID format: {} - {}", job_id_str, e))
     })?;
 
     tracing::info!(job_id = %job_id_str, "Attempting to assign best bid for job");
 
     // 1. Fetch job details and current status
-    let (job_request, current_status) = store.get_job(&job_id).await?
+    let (job_request, current_status) = store.get_job(&job_id_cid).await?
         .ok_or_else(|| AppError::NotFound(format!("Job with ID {} not found", job_id_str)))?;
 
     // 2. Ensure job is in Bidding state
@@ -351,7 +399,7 @@ async fn assign_best_bid_handler(
     }
 
     // 3. Fetch all bids for the job
-    let bids = store.list_bids(&job_id).await?;
+    let bids = store.list_bids(&job_id_cid).await?;
     if bids.is_empty() {
         tracing::warn!(job_id = %job_id_str, "No bids found for job, cannot assign");
         return Err(AppError::NotFound(format!("No bids found for job {}", job_id_str)));
@@ -382,17 +430,57 @@ async fn assign_best_bid_handler(
     // Ensure winning_bid.id is present
     let winning_bid_id = winning_bid.id.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Winning bid {} has no ID", winning_bid.bidder)))?;
 
-    // 6. Update job status to Assigned
-    store.assign_job(&job_id, winning_bid.bidder.clone()).await?;
+    // 6. Update job status to Assigned in the local store
+    store.assign_job(&job_id_cid, winning_bid.bidder.clone(), winning_bid_id).await?;
 
-    tracing::info!(job_id = %job_id_str, bidder = %winning_bid.bidder, score = winning_score, "Assigned job to bidder");
+    tracing::info!(job_id = %job_id_str, bidder = %winning_bid.bidder, score = winning_score, "Job assigned to bidder in local store");
 
-    // 7. TODO: Notify the winning bidder (e.g., via P2P message or another notification system)
+    // 7. Notify the winning bidder via P2P // ADDED SECTION START
+    // Reconstruct the MeshJob details for the P2P message.
+    // JobRequest (from store.get_job) contains params and originator_did.
+    let mesh_job_details_for_p2p = MeshJob {
+        job_id: job_request.id.to_string(), // Convert CID to string for P2P JobId
+        params: job_request.params.clone(),
+        originator_did: job_request.originator_did.clone(),
+        // submission_timestamp: JobRequest doesn't seem to have submission_timestamp.
+        // Using current time as a placeholder. Ideally, this would be the original job submission time.
+        submission_timestamp: Utc::now().timestamp() as u64, 
+        originator_org_scope: None, // Populate if available from JobRequest or context
+    };
+
+    let originator_did_for_p2p = job_request.originator_did.clone();
+    let target_executor_did_for_p2p = winning_bid.bidder.clone();
+    // Use the String version of job_id for the P2P call, as IcnJobId is String.
+    let job_id_string_for_p2p = job_request.id.to_string(); 
+
+    tracing::info!(
+        job_id = %job_id_string_for_p2p,
+        target_executor = %target_executor_did_for_p2p,
+        originator = %originator_did_for_p2p,
+        "Attempting to send AssignJobV1 P2P message."
+    );
+    
+    let mut p2p_node_guard = p2p_node_state.lock().await;
+    match p2p_node_guard.assign_job_to_executor(
+        &job_id_string_for_p2p, // Pass as &String
+        target_executor_did_for_p2p,
+        mesh_job_details_for_p2p,
+        originator_did_for_p2p
+    ).await {
+        Ok(_) => tracing::info!("Successfully published AssignJobV1 for job {}", job_id_str),
+        Err(e) => {
+            // Log the error. The HTTP request itself won't fail due to this,
+            // as the primary action (DB update) succeeded.
+            // Robust P2P messaging might require a retry queue or other out-of-band handling.
+            tracing::error!("Failed to publish AssignJobV1 for job {}: {}. The job remains assigned in the database.", job_id_str, e);
+        }
+    }
+    // ADDED SECTION END
 
     Ok(AxumJson(AssignJobResponse {
-        message: "Job assigned successfully".to_string(),
+        message: "Job assigned successfully. P2P notification to executor initiated.".to_string(),
         job_id: job_id_str,
-        assigned_bidder_did: winning_bid.bidder.0, // Assuming Did is a tuple struct Did(String)
+        assigned_bidder_did: winning_bid.bidder.0.clone(),
         winning_bid_id,
         winning_score,
     }))

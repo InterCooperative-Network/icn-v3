@@ -44,6 +44,7 @@ pub struct MeshNode {
     // State for executor simulation
     pub executing_jobs: Arc<RwLock<HashMap<IcnJobId, super::JobManifest>>>,
     pub completed_job_receipt_cids: Arc<RwLock<HashMap<IcnJobId, Cid>>>,
+    pub assigned_jobs: Arc<RwLock<HashMap<IcnJobId, MeshJob>>>,
     
     // Access to local runtime context for anchoring receipts
     runtime_context: Option<Arc<RuntimeContext>>, 
@@ -82,6 +83,7 @@ impl MeshNode {
 
         let announced_originated_jobs = Arc::new(RwLock::new(HashMap::new()));
         let completed_job_receipt_cids = Arc::new(RwLock::new(HashMap::new()));
+        let assigned_jobs = Arc::new(RwLock::new(HashMap::new()));
         let discovered_receipt_announcements = Arc::new(RwLock::new(HashMap::new()));
 
         Ok(Self {
@@ -97,6 +99,7 @@ impl MeshNode {
             announced_originated_jobs,
             executing_jobs: Arc::new(RwLock::new(HashMap::new())),
             completed_job_receipt_cids,
+            assigned_jobs,
             runtime_context: local_runtime_context,
             discovered_receipt_announcements,
         })
@@ -641,87 +644,66 @@ impl MeshNode {
                                                     target_executor_did,
                                                     job_details,
                                                 } => {
+                                                    println!(
+                                                        "Received AssignJobV1 for JobID: {} from Originator: {} to Executor: {} on topic {}",
+                                                        job_id, originator_did, target_executor_did, message.topic
+                                                    );
                                                     if target_executor_did == self.local_node_did {
-                                                        println!(
-                                                            "Received AssignJobV1 for JobID: {} from Assigning Originator: {}. This node is chosen executor.",
-                                                            job_id, originator_did
+                                                        tracing::info!(
+                                                            "This node ({}) IS the target_executor for job {}. Processing assignment...",
+                                                            self.local_node_did, job_id
                                                         );
-                                                        let mut should_execute = false;
+                                                        
+                                                        // 1. Store the job locally for execution.
                                                         {
-                                                            let mut executing_map = self.executing_jobs.write().unwrap();
-                                                            let completed_map = self.completed_job_receipt_cids.read().unwrap();
-                                                            if !executing_map.contains_key(&job_id) && !completed_map.contains_key(&job_id) {
-                                                                println!("Job {} not currently executing/completed. Accepting assignment.", job_id);
-
-                                                                // Convert MeshJob (job_details) to JobManifest
-                                                                let compute_requirements = serde_json::from_str::<super::ComputeRequirements>(&job_details.params.required_resources_json)
-                                                                    .unwrap_or_else(|e| {
-                                                                        eprintln!(
-                                                                            "Failed to parse required_resources_json for job {}: {}. Using default requirements.",
-                                                                            job_details.job_id,
-                                                                            e
-                                                                        );
-                                                                        super::ComputeRequirements {
-                                                                            min_memory_mb: 0,
-                                                                            min_cpu_cores: 0,
-                                                                            min_storage_mb: 0,
-                                                                            max_execution_time_secs: job_details.params.max_execution_time_secs.unwrap_or(300),
-                                                                            required_features: Vec::new(),
-                                                                        }
-                                                                    });
-
-                                                                let resource_token = job_details.params.scoped_token_json.as_ref()
-                                                                    .and_then(|json_str| serde_json::from_str::<icn_economics::ScopedResourceToken>(json_str).ok())
-                                                                    .unwrap_or_else(|| {
-                                                                        eprintln!("Failed to parse scoped_token_json for job {}. Using default token.", job_details.job_id);
-                                                                        icn_economics::ScopedResourceToken::default()
-                                                                    });
-                                                                
-                                                                let created_at_datetime = Utc.timestamp_opt(job_details.submission_timestamp as i64, 0).unwrap_or_else(|_| Utc::now());
-
-                                                                let manifest = super::JobManifest {
-                                                                    id: job_id.clone(),
-                                                                    submitter_did: job_details.originator_did.clone(), // True originator from MeshJob
-                                                                    description: job_details.params.description.clone().unwrap_or_else(|| "N/A".to_string()),
-                                                                    created_at: created_at_datetime,
-                                                                    expires_at: None, // MeshJob doesn't have this directly
-                                                                    wasm_cid: job_details.params.wasm_cid.clone(),
-                                                                    ccl_cid: job_details.params.ccl_cid.clone(),
-                                                                    input_data_cid: job_details.params.input_data_cid.clone(),
-                                                                    output_location: job_details.params.output_location.clone(),
-                                                                    requirements: compute_requirements,
-                                                                    priority: super::JobPriority::Medium, // Default priority, MeshJob doesn't have this
-                                                                    resource_token,
-                                                                    trust_requirements: job_details.params.trust_requirements.clone(),
-                                                                    status: super::JobStatus::Assigned { node_id: self.local_node_did.clone() },
-                                                                    // Assuming JobManifest is extended to include this or it's handled within simulate_execution
-                                                                    originator_org_scope: job_details.originator_org_scope.clone(), 
-                                                                };
-
-                                                                executing_map.insert(job_id.clone(), manifest.clone()); // Store the manifest
-                                                                should_execute = true;
-                                                            } else {
-                                                                println!("Job {} already executing/completed. Ignoring duplicate assignment.", job_id);
-                                                            }
+                                                            let mut assigned_jobs_map = self.assigned_jobs.write().unwrap_or_else(|e| {
+                                                                tracing::error!("assigned_jobs RwLock poisoned: {}", e);
+                                                                e.into_inner()
+                                                            });
+                                                            assigned_jobs_map.insert(job_id.clone(), job_details.clone());
+                                                            tracing::info!("Job {} stored in assigned_jobs.", job_id);
                                                         }
-                                                        if should_execute {
-                                                            // Retrieve the manifest for execution
-                                                            let manifest_to_execute = self.executing_jobs.read().unwrap().get(&job_id).cloned();
-                                                            if let Some(manifest_for_exec) = manifest_to_execute {
-                                                                let self_clone_exec = self.clone_for_async_tasks();
-                                                                tokio::spawn(async move {
-                                                                    println!("Spawning task to execute job: {}", manifest_for_exec.id);
-                                                                    if let Err(e) = self_clone_exec.simulate_execution_and_anchor_receipt(manifest_for_exec).await {
-                                                                        eprintln!("Error during execution for job {}: {:?}", job_id, e);
-                                                                        // TODO: Update job status to Failed, notify originator
-                                                                    }
-                                                                });
+
+                                                        // 2. Send JobStatusUpdateV1 (Assigned) back to originator.
+                                                        let assigned_status = super::JobStatus::Assigned { 
+                                                            node_id: self.local_node_did.to_string(), // Use local node's DID string as node_id
+                                                        };
+                                                        let status_update_msg = MeshProtocolMessage::JobStatusUpdateV1 {
+                                                            job_id: job_id.clone(),
+                                                            executor_did: self.local_node_did.clone(),
+                                                            status: assigned_status,
+                                                        };
+
+                                                        if let Ok(serialized_update) = serde_cbor::to_vec(&status_update_msg) {
+                                                            let topic_str = job_interest_topic_string(&job_id);
+                                                            let topic = Topic::new(topic_str.clone());
+                                                            if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), serialized_update) {
+                                                                tracing::error!("Failed to publish JobStatusUpdateV1 (Assigned) for {}: {:?}", job_id, e);
                                                             } else {
-                                                                eprintln!("Critical error: Job {} was marked for execution but not found in executing_jobs map.", job_id);
+                                                                tracing::info!("Published JobStatusUpdateV1 (Assigned) for job {} to topic {}", job_id, topic_str);
                                                             }
+                                                        } else {
+                                                            tracing::error!("Failed to serialize JobStatusUpdateV1 (Assigned) for job {}", job_id);
                                                         }
+
+                                                        // 3. (Optional) Trigger actual job execution process.
+                                                        // This part would involve converting MeshJob to JobManifest if needed by execution logic,
+                                                        // interacting with icn-runtime, etc.
+                                                        // For now, we've stored it. The actual execution can be picked up by another loop
+                                                        // or triggered here. The existing example for spawning a task to send "Executing"
+                                                        // status can be adapted.
+
+                                                        // Example: Placeholder for triggering execution.
+                                                        // A more robust system might have a dedicated task that monitors `assigned_jobs`
+                                                        // or this handler could directly initiate it.
+                                                        tracing::info!("Job {} is ready for execution. Actual execution triggering is a TODO.", job_id);
+
+                                                        // The existing tokio::spawn example for sending "Executing" can be kept or adapted.
+                                                        // For now, we've sent "Assigned". "Executing" would come when it actually starts.
+
                                                     } else {
-                                                        // Assignment for another executor, log or ignore.
+                                                        // Not for this node.
+                                                        tracing::trace!("AssignJobV1 for job {} is not for this node ({}). Ignoring.", job_id, self.local_node_did);
                                                     }
                                                 }
                                                 MeshProtocolMessage::ExecutionReceiptAvailableV1{ job_id, receipt_cid, executor_did } => {
