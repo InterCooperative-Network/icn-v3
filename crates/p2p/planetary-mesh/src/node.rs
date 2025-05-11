@@ -1,4 +1,4 @@
-use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC};
+use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC, RECEIPT_AVAILABILITY_TOPIC_HASH};
 use crate::protocol::{MeshProtocolMessage, NodeCapability};
 use futures::StreamExt;
 use icn_identity::{Did, KeyPair as IcnKeyPair};
@@ -46,6 +46,7 @@ pub struct MeshNode {
     
     // Access to local runtime context for anchoring receipts
     runtime_context: Option<Arc<RuntimeContext>>, 
+    pub discovered_receipt_announcements: Arc<RwLock<HashMap<IcnJobId, (Cid, Did)>>>,
 }
 
 impl MeshNode {
@@ -78,6 +79,10 @@ impl MeshNode {
             .parse()?;
         swarm.listen_on(listen_addr)?;
 
+        let announced_originated_jobs = Arc::new(RwLock::new(HashMap::new()));
+        let completed_job_receipt_cids = Arc::new(RwLock::new(HashMap::new()));
+        let discovered_receipt_announcements = Arc::new(RwLock::new(HashMap::new()));
+
         Ok(Self {
             swarm,
             local_peer_id,
@@ -88,10 +93,11 @@ impl MeshNode {
             available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
             runtime_job_queue_for_announcement: runtime_job_queue,
             job_interests_received: Arc::new(RwLock::new(HashMap::new())),
-            announced_originated_jobs: Arc::new(RwLock::new(HashMap::new())),
+            announced_originated_jobs,
             executing_jobs: Arc::new(RwLock::new(HashMap::new())),
-            completed_job_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
+            completed_job_receipt_cids,
             runtime_context: local_runtime_context,
+            discovered_receipt_announcements,
         })
     }
 
@@ -233,7 +239,7 @@ impl MeshNode {
         Ok(())
     }
 
-    async fn simulate_execution_and_anchor_receipt(&self, job: MeshJob) -> Result<(), Box<dyn Error>> {
+    pub async fn simulate_execution_and_anchor_receipt(&mut self, job: MeshJob) -> Result<(), Box<dyn Error>> {
         let job_id = job.job_id.clone();
         println!("Attempting to take job for execution: {}", job_id);
 
@@ -265,7 +271,7 @@ impl MeshNode {
             job_id: job_id.clone(),
             executor: self.local_node_did.clone(), 
             status: StandardJobStatus::CompletedSuccess, 
-            result_data_cid: Some("bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()), // mock
+            result_data_cid: Some("bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()), // mock
             logs_cid: Some("bafybeigcafecafebeeffeedbeeffeedbeeffeedbeeffeedbeeffeedbeeffeed".to_string()), // mock
             resource_usage: resource_usage_actual,
             execution_start_time,
@@ -303,10 +309,35 @@ impl MeshNode {
         // Clean up from executing_jobs after attempting anchor
         self.executing_jobs.write().unwrap().remove(&job_id);
 
+        // Announce receipt availability
+        let announcement = MeshProtocolMessage::ExecutionReceiptAvailableV1 {
+            job_id: job_id.clone(),
+            receipt_cid: anchored_receipt_cid.to_string(),
+            executor_did: self.local_node_did.clone(),
+        };
+
+        match serde_json::to_vec(&announcement) {
+            Ok(bytes) => {
+                if let Err(e) = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .publish(RECEIPT_AVAILABILITY_TOPIC_HASH, bytes)
+                {
+                    eprintln!("Failed to publish receipt availability for JobId {}: {:?}", job_id, e);
+                } else {
+                    println!("Published ExecutionReceiptAvailableV1 for JobId: {}, Receipt CID: {}", job_id, anchored_receipt_cid);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to serialize ExecutionReceiptAvailableV1 for JobId {}: {:?}", job_id, e);
+            }
+        }
+
         Ok(())
     }
 
-    pub async fn run_event_loop(mut self) {
+    pub async fn run_event_loop(&mut self) -> Result<(), Box<dyn Error>> {
         let mut capability_broadcast_interval = time::interval(Duration::from_secs(30));
         let mut runtime_job_check_interval = time::interval(Duration::from_secs(5));
         let mut express_interest_interval = time::interval(Duration::from_secs(15));
@@ -407,11 +438,14 @@ impl MeshNode {
                         SwarmEvent::Behaviour(MeshBehaviourEvent::Gossipsub(gossip_event)) => match gossip_event {
                             libp2p::gossipsub::Event::Message {
                                 propagation_source: peer_id,
-                                message_id: _id, // Marked as unused
+                                message_id: id,
                                 message,
                             } => {
-                                let msg_topic_hash = &message.topic;
-                                if msg_topic_hash == &capability_topic_hash {
+                                trace!(
+                                    "Received gossipsub message with id: {} from peer: {:?}, topic: {:?}",
+                                    id, peer_id, message.topic
+                                );
+                                if message.topic == CAPABILITY_TOPIC {
                                     match serde_cbor::from_slice::<MeshProtocolMessage>(&message.data) {
                                         Ok(protocol_message) => match protocol_message {
                                             MeshProtocolMessage::CapabilityAdvertisementV1(capability) => {
@@ -429,7 +463,7 @@ impl MeshNode {
                                             eprintln!("Failed to deserialize CAPABILITY msg from {}: {:?}", peer_id, e);
                                         }
                                     }
-                                } else if msg_topic_hash == &job_announcement_topic_hash {
+                                } else if message.topic == JOB_ANNOUNCEMENT_TOPIC {
                                     match serde_cbor::from_slice::<MeshProtocolMessage>(&message.data) {
                                         Ok(protocol_message) => match protocol_message {
                                             MeshProtocolMessage::JobAnnouncementV1(received_job) => {
@@ -458,45 +492,42 @@ impl MeshNode {
                                             eprintln!("Failed to deserialize JOB_ANNOUNCEMENT msg from {}: {:?}", peer_id, e);
                                         }
                                     }
-                                } else {
-                                    // Potentially an interest message on a dynamic topic
-                                    match serde_cbor::from_slice::<MeshProtocolMessage>(&message.data) {
-                                        Ok(protocol_message) => match protocol_message {
-                                            MeshProtocolMessage::JobInterestV1 { job_id, executor_did } => {
-                                                println!(
-                                                    "Rxd JOB_INTEREST from {}: JobID: {}, Interested Executor DID: {}",
-                                                    peer_id, job_id, executor_did
-                                                );
-                                                // Check if this node is the originator of the job_id
-                                                // (implicitly, if we are subscribed, we might be an originator, 
-                                                // or if we sent an interest and somehow got subscribed to our own interest by mistake - less likely)
-                                                // For now, we will store if the job_id key exists, created upon announcement by self.
-                                                match self.job_interests_received.write() {
-                                                    Ok(mut interests_map) => {
-                                                        // Ensure the entry exists if this node originated the job
-                                                        // It should have been created in announce_job
-                                                        interests_map.entry(job_id.clone()).or_default().push(executor_did.clone());
-                                                        println!("Stored interest for job {} from DID {}. Total interests: {}", 
-                                                                 job_id, executor_did, interests_map.get(&job_id).unwrap().len());
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!("Error locking job_interests_received for write: {:?}", e);
+                                } else if message.topic == RECEIPT_AVAILABILITY_TOPIC_HASH {
+                                    match serde_json::from_slice::<MeshProtocolMessage>(&message.data) {
+                                        Ok(MeshProtocolMessage::ExecutionReceiptAvailableV1 {
+                                            job_id,
+                                            receipt_cid,
+                                            executor_did,
+                                        }) => {
+                                            info!(
+                                                "Received ExecutionReceiptAvailableV1 from {:?} for JobId: {}, Receipt CID: {}, Executor: {}",
+                                                peer_id, job_id, receipt_cid, executor_did
+                                            );
+
+                                            match Cid::try_from(receipt_cid.as_str()) {
+                                                Ok(parsed_cid) => {
+                                                    self.discovered_receipt_announcements
+                                                        .write()
+                                                        .await
+                                                        .insert(job_id.clone(), (parsed_cid, executor_did.clone()));
+                                                    info!("Stored discovered receipt announcement for JobId: {}", job_id);
+
+                                                    if self.announced_originated_jobs.read().await.contains_key(&job_id) {
+                                                        info!(
+                                                            "This node originated JobId: {}. Receipt is now available from Executor: {} with CID: {}.",
+                                                            job_id, executor_did, receipt_cid
+                                                        );
                                                     }
                                                 }
+                                                Err(e) => {
+                                                    error!(
+                                                        "Failed to parse receipt_cid '{}' from ExecutionReceiptAvailableV1 (from {:?}) for JobId {}: {:?}", 
+                                                        receipt_cid, peer_id, job_id, e
+                                                    );
+                                                }
                                             }
-                                            // Handle other message types if any were to arrive on dynamic topics
-                                            _ => {
-                                                // This case might be hit if a message on a dynamic topic isn't JobInterestV1
-                                                // Or if it's a message on a topic we didn't expect.
-                                                // Consider logging the topic hash for debugging: message.topic.to_string()
-                                                eprintln!("Rxd msg on DYNAMIC TOPIC ({}) from {}, but not JobInterestV1. Type: {:?}", 
-                                                         message.topic, peer_id, protocol_message.name());
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Failed to deserialize msg on DYNAMIC TOPIC ({}) from {}: {:?}", message.topic, peer_id, e);
-                                        }
-                                    }
+                                } else {
+                                    trace!("Received message on unhandled topic: {:?} from {:?}", message.topic, peer_id);
                                 }
                             }
                             libp2p::gossipsub::Event::Subscribed { peer_id, topic } => {

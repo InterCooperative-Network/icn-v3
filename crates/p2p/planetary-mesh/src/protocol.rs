@@ -3,6 +3,9 @@ use icn_identity::Did;
 use std::collections::HashMap;
 use icn_economics::ResourceType;
 use serde::{Serialize, Deserialize};
+use icn_node_runtime::icn_did::Did;
+use icn_node_runtime::job_desc::JobId;
+use libp2p::identity::PeerId;
 
 /// Type alias for JobId, which is typically a String.
 pub type JobId = String;
@@ -20,6 +23,11 @@ pub enum MeshProtocolMessage {
         executor_did: Did,
         // TODO: Potentially add a summary of why they are interested or basic capability match
         // For example: estimated_bid_range: Option<(u64, u64)>, capability_summary_hash: Option<String>
+    },
+    ExecutionReceiptAvailableV1 {
+        job_id: JobId,         // The ID of the job this receipt is for
+        receipt_cid: String,   // The CID of the anchored ExecutionReceipt
+        executor_did: Did,     // The DID of the node that executed the job and produced the receipt
     },
     // Future message types:
     // JobBidV1 { job_id: JobId, executor_did: Did, bid_amount_tokens: u64, specific_commitments: Option<String> },
@@ -59,4 +67,8 @@ pub struct NodeCapability {
     // pub last_updated_timestamp: u64, // When this capability info was last updated
     // pub network_bandwidth_mbps: Option<u32>,
     // pub supported_job_types: Vec<String>, // If jobs can be categorized beyond WASM execution
+}
+
+impl MeshProtocolMessage {
+    // ... existing code ...
 } 

@@ -11,7 +11,22 @@ use crate::protocol::MeshProtocolMessage;
 pub const CAPABILITY_TOPIC: &str = "/icn/mesh/capabilities/v1";
 
 // Define a new topic for job announcements
-pub const JOB_ANNOUNCEMENT_TOPIC: &str = "/icn/mesh/jobs/announcements/v1";
+pub const JOB_ANNOUNCEMENT_TOPIC: &str = "/icn/mesh/jobs/announce/v1";
+
+/// Topic for broadcasting node capabilities.
+pub const CAPABILITY_BROADCAST_TOPIC: &'static str = "/icn/mesh/capabilities/v1";
+pub const CAPABILITY_BROADCAST_TOPIC_HASH: TopicHash = TopicHash::from_raw(CAPABILITY_BROADCAST_TOPIC);
+
+/// Topic for announcing new jobs.
+pub const JOB_ANNOUNCEMENT_TOPIC_HASH: TopicHash = TopicHash::from_raw(JOB_ANNOUNCEMENT_TOPIC);
+
+/// Topic for expressing interest in jobs.
+pub const JOB_INTEREST_TOPIC: &'static str = "/icn/mesh/jobs/interest/v1";
+pub const JOB_INTEREST_TOPIC_HASH: TopicHash = TopicHash::from_raw(JOB_INTEREST_TOPIC);
+
+/// Topic for announcing receipt availability.
+pub const RECEIPT_AVAILABILITY_TOPIC: &'static str = "/icn/mesh/receipts/available/v1";
+pub const RECEIPT_AVAILABILITY_TOPIC_HASH: TopicHash = TopicHash::from_raw(RECEIPT_AVAILABILITY_TOPIC);
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "MeshBehaviourEvent")]
@@ -38,21 +53,29 @@ impl MeshBehaviour {
             .build()
             .map_err(|e| format!("Failed to build gossipsub config: {}", e))?;
 
-        // Build gossipsub behaviour
+        // Set a custom gossipsub message ID function.
+        // This is used to prevent message duplication.
         let mut gossipsub = gossipsub::Behaviour::new(
-            gossipsub::MessageAuthenticity::Signed(keypair.clone()), // Messages are signed by the publisher
+            gossipsub::MessageAuthenticity::Signed(keypair.clone()),
             gossipsub_config,
-        ).map_err(|e| format!("Failed to create gossipsub behaviour: {}", e))?;
+        )
+        .expect("Correct gossipsub config");
 
-        // Subscribe to the capability topic
-        let capability_topic = Topic::new(CAPABILITY_TOPIC);
-        gossipsub.subscribe(&capability_topic)
-            .map_err(|e| format!("Failed to subscribe to capability topic: {:?}", e))?;
+        // Subscribe to topics
+        let topics = [
+            (&CAPABILITY_BROADCAST_TOPIC_HASH, "CAPABILITY_BROADCAST_TOPIC"),
+            (&JOB_ANNOUNCEMENT_TOPIC_HASH, "JOB_ANNOUNCEMENT_TOPIC"),
+            (&JOB_INTEREST_TOPIC_HASH, "JOB_INTEREST_TOPIC"),
+            (&RECEIPT_AVAILABILITY_TOPIC_HASH, "RECEIPT_AVAILABILITY_TOPIC"),
+        ];
 
-        // Subscribe to the job announcement topic
-        let job_announcement_topic = Topic::new(JOB_ANNOUNCEMENT_TOPIC);
-        gossipsub.subscribe(&job_announcement_topic)
-            .map_err(|e| format!("Failed to subscribe to job announcement topic: {:?}", e))?;
+        for (topic_hash, topic_name) in topics.iter() {
+            if gossipsub.subscribe(topic_hash).is_ok() {
+                info!("Subscribed to {}", topic_name);
+            } else {
+                error!("Failed to subscribe to {}", topic_name);
+            }
+        }
 
         // Configure mDNS for local peer discovery
         // The mdns::Config::default() should work for basic local discovery.
