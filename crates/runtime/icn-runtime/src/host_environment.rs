@@ -43,8 +43,10 @@ pub enum AnchorError {
 
 /// Concrete implementation of the host environment for WASM execution
 pub struct ConcreteHostEnvironment {
-    /// Runtime context
+    /// Per‐job execution context (for WASM calls)
     pub ctx: Arc<Mutex<JobExecutionContext>>,
+    /// Global runtime context, including the pending_mesh_jobs queue
+    pub rt: Arc<RuntimeContext>,
     
     /// DID of the caller
     pub caller_did: Did,
@@ -70,9 +72,11 @@ impl ConcreteHostEnvironment {
         p2p_service: Arc<dyn P2pService>,
         storage_service: Arc<dyn StorageService>,
         caller_did: Did,
+        runtime_ctx: Arc<RuntimeContext>,
     ) -> Self {
         Self {
             ctx,
+            rt: runtime_ctx,
             p2p_service,
             storage_service,
             caller_did,
@@ -83,9 +87,10 @@ impl ConcreteHostEnvironment {
     }
     
     /// Create a new host environment with governance context
-    pub fn new_governance(ctx: Arc<Mutex<JobExecutionContext>>, caller_did: Did) -> Self {
+    pub fn new_governance(ctx: Arc<Mutex<JobExecutionContext>>, caller_did: Did, runtime_ctx: Arc<RuntimeContext>) -> Self {
         Self {
             ctx,
+            rt: runtime_ctx,
             caller_did,
             is_governance: true,
             coop_id: None,

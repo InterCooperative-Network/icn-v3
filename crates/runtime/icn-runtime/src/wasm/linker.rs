@@ -241,9 +241,11 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), any
                 params: job_params,
                 originator_did,
                 submission_timestamp,
+                originator_org_scope: None, // Will be set by MeshNode if needed
             };
             
-            caller.data().host_mut().ctx.pending_mesh_jobs.lock().unwrap().push_back(mesh_job);
+            // Access the global pending_mesh_jobs queue via the `rt` field
+            caller.data().host_mut().rt.pending_mesh_jobs.lock().unwrap().push_back(mesh_job);
             
             // Write JobId string to guest-provided buffer
             let job_id_bytes = job_id_str.as_bytes();
