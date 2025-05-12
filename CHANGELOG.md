@@ -38,4 +38,29 @@ All notable changes to the ICN v3 project are documented in this file.
 - Resolved router type mismatches when integrating WebSocket routes
 - Fixed proper handling of metrics counter increments
 
+## [Unreleased]
+
+### Added
+- Runtime-Reputation Integration: Automatic reputation updates from runtime execution receipts
+- Dashboard components for visualizing reputation activity and metrics
+- Prometheus metrics for tracking reputation update success/failure
+- Grafana dashboards for monitoring the reputation update pipeline
+- Docker Compose configuration for reputation service in devnet
+
+### Changed
+
+### Fixed
+
+## [0.1.0] - 2023-10-20
+
+### Added
+- Initial codebase structure
+- DAG-based storage with CID addressing
+- DID-based identity system
+- Contract Chain Language (CCL) for governance
+- Cooperative Virtual Machine (CoVM) for WASM execution
+- Basic mesh networking with libp2p
+- Verifiable Credentials for attestations
+- TrustBundles for federation trust management
+
 ## [Earlier Changes] 

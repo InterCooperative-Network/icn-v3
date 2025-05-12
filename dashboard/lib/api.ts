@@ -586,4 +586,31 @@ export const getMockData = {
       },
     ];
   },
-}; 
+};
+
+/**
+ * Fetch reputation activity data for a specific time range
+ */
+export async function fetchReputationActivity(timeRange: '1h' | '24h' | '7d' | '30d') {
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+  const REPUTATION_API_URL = process.env.NEXT_PUBLIC_REPUTATION_API_URL || 
+    API_BASE_URL.replace(':8080', ':8081');
+
+  const url = `${REPUTATION_API_URL}/reputation/events?timeRange=${timeRange}`;
+  
+  try {
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`Failed to fetch reputation activity: ${response.status} ${response.statusText}`, errorBody);
+      throw new Error(`Failed to fetch reputation activity: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error fetching reputation activity:', error);
+    throw error;
+  }
+} 

@@ -77,5 +77,100 @@ services:
     depends_on:
       - node-1
 
+  # ICN Runtime node with reputation integration
+  runtime-node:
+    build:
+      context: ..
+      dockerfile: Dockerfile.node
+    environment:
+      - LOG_LEVEL=debug
+      - DAG_STORE_PATH=/data/dag
+      - REPUTATION_SERVICE_URL=http://reputation-service:8080/reputation
+    volumes:
+      - runtime-data:/data
+    networks:
+      - icn-mesh
+    depends_on:
+      - reputation-service
+    ports:
+      - "9090:9090" # Prometheus metrics
+
+  # Reputation service
+  reputation-service:
+    build:
+      context: ../crates/services/icn-reputation
+      dockerfile: Dockerfile
+    environment:
+      - LOG_LEVEL=debug
+      - STORAGE_PATH=/data/reputation
+    volumes:
+      - reputation-data:/data
+    networks:
+      - icn-mesh
+    ports:
+      - "8081:8080" # API port
+
+  # Mesh job coordinator
+  job-coordinator:
+    build:
+      context: ../crates/services/icn-mesh-jobs
+      dockerfile: Dockerfile
+    environment:
+      - LOG_LEVEL=debug
+      - DATABASE_URL=sqlite:///data/jobs.db
+      - REPUTATION_SERVICE_URL=http://reputation-service:8080/reputation
+    volumes:
+      - jobs-data:/data
+    networks:
+      - icn-mesh
+    depends_on:
+      - reputation-service
+    ports:
+      - "8080:8080" # API port
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.46.0
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - icn-mesh
+    ports:
+      - "9091:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:10.0.3
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - icn-mesh
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+networks:
+  icn-mesh:
+    driver: bridge
+
 volumes:
-  pgdata: 
+  pgdata:
+  runtime-data:
+  reputation-data:
+  jobs-data:
+  prometheus-data:
+  grafana-data: 

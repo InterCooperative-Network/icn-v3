@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'icn-runtime'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['runtime-node:9090']
+        labels:
+          instance: 'runtime-node-1'
+          service: 'runtime'
+
+  - job_name: 'reputation-service'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['reputation-service:9090']
+        labels:
+          instance: 'reputation-service-1'
+          service: 'reputation'
+
+  - job_name: 'job-coordinator'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['job-coordinator:9090']
+        labels:
+          instance: 'job-coordinator-1'
+          service: 'mesh-jobs' 
