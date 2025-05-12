@@ -21,6 +21,7 @@ use anyhow::{anyhow, Error as AnyhowError};
 use cid::Cid;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::sync::mpsc::{Sender, Receiver};
+use icn_types::dag::{DagEventType, DagNodeBuilder};
 
 /// Errors that can occur during receipt anchoring
 #[derive(Debug, Error)]
@@ -116,9 +117,40 @@ impl ConcreteHostEnvironment {
         let cbor_bytes = serde_cbor::to_vec(&receipt)
             .map_err(|e| AnchorError::SerializationError(e.to_string()))?;
 
-        // TODO: Convert receipt into a DagNode and insert into the store.
-        let _ = cbor_bytes; // placeholder to avoid unused warning
-        // let cid = ... obtain CID after storage
+        // --- Build DagNode from receipt ---
+        // Determine scope ID (e.g., "receipt/<federation>")
+        let federation_id = self
+            .rt
+            .federation_id
+            .clone()
+            .ok_or(AnchorError::MissingFederationId)?;
+        let scope_id = format!("receipt/{}", federation_id);
+
+        // Build the DAG node using JSON for human-readable payload
+        let receipt_json = serde_json::to_string(&receipt)
+            .map_err(|e| AnchorError::SerializationError(e.to_string()))?;
+
+        let dag_node = DagNodeBuilder::new()
+            .content(receipt_json)
+            .event_type(DagEventType::Receipt)
+            .timestamp(receipt.execution_end_time)
+            .scope_id(scope_id)
+            .build()
+            .map_err(|e| AnchorError::SerializationError(e.to_string()))?;
+
+        // Insert into the shared receipt store and get CID for confirmation/logging
+        let cid = dag_node
+            .cid()
+            .map_err(|e| AnchorError::CidError(e.to_string()))?;
+
+        self
+            .rt
+            .receipt_store
+            .insert(dag_node)
+            .await
+            .map_err(|e| AnchorError::DagStoreError(e.to_string()))?;
+
+        tracing::info!(target: "anchor_receipt", "Anchored execution receipt as DAG node with CID: {}", cid);
 
         Ok(())
     }

@@ -20,5 +20,5 @@ cbindgen = "0.26.0"
 crate-type = ["staticlib", "rlib"]
 
 [features]
-default = []
+default = [] 
 full_host_abi = [] 
