@@ -1,5 +1,6 @@
 use crate::ExecutionReceipt;
-use icn_identity::{KeyPair, Signature, Did};
+use icn_identity::{KeyPair, Did};
+use ed25519_dalek::Signature as DalekSignature;
 use signature::Verifier;
 use serde_cbor;
 use thiserror::Error;
@@ -39,8 +40,8 @@ pub fn sign_receipt_in_place(receipt: &mut ExecutionReceipt, kp: &KeyPair) -> Re
     }
 
     let payload_bytes = get_receipt_signing_payload(receipt)?;
-    let signature = kp.sign(&payload_bytes);
-    receipt.signature = signature.to_bytes(); // Assuming Signature has to_bytes()
+    let dalek_signature: DalekSignature = kp.sign(&payload_bytes);
+    receipt.signature = dalek_signature.to_bytes().to_vec(); // Store as Vec<u8>
     Ok(())
 }
 
@@ -55,13 +56,15 @@ pub fn verify_embedded_signature(receipt: &ExecutionReceipt) -> Result<bool, Sig
 
     let payload_bytes = get_receipt_signing_payload(receipt)?;
     
-    let signature_obj = Signature::from_bytes(&receipt.signature)
-        .map_err(|e| SignError::InvalidSignature(format!("Failed to parse signature bytes: {}", e)))?;
+    let signature_bytes: &[u8; 64] = receipt.signature.as_slice().try_into()
+        .map_err(|_| SignError::InvalidSignature("Signature is not 64 bytes long".to_string()))?;
+    
+    let dalek_signature = DalekSignature::from_bytes(signature_bytes);
 
     let verifying_key = receipt.executor.to_ed25519()
         .map_err(|e| SignError::DidConversion(format!("Failed to convert DID to ed25519 key: {}", e)))?;
     
-    Ok(verifying_key.verify(&payload_bytes, &signature_obj).is_ok())
+    Ok(verifying_key.verify(&payload_bytes, &dalek_signature).is_ok())
 }
 
 #[cfg(test)]

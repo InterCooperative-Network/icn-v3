@@ -140,3 +140,6 @@ pub struct QuorumProof {
     /// Timestamp when the quorum was reached
     pub timestamp: String,
 }
+
+/// Represents the unique identifier for a TrustBundle.
+pub type TrustBundleId = String;
