@@ -1,13 +1,29 @@
 use crate::opcodes::{Opcode, Program};
-use icn_types::mesh::{MeshJobParams, QoSProfile};
+use icn_types::mesh::{MeshJobParams, QoSProfile, WorkflowType};
 use icn_economics::ResourceType;
 use serde_json;
 use serde_cbor;
 use std::collections::HashMap;
+use anyhow::{Result, anyhow};
 
 use wasm_encoder::{
-    CodeSection, DataSection, EntityType, Function, FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module,
-    TypeSection, ValType, ExportSection, ExportKind, Locals,
+    CodeSection,
+    ConstExpr,
+    DataSection,
+    EntityType as WasmEntityType,
+    EntityType,
+    ExportKind,
+    ExportSection,
+    Function,
+    FunctionSection,
+    ImportSection,
+    Instruction,
+    MemArg,
+    MemorySection,
+    MemoryType,
+    Module,
+    TypeSection,
+    ValType,
 };
 
 pub const JOB_ID_BUFFER_SIZE: u32 = 128;
@@ -47,7 +63,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     let job_id_buffer_data = vec![0u8; JOB_ID_BUFFER_SIZE as usize];
     data_section.active(
         0, // Memory index 0
-        &Instruction::I32Const(JOB_ID_BUFFER_OFFSET as i32),
+        &ConstExpr::i32_const(JOB_ID_BUFFER_OFFSET as i32),
         job_id_buffer_data.into_iter(),
     );
 
@@ -62,8 +78,10 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     functions_section.function(main_func_signature_type_idx);
 
     // Create the body for the main "_start" function
-    // It will have one local variable: last_submit_job_result: i32, initialized to 0 by convention for new locals.
-    let mut main_f = Function::new_with_locals(vec![(1, ValType::I32)]); // 1 local of type i32
+    // Locals:
+    // 0: last_submit_job_result (i32)
+    let locals = vec![(1, ValType::I32)]; // CORRECTED: Declare locals if needed, pass to Function::new
+    let mut main_f = Function::new(locals); // CORRECTED: Use Function::new
     // Initialize local(0) to 0 (default successful/neutral return if no SubmitJob happens or if it's not last)
     main_f.instruction(&Instruction::I32Const(0));
     main_f.instruction(&Instruction::LocalSet(0));
@@ -225,7 +243,12 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                     qos_profile: qos_profile_val,
                     deadline: deadline_utc_ms.clone(),
                     input_data_cid: input_data_cid.clone(),
-                    max_acceptable_bid_tokens: max_acceptable_bid_tokens.clone(), // Populate the new field
+                    max_acceptable_bid_tokens: max_acceptable_bid_tokens.clone(),
+                    workflow_type: WorkflowType::SingleWasmModule,
+                    stages: None,
+                    is_interactive: false,
+                    expected_output_schema_cid: None,
+                    execution_policy: None,
                 };
 
                 // 2. Serialize MeshJobParams to CBOR
@@ -247,7 +270,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 if params_cbor_len_val > 0 { // Only add data segment if CBOR is not empty
                     data_section.active(
                         0, // Memory index 0
-                        &Instruction::I32Const(params_cbor_ptr_val as i32), // Offset for this segment
+                        &ConstExpr::i32_const(params_cbor_ptr_val as i32), // Offset for this segment
                         params_cbor.into_iter(), // The CBOR bytes
                     );
                     next_data_offset += params_cbor_len_val as u32; // Update offset for the next data segment
@@ -273,10 +296,11 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
         }
     }
 
-    // At the end of the main function, load the result from local(0) to the stack.
+    // Finalize main function body
+    // Return the value in local(0) (last submit job result or 0)
     main_f.instruction(&Instruction::LocalGet(0));
-    main_f.instruction(&Instruction::End); // End of the main function body
-    code.function(&main_f); // Add the single main function body to the code section
+    main_f.instruction(&Instruction::End);
+    code.function(&main_f);
 
     // Types: Define types for all imported host functions
     type_section.function(vec![ValType::I32, ValType::I32], vec![]); // 0: begin_section(kind: ptr, title: ptr)
@@ -343,4 +367,262 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
 fn encode_push_string(f: &mut Function, s: &str) {
     let addr = crate::hash32(s) as i32; // Use the hash from lib.rs
     f.instruction(&Instruction::I32Const(addr));
+}
+
+// Helper to emit data segments correctly using ConstExpr
+fn emit_data_segment(
+    data_section: &mut DataSection,
+    offset: u32,
+    data: &[u8],
+) {
+    data_section.active(
+        0, // Memory index 0
+        &ConstExpr::i32_const(offset as i32), // CORRECTED: Use ConstExpr::i32_const
+        data.iter().copied(),
+    );
+}
+
+pub fn generate_wasm(prog: &crate::opcodes::Program) -> Result<Vec<u8>> {
+    let mut module = Module::new();
+    let mut code = CodeSection::new();
+    let mut functions_section = FunctionSection::new();
+    let mut type_section = TypeSection::new();
+    let mut import_section = ImportSection::new();
+    let mut memory_section = MemorySection::new();
+    let mut data_section = DataSection::new();
+
+    // Initialize next_data_offset. It will be updated if SubmitJob adds more data.
+    let next_data_offset = JOB_ID_BUFFER_OFFSET + JOB_ID_BUFFER_SIZE;
+    let mut data_segments_to_emit: Vec<(u32, Vec<u8>)> = Vec::new(); // Initialize this vector
+
+    // Define main function type: () -> i32
+    // This type will be used for the "_start" function.
+    // Find an existing ()->i32 type if host_submit_mesh_job (type 16) matches, or add new.
+    // Type 16 is (i32, i32, i32, i32) -> i32. So, we need a new type for () -> i32.
+    // Let's assume existing types are 0-16. New type for _start will be 17.
+    let main_func_signature_type_idx = 17; 
+    type_section.function(vec![], vec![ValType::I32]);
+
+    // Define memory (memory 0)
+    // Initial size of 1 page (64KiB) should be enough for now.
+    memory_section.memory(MemoryType {
+        minimum: 1, // 1 page = 64KiB
+        maximum: None,
+        memory64: false,
+        shared: false,
+    });
+
+    // Define Data Segment for JobId output buffer
+    // This buffer will be written to by the host.
+    let job_id_buffer_data = vec![0u8; JOB_ID_BUFFER_SIZE as usize];
+    data_section.active(
+        0, // Memory index 0
+        &ConstExpr::i32_const(JOB_ID_BUFFER_OFFSET as i32),
+        job_id_buffer_data.into_iter(),
+    );
+
+    // Determine the index for the main function we are about to define.
+    // It will be after all imported functions.
+    // Assuming host_fns has N items, imported functions are 0..N-1.
+    // The first *defined* function in this module will be index N.
+    let host_fns_count = 17; // As per current host_fns array (indices 0-16)
+    let main_function_idx = host_fns_count as u32; 
+
+    // Declare the main function in the FunctionSection
+    functions_section.function(main_func_signature_type_idx);
+
+    // Create the body for the main "_start" function
+    let locals = vec![(1, ValType::I32)]; 
+    let mut main_f = Function::new(locals); 
+    main_f.instruction(&Instruction::I32Const(0));
+    main_f.instruction(&Instruction::LocalSet(0));
+
+    // Process all opcodes, emitting them into the single main_f function body
+    for op in prog.ops.iter() {
+        match op {
+            Opcode::BeginSection { kind, title } => {
+                encode_push_string(&mut main_f, kind);
+                if let Some(t) = title {
+                    encode_push_string(&mut main_f, t);
+                } else {
+                    // Push a placeholder for missing optional title to keep call signature consistent
+                    encode_push_string(&mut main_f, "");
+                }
+                main_f.instruction(&Instruction::Call(0)); // host fn 0: begin_section
+            }
+            Opcode::EndSection => {
+                main_f.instruction(&Instruction::Call(1)); // host fn 1: end_section
+            }
+            Opcode::CreateProposal { title, version } => {
+                encode_push_string(&mut main_f, title);
+                encode_push_string(&mut main_f, version.as_deref().unwrap_or("0.0.0"));
+                main_f.instruction(&Instruction::Call(2)); // host fn 2: create_proposal
+            }
+            Opcode::MintToken {
+                res_type,
+                amount,
+                recipient,
+                data,
+            } => {
+                encode_push_string(&mut main_f, res_type);
+                main_f.instruction(&Instruction::I64Const(*amount as i64));
+                encode_push_string(&mut main_f, recipient.as_deref().unwrap_or_default());
+                encode_push_string(&mut main_f, data.as_deref().unwrap_or_default()); // Added handling for data
+                main_f.instruction(&Instruction::Call(3)); // host fn 3: mint_token
+            }
+            Opcode::AnchorData { path, data_ref } => {
+                encode_push_string(&mut main_f, path.as_deref().unwrap_or_default());
+                encode_push_string(&mut main_f, data_ref);
+                main_f.instruction(&Instruction::Call(4)); // host fn 4: anchor_data
+            }
+            Opcode::CallHost { fn_name, args } => {
+                encode_push_string(&mut main_f, fn_name);
+                let joined = serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string()); // Default to empty JSON array
+                encode_push_string(&mut main_f, &joined);
+                main_f.instruction(&Instruction::Call(5)); // host fn 5: generic_call
+            }
+            Opcode::If { condition, .. } => {
+                #[allow(clippy::needless_borrow)]
+                encode_push_string(&mut main_f, &condition);
+                main_f.instruction(&Instruction::Call(6)); // host fn 6: log (or a dedicated if_cond_eval)
+            }
+            Opcode::Else => {
+                main_f.instruction(&Instruction::Call(7)); // host fn 7: log_else (or just log)
+            }
+            Opcode::EndIf => {
+                main_f.instruction(&Instruction::Call(8)); // host fn 8: log_endif (or just log)
+            }
+            Opcode::SetProperty {
+                key, value_json, ..
+            } => {
+                encode_push_string(&mut main_f, key);
+                encode_push_string(&mut main_f, value_json);
+                main_f.instruction(&Instruction::Call(9)); // host fn 9: set_property (or just log)
+            }
+            Opcode::Todo(msg) => {
+                encode_push_string(&mut main_f, msg);
+                main_f.instruction(&Instruction::Call(10)); // host fn 10: log_todo (or just log)
+            }
+            Opcode::OnEvent { event } => {
+                encode_push_string(&mut main_f, event);
+                main_f.instruction(&Instruction::Call(11)); // host fn 11: on_event
+            }
+            Opcode::RangeCheck { start, end } => {
+                main_f.instruction(&Instruction::F64Const(*start));
+                main_f.instruction(&Instruction::F64Const(*end));
+                main_f.instruction(&Instruction::Call(13));
+            }
+            Opcode::UseResource { resource_type, amount } => {
+                encode_push_string(&mut main_f, resource_type);
+                main_f.instruction(&Instruction::I64Const(*amount as i64));
+                main_f.instruction(&Instruction::Call(14)); // host fn 14: use_resource
+            }
+            Opcode::TransferToken { token_type, amount, sender, recipient } => {
+                encode_push_string(&mut main_f, token_type);
+                main_f.instruction(&Instruction::I64Const(*amount as i64));
+                encode_push_string(&mut main_f, sender.as_deref().unwrap_or_default());
+                encode_push_string(&mut main_f, recipient);
+                main_f.instruction(&Instruction::Call(15)); // host fn 15: transfer_token
+            }
+            Opcode::SubmitJob { 
+                wasm_cid, 
+                description, 
+                input_data_cid, 
+                entry_function: _, 
+                required_resources_json, 
+                qos_profile_json, 
+                max_acceptable_bid_tokens, 
+                deadline_utc_ms, 
+                metadata_json: _, 
+            } => {
+                // 1. Construct MeshJobParams
+                let mut resources_required_vec: Vec<(ResourceType, u64)> = Vec::new();
+                if let Some(json_str) = required_resources_json {
+                    match serde_json::from_str::<HashMap<String, u64>>(json_str) {
+                        Ok(parsed_resources) => {
+                            for (key, value) in parsed_resources {
+                                let res_type = match key.to_lowercase().as_str() {
+                                    "cpu" | "compute" => ResourceType::Cpu,
+                                    "memory" => ResourceType::Memory,
+                                    "io" => ResourceType::Io,
+                                    "token" => ResourceType::Token,
+                                    _ => {
+                                        // eprintln!("Warning: Unrecognized resource type '{}' in SubmitJob. Skipping.", key);
+                                        // TODO: Consider emitting a trap or error log for unrecognized resource types
+                                        continue;
+                                    }
+                                };
+                                resources_required_vec.push((res_type, value));
+                            }
+                        }
+                        Err(_e) => {
+                            // eprintln!("Warning: Failed to parse required_resources_json: {:?}. Error: {}. Using empty resources.", json_str, _e);
+                            // TODO: Emit trap or error handling WASM for JSON parsing errors
+                        }
+                    }
+                }
+                let resources_required = resources_required_vec; // Assign parsed vec
+
+                let qos_profile_val = match qos_profile_json.as_ref() {
+                    Some(json_str) => match serde_json::from_str::<QoSProfile>(json_str) {
+                        Ok(profile) => profile,
+                        Err(_e) => {
+                            // eprintln!("Warning: Failed to parse qos_profile_json: {:?}. Error: {}. Defaulting to BestEffort.", json_str, _e);
+                            // TODO: Emit trap or error handling WASM for JSON parsing errors
+                            QoSProfile::BestEffort // Default on parsing error
+                        }
+                    },
+                    None => QoSProfile::BestEffort, // Default if not provided
+                };
+                let qos = qos_profile_val; // Assign parsed value
+
+                let params = MeshJobParams {
+                    wasm_cid: wasm_cid.clone(),
+                    description: description.clone().unwrap_or_default(),
+                    resources_required, // Use parsed value
+                    qos_profile: qos, // Use parsed value
+                    deadline: deadline_utc_ms.clone(),
+                    input_data_cid: input_data_cid.clone(),
+                    wasm_cid: submit_job_action.wasm_cid.clone(),
+                    description: submit_job_action.description.clone().unwrap_or_default(),
+                    resources_required,
+                    qos_profile: qos,
+                    deadline: submit_job_action.deadline,
+                    input_data_cid: submit_job_action.input_data_cid.clone(),
+                    max_acceptable_bid_tokens: submit_job_action.max_bid,
+                    // --- CORRECTED: Fill in missing fields --- 
+                    workflow_type: WorkflowType::SingleWasmModule, 
+                    stages: None, 
+                    is_interactive: false, 
+                    expected_output_schema_cid: None, 
+                    execution_policy: None, 
+                };
+                let params_cbor = serde_cbor::to_vec(&params)
+                    .map_err(|e| anyhow!("Failed to serialize MeshJobParams: {}", e))?;
+
+                // ... offset calculation ...
+
+                // Add CBOR data to data section list
+                data_segments_to_emit.push((params_cbor_ptr_val, params_cbor));
+
+                // ... call host_submit_mesh_job ...
+            }
+            // ... Implement other RuleAction arms ...
+        }
+    }
+
+    // End the main function
+    main_f.instruction(&Instruction::End);
+    code.function(&main_f);
+    module.section(&code);
+
+     // --- 7. Data Section ---
+    let mut data_section = DataSection::new();
+    // Add all collected data segments
+    for (offset, data) in data_segments_to_emit {
+         emit_data_segment(&mut data_section, offset, &data); // Uses corrected helper
+    }
+    module.section(&data_section);
+
+    Ok(module.finish())
 }
