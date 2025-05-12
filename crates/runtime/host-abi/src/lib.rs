@@ -18,41 +18,9 @@ use serde::Serialize;
 // Need Display for Trap::new
 use std::fmt;
 use wasmtime::Trap;
-
-// --- Error Codes ---
-/// Defines error codes returned by Host ABI functions.
-/// These are returned as negative i32 values from host functions to the WASM module.
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostAbiError {
-    Success = 0,
-    UnknownError = -1,
-    BufferTooSmall = -2,        // Provided buffer in WASM memory is insufficient.
-    InvalidArguments = -3,      // e.g., null pointer, invalid length, bad enum value.
-    NotFound = -4,              // e.g., Requested CID not found, Job ID not found.
-    Timeout = -5,               // An operation timed out (e.g., waiting for interactive input).
-    NotPermitted = -6,          // The action is not allowed by the job's current permissions or capabilities.
-    NotSupported = -7,          // The requested feature or operation is not supported by this host or job type.
-    ResourceLimitExceeded = -8, // e.g., Tried to allocate too much memory, or consume too much gas/mana.
-    DataEncodingError = -9,     // e.g., Invalid UTF-8 from WASM, malformed CBOR.
-    InvalidState = -10,         // e.g., Calling an interactive function on a non-interactive job.
-    NetworkError = -11,         // An error occurred during a P2P network operation.
-    StorageError = -12,         // An error occurred during a host storage operation.
-    MemoryAccessError = -13,    // Added for memory read/write issues
-    SerializationError = -14, // Added for CBOR/JSON errors
-    InvalidUTF8String = -15,  // Added for UTF8 conversion errors
-    InvalidDIDFormat = -16,   // Added for DID parsing errors
-    InvalidCIDFormat = -17,   // Added for CID parsing errors (if needed separately)
-    QueueFull = -18,          // Added for channel/queue full errors
-    ChannelClosed = -19,      // Added for channel closed errors
-}
-
-// Implement Display for HostAbiError
-impl fmt::Display for HostAbiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} ({})", self, *self as i32)
-    }
-}
+use thiserror::Error;
+use wasmtime::{Caller, Linker}; // Keep Trap for now, might be needed elsewhere or remove later if truly unused.
+use anyhow::Error as AnyhowError;
 
 // --- Helper Enums & Structs for ABI Communication ---
 
@@ -89,6 +57,50 @@ pub enum LogLevel {
     Trace = 4, // Highly verbose trace information, for deep debugging.
 }
 
+/// Errors returned by Host ABI functions.
+#[derive(Error, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HostAbiError {
+    #[error("Unknown error")]
+    UnknownError,
+    #[error("Memory access error")]
+    MemoryAccessError,
+    #[error("Buffer too small")]
+    BufferTooSmall,
+    #[error("Invalid arguments")]
+    InvalidArguments,
+    #[error("Not found")]
+    NotFound,
+    #[error("Timeout")]
+    Timeout,
+    #[error("Not permitted")]
+    NotPermitted,
+    #[error("Not supported")]
+    NotSupported,
+    #[error("Resource limit exceeded")]
+    ResourceLimitExceeded,
+    #[error("Data encoding error (UTF8/CBOR)")]
+    DataEncodingError,
+    #[error("Invalid state")]
+    InvalidState,
+    #[error("Network error")]
+    NetworkError,
+    #[error("Storage error")]
+    StorageError,
+    #[error("Serialization error")]
+    SerializationError,
+    #[error("Invalid DID format")]
+    InvalidDIDFormat,
+    #[error("Invalid CID format")]
+    InvalidCIDFormat,
+    #[error("Queue full")]
+    QueueFull,
+    #[error("Channel closed")]
+    ChannelClosed,
+}
+
+// Add Send + Sync + 'static bounds to HostAbiError if necessary
+// (Assuming it's implicitly Send + Sync + 'static based on its fields)
+
 // --- The Host ABI Trait (Using Wasmtime concepts) ---
 // Functions will be called with a Caller<'a, T> where T is the host state
 // Memory access uses Caller::get_export("memory").and_then(|mem| mem.into_memory())
@@ -108,7 +120,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: Number of bytes written for the Job ID string if successful.
     ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
     ///            Other negative `HostAbiError` codes on other failures.
-    fn host_job_get_id(&self, caller: wasmtime::Caller<T>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, Trap>;
+    fn host_job_get_id(&self, caller: wasmtime::Caller<T>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, AnyhowError>;
 
     /// Gets the CID of the initial input data specified when the job was submitted (from `MeshJobParams.input_data_cid`).
     /// The CID is written as a UTF-8 string into `cid_buf_ptr`.
@@ -122,7 +134,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     ///            Returns 0 if `input_data_cid` was `None` for the job.
     ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
     ///            Other negative `HostAbiError` codes on other failures.
-    fn host_job_get_initial_input_cid(&self, caller: wasmtime::Caller<T>, cid_buf_ptr: u32, cid_buf_len: u32) -> Result<i32, Trap>;
+    fn host_job_get_initial_input_cid(&self, caller: wasmtime::Caller<T>, cid_buf_ptr: u32, cid_buf_len: u32) -> Result<i32, AnyhowError>;
 
     /// Checks if the current job has been marked as interactive (from `MeshJobParams.is_interactive`).
     ///
@@ -132,7 +144,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: 1 if the job is interactive.
     ///            0 if the job is not interactive.
     ///            Negative `HostAbiError` codes on failure (e.g., job context not found).
-    fn host_job_is_interactive(&self, caller: wasmtime::Caller<T>) -> Result<i32, Trap>;
+    fn host_job_is_interactive(&self, caller: wasmtime::Caller<T>) -> Result<i32, AnyhowError>;
 
     /// Gets the current stage index (0-based) if the job is part of a multi-stage workflow.
     ///
@@ -142,7 +154,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: The current stage index if the job is in a workflow.
     ///            Returns -1 if the job is a `SingleWasmModule` type (not a multi-stage workflow).
     ///            Other negative `HostAbiError` codes on failures.
-    fn host_workflow_get_current_stage_index(&self, caller: wasmtime::Caller<T>) -> Result<i32, Trap>;
+    fn host_workflow_get_current_stage_index(&self, caller: wasmtime::Caller<T>) -> Result<i32, AnyhowError>;
 
     /// Gets the user-defined ID of the current stage, if available and if the job is in a multi-stage workflow.
     /// The stage ID is written as a UTF-8 string into `stage_id_buf_ptr`.
@@ -161,7 +173,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         caller: wasmtime::Caller<T>,
         stage_id_buf_ptr: u32,
         stage_id_buf_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     /// Gets the resolved input CID for the current stage of a workflow.
     /// This function interprets the `StageInputSource` for the current stage.
@@ -188,7 +200,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         input_key_len: u32,
         cid_buf_ptr: u32,
         cid_buf_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     // **II. Status & Progress Reporting **
 
@@ -210,7 +222,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         percentage: u8,
         status_message_ptr: u32,
         status_message_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     /// Signals that the current stage of a multi-stage workflow has completed successfully.
     /// The host will typically update the job's status (e.g., to `AwaitingNextStage` or `Completed`)
@@ -233,7 +245,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         caller: wasmtime::Caller<T>,
         output_cid_ptr: u32,
         output_cid_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     // **III. Interactivity **
 
@@ -261,7 +273,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         output_key_ptr: u32,
         output_key_len: u32,
         is_final_chunk: i32, // 1 for true, 0 for false
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     /// Attempts to receive interactive input data sent to the WASM job.
     /// The host checks an internal queue populated by incoming `JobInteractiveInputV1` P2P messages.
@@ -287,7 +299,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         buffer_ptr: u32,
         buffer_len: u32,
         timeout_ms: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     /// Gets the total size (in bytes) required to store the next available interactive input message
     /// (i.e., `sizeof(ReceivedInputInfo)` + length of its associated data/CID payload).
@@ -299,7 +311,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: Required size in bytes if input is available.
     ///            Returns 0 if no input is currently available in the queue.
     ///            Negative `HostAbiError` codes on failure.
-    fn host_interactive_peek_input_len(&self, caller: wasmtime::Caller<T>) -> Result<i32, Trap>;
+    fn host_interactive_peek_input_len(&self, caller: wasmtime::Caller<T>) -> Result<i32, AnyhowError>;
 
     /// Signals to the host that the job is now expecting user input and may pause or yield execution.
     /// The host typically uses this to transition the job's status to `JobStatus::PendingUserInput`
@@ -318,7 +330,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         caller: wasmtime::Caller<T>,
         prompt_cid_ptr: u32,
         prompt_cid_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     // **IV. Data Handling & Storage (Interacting with Host's IPFS-like Storage) **
 
@@ -347,7 +359,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         offset: u64,
         buffer_ptr: u32,
         buffer_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     /// Writes data from a WASM buffer to the host's storage layer, resulting in a new CID.
     /// The newly created CID (UTF-8 string) is written into the WASM buffer specified by `cid_buf_ptr`.
@@ -372,7 +384,7 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         data_len: u32,
         cid_buf_ptr: u32,
         cid_buf_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 
     // **V. Logging **
 
@@ -393,5 +405,5 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         level: LogLevel,
         message_ptr: u32,
         message_len: u32,
-    ) -> Result<i32, Trap>;
+    ) -> Result<i32, AnyhowError>;
 } 
