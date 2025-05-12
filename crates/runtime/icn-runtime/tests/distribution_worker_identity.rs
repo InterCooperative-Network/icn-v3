@@ -6,12 +6,15 @@ use icn_runtime::distribution_worker::DistributionWorker;
 use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use std::str::FromStr;
+use ed25519_dalek::SigningKey;
+use rand_core::OsRng;
 
 #[tokio::test]
 async fn test_distribution_with_identity_index() {
     // --- Setup identity mappings ---
     let mut index = IdentityIndex::new();
-    let origin_did = Did::from_str("did:icn:origin1").unwrap();
+    let sk = SigningKey::generate(&mut OsRng);
+    let origin_did = Did::new_ed25519(&sk.verifying_key());
     let coop_id = "coopA".to_string();
     let community_id = "communityX".to_string();
 
@@ -61,9 +64,9 @@ async fn test_distribution_with_identity_index() {
     let node_balance = mgr.balance(&node_scope).unwrap();
     assert_eq!(node_balance, 900); // 10% distributed
 
-    let coop_scope = ScopeKey::Cooperative(coop_id.clone());
-    let coop_bal = mgr.balance(&coop_scope).unwrap_or(0);
-    assert_eq!(coop_bal, 100);
+    let community_scope = ScopeKey::Community(community_id.clone());
+    let comm_bal = mgr.balance(&community_scope).unwrap_or(0);
+    assert_eq!(comm_bal, 100);
 
     // Origin DID should not receive individual credits
     let origin_scope = ScopeKey::Individual(origin_did.as_str().to_string());
