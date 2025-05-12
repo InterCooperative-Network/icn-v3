@@ -16,7 +16,7 @@ The primary motivation for this specification is to ensure unambiguous communica
 * Provide a stable base for future extensions and upgrades to the P2P layer.
 * Clarify the precise usage of underlying libp2p transport mechanisms (Gossipsub, Kademlia DHT, direct messaging) in the context of specific mesh operations.
 
-This document will cover transport mechanisms, protocol versioning, a detailed breakdown of each `MeshProtocolMessage` variant, topic structures, security rules, and considerations for future compatibility. 
+This document will cover transport mechanisms, protocol versioning, a detailed breakdown of each `MeshProtocolMessage` variant, topic structures, security rules, and considerations for future compatibility.
 
 ## 2. Transport Mechanisms
 
@@ -28,55 +28,65 @@ All P2P messages are encapsulated within the `MeshBehaviour` of a `MeshNode`'s l
 
 Libp2p's Gossipsub protocol is the primary mechanism for scalable, topic-based publish/subscribe messaging. It is used for messages that require broad dissemination to many potentially interested peers without prior direct connections.
 
-*   **Typical Use Cases:**
-    *   `CapabilityAdvertisementV1`: Broadcasting node capabilities to the network.
-    *   `JobAnnouncementV1`: Announcing new jobs to potential executors.
-    *   `ExecutionReceiptAvailableV1`: Announcing the availability of a new execution receipt (typically its CID and key metadata).
-*   **Characteristics:**
-    *   **Resilience:** Messages propagate through the network even with node churn.
-    *   **Scalability:** Efficiently disseminates messages to large numbers of subscribers.
-    *   **Topic-Based:** Nodes subscribe to specific topics relevant to their interests (e.g., a global job announcement topic, a capability topic).
-*   **Considerations:**
-    *   **Message Duplication:** Gossipsub handles message deduplication.
-    *   **Not Strictly Ordered:** Message delivery order is not guaranteed across the network.
-    *   **Spam Mitigation:** Relies on Gossipsub's peer scoring and other mechanisms to mitigate spam. Specific topic structures and validation rules (detailed later) also play a role.
+* **Typical Use Cases:**
+
+  * `CapabilityAdvertisementV1`: Broadcasting node capabilities to the network.
+  * `JobAnnouncementV1`: Announcing new jobs to potential executors.
+  * `ExecutionReceiptAvailableV1`: Announcing the availability of a new execution receipt (typically its CID and key metadata).
+* **Characteristics:**
+
+  * **Resilience:** Messages propagate through the network even with node churn.
+  * **Scalability:** Efficiently disseminates messages to large numbers of subscribers.
+  * **Topic-Based:** Nodes subscribe to specific topics relevant to their interests (e.g., a global job announcement topic, a capability topic).
+* **Considerations:**
+
+  * **Message Duplication:** Gossipsub handles message deduplication.
+  * **Not Strictly Ordered:** Message delivery order is not guaranteed across the network.
+  * **Spam Mitigation:** Relies on Gossipsub's peer scoring and other mechanisms to mitigate spam. Specific topic structures and validation rules (detailed later) also play a role.
 
 ### 2.2. Direct Messaging (Request-Response & Unicast Streams)
 
 For targeted communication between two specific peers, the protocol relies on libp2p's direct messaging capabilities, which can be implemented using request-response patterns or unicast streams.
 
-*   **Typical Use Cases:**
-    *   `JobBidV1`: An executor sending a specific bid to a job originator.
-    *   `AssignJobV1`: An originator assigning a job to a chosen executor.
-    *   `JobStatusUpdateV1`: An executor sending status updates directly to the job originator.
-    *   `JobInteractiveInputV1` / `JobInteractiveOutputV1`: Exchanging data streams for interactive jobs between the originator and executor.
-    *   Directly requesting a full `ExecutionReceipt` from a peer known to have it.
-*   **Characteristics:**
-    *   **Targeted:** Messages are sent to a known `PeerId`.
-    *   **Potentially Reliable:** Can be layered over reliable transport protocols provided by libp2p.
-    *   **Lower Latency (Potentially):** Avoids the propagation delays inherent in Gossipsub for direct peer-to-peer interactions.
-*   **Considerations:**
-    *   **Peer Discovery:** Requires the sender to know the `PeerId` and address(es) of the recipient. This is often facilitated by Kademlia DHT or prior interaction.
-    *   **Connection Management:** Libp2p handles underlying connection establishment and maintenance.
+* **Typical Use Cases:**
+
+  * `JobBidV1`: An executor sending a specific bid to a job originator.
+  * `AssignJobV1`: An originator assigning a job to a chosen executor.
+  * `JobStatusUpdateV1`: An executor sending status updates directly to the job originator.
+  * `JobInteractiveInputV1` / `JobInteractiveOutputV1`: Exchanging data streams for interactive jobs between the originator and executor.
+  * Directly requesting a full `ExecutionReceipt` from a peer known to have it.
+* **Characteristics:**
+
+  * **Targeted:** Messages are sent to a known `PeerId`.
+  * **Potentially Reliable:** Can be layered over reliable transport protocols provided by libp2p.
+  * **Lower Latency (Potentially):** Avoids the propagation delays inherent in Gossipsub for direct peer-to-peer interactions.
+* **Considerations:**
+
+  * **Peer Discovery:** Requires the sender to know the `PeerId` and address(es) of the recipient. This is often facilitated by Kademlia DHT or prior interaction.
+  * **Connection Management:** Libp2p handles underlying connection establishment and maintenance.
 
 ### 2.3. Kademlia (Kad-DHT)
 
 Libp2p's Kademlia-based Distributed Hash Table (Kad-DHT) is employed for decentralized peer discovery and content addressing/retrieval.
 
-*   **Typical Use Cases:**
-    *   **Peer Discovery:** Finding other `MeshNode`s on the network, discovering their addresses, and bootstrapping connections for Gossipsub and direct messaging.
-    *   **Content Discovery & Retrieval:**
-        *   Storing and retrieving full `ExecutionReceipt` objects using their CIDs as keys. Executor nodes `put` their receipts into the DHT, and interested parties (originators, auditors) `get` them.
-        *   Potentially storing and retrieving other content-addressable data like WASM modules or large job input data, although this might also be handled via direct transfer or other ICN data availability layers.
-    *   **Provider Records:** Nodes advertise to the DHT that they are "providers" for specific CIDs (e.g., they hold a copy of a particular `ExecutionReceipt` or WASM module), allowing other nodes to discover and connect to them to retrieve the data.
-*   **Characteristics:**
-    *   **Decentralized:** No central point of failure for discovery or storage.
-    *   **Content-Addressable:** Data is typically identified and retrieved by its CID.
-    *   **Resilient:** DHT records are replicated across multiple nodes.
-*   **Considerations:**
-    *   **Churn:** The DHT must be robust to nodes joining and leaving the network.
-    *   **Storage Overhead:** Nodes participating in the DHT contribute to storing routing information and (for providers) the data itself.
-    *   **Lookup Times:** DHT lookups involve iterative requests and can have higher latency than direct messaging once a peer is known.
+* **Typical Use Cases:**
+
+  * **Peer Discovery:** Finding other `MeshNode`s on the network, discovering their addresses, and bootstrapping connections for Gossipsub and direct messaging.
+  * **Content Discovery & Retrieval:**
+
+    * Storing and retrieving full `ExecutionReceipt` objects using their CIDs as keys. Executor nodes `put` their receipts into the DHT, and interested parties (originators, auditors) `get` them.
+    * Potentially storing and retrieving other content-addressable data like WASM modules or large job input data, although this might also be handled via direct transfer or other ICN data availability layers.
+  * **Provider Records:** Nodes advertise to the DHT that they are "providers" for specific CIDs (e.g., they hold a copy of a particular `ExecutionReceipt` or WASM module), allowing other nodes to discover and connect to them to retrieve the data.
+* **Characteristics:**
+
+  * **Decentralized:** No central point of failure for discovery or storage.
+  * **Content-Addressable:** Data is typically identified and retrieved by its CID.
+  * **Resilient:** DHT records are replicated across multiple nodes.
+* **Considerations:**
+
+  * **Churn:** The DHT must be robust to nodes joining and leaving the network.
+  * **Storage Overhead:** Nodes participating in the DHT contribute to storing routing information and (for providers) the data itself.
+  * **Lookup Times:** DHT lookups involve iterative requests and can have higher latency than direct messaging once a peer is known.
 
 The choice of transport mechanism for each message variant is crucial for network efficiency, scalability, and reliability. Subsequent sections will specify the intended transport for each message type.
 
