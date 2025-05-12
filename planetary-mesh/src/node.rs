@@ -11,6 +11,9 @@ use std::cmp::Ordering;
 use cid::{Cid, multihash::{Code, MultihashDigest}};
 use libipld_cbor::DagCborCodec; // For Codec::Raw
 use libipld_core::ipld::IpldCodec;
+use std::collections::HashMap;
+use once_cell::sync::Lazy;
+use icn_identity::IcnPublicKey;
 
 #[derive(Debug)]
 pub enum NodeCommand {
@@ -63,17 +66,35 @@ pub struct ScoredBid {
     pub score: f64,
 }
 
+// Static map for known DIDs and their public keys for testing
+static TEST_PUBLIC_KEYS: Lazy<HashMap<Did, IcnPublicKey>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    // --- REPLACE WITH YOUR ACTUAL TEST DIDs AND PUBLIC KEYS ---
+    // Example 1: Replace with a real DID string and corresponding public key bytes
+    // let did1_str = "did:example:issuer1".to_string();
+    // let pk1_bytes: [u8; 32] = [/* ... 32 bytes of Ed25519 public key ... */]; 
+    // if let Ok(icn_pk1) = IcnPublicKey::from_bytes(&pk1_bytes) { // Assuming from_bytes or similar constructor
+    //     m.insert(Did::new(&did1_str), icn_pk1);
+    // }
+
+    // Example 2: Replace with another real DID string and public key bytes
+    // let did2_str = "did:example:issuer2".to_string();
+    // let pk2_bytes: [u8; 32] = [/* ... 32 bytes of another Ed25519 public key ... */];
+    // if let Ok(icn_pk2) = IcnPublicKey::from_bytes(&pk2_bytes) {
+    //     m.insert(Did::new(&did2_str), icn_pk2);
+    // }
+    // --- END OF REPLACE SECTION ---
+    
+    if m.is_empty() {
+        tracing::warn!("Test public key map is empty. DID resolution will likely fail for tests.");
+    }
+    m
+});
+
 // Placeholder for DID resolution - replace with actual implementation
 fn resolve_did_to_public_key(did: &Did) -> Option<IcnPublicKey> {
-    // In a real implementation, this would query a DID resolver, a local cache,
-    // or use other methods to retrieve the public key associated with the DID.
-    // For testing, you might have a static map or specific logic.
-    tracing::debug!("Attempting to resolve DID: {} to a public key (STUBBED)", did);
-    // Example: If you have a way to check against known test DIDs and their public keys:
-    // if did.as_str() == "did:example:issuer1" {
-    //     // return Some(IcnPublicKey::from_bytes(KNOWN_ISSUER1_PUBLIC_KEY_BYTES).unwrap());
-    // }
-    None // Default to None if no key is found by the stubbed logic
+    tracing::debug!("Attempting to resolve DID: {} to a public key (using static test map)", did);
+    TEST_PUBLIC_KEYS.get(did).cloned() // Cloned because IcnPublicKey might not be Copy
 }
 
 fn verify_reputation_record_signature(record: &ReputationRecord) -> Result<(), String> {
