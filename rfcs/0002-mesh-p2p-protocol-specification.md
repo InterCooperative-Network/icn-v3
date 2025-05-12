@@ -3,7 +3,7 @@
 **Status:** Draft
 **Version:** 0.1.0
 **Authors:** ICN System-Aware Assistant, ICN Development Team
-**Date:** (Current Date)
+**Date:** 2025-05-11
 
 ## 1. Introduction
 
@@ -177,8 +177,8 @@ All message payloads are serialized using CBOR.
         // Type: icn_types::identity::Did (String)
         pub node_did: String,
 
-        // PeerId of the node, for direct network addressing.
-        // Type: libp2p_identity::PeerId (String representation or bytes)
+        // PeerId of the node, for direct network addressing, serialized as a Base58-encoded string.
+        // Type: String 
         pub peer_id: String, 
 
         // Human-readable alias or name for the node (optional).
@@ -328,8 +328,8 @@ All message payloads are serialized using CBOR.
         // Type: icn_types::identity::Did (String)
         pub executor_did: String,
 
-        // PeerId of the executor node, for direct P2P communication.
-        // Type: libp2p_identity::PeerId (String representation or bytes)
+        // PeerId of the executor node, for direct P2P communication, serialized as a Base58-encoded string.
+        // Type: String
         pub executor_peer_id: String,
 
         // Proposed price for executing the job.
@@ -552,105 +552,354 @@ All message payloads are serialized using CBOR.
 ### 5.7. `JobInteractiveInputV1`
 
 *   **Purpose:**
-    Used in interactive jobs to send data from the originator to the executor during active job execution.
+    Used during an active interactive job session, allowing the `originator_did` to stream input data to the `executor_did` where the job is running. This facilitates real-time interaction with the WASM module. Each piece of input is sent as a distinct message.
 
 *   **Schema (Conceptual Rust Struct):**
     ```rust
     // Contained within MeshProtocolMessage::JobInteractiveInputV1
     pub struct JobInteractiveInput {
-        // DID of the job originator.
+        // Identifier of the JobAnnouncement this interactive input pertains to.
+        // MUST match the announcement_id of the original JobAnnouncementV1.
+        // Type: String
+        pub announcement_id: String,
+
+        // DID of the job originator sending the input.
         // Type: icn_types::identity::Did (String)
         pub originator_did: String,
 
-        // DID of the executor.
+        // DID of the executor for whom this input is intended.
         // Type: icn_types::identity::Did (String)
         pub executor_did: String,
 
-        // Unique identifier for this job interactive input instance.
-        // Could be a UUID or a CID of the input content.
+        // A unique identifier for this specific input message (e.g., a UUID).
+        // Helps in tracking individual input chunks if needed for logging or debugging.
         // Type: String
         pub input_id: String,
 
-        // Timestamp of when this job interactive input was created (UTC, ISO 8601).
-        // Type: String
-        pub timestamp: String,
+        // A strictly increasing sequence number for inputs related to a specific announcement_id.
+        // Starts at 0 or 1. Used to ensure ordered delivery and detect missing inputs.
+        // Type: u64
+        pub sequence_number: u64,
 
-        // Data for the job.
+        // The actual input data payload for the job.
         // Type: Vec<u8> (Bytes of the input data)
         pub data: Vec<u8>,
 
-        // Cryptographic signature of the fields above (excluding the signature itself),
+        // Timestamp of when this input message was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Cryptographic signature of all fields above in this JobInteractiveInput message
+        // (announcement_id, originator_did, executor_did, input_id, sequence_number, data, timestamp),
         // created by the originator_did's private key.
-        // Ensures authenticity and integrity of the job interactive input.
         // Type: Vec<u8> (Bytes of the signature)
         pub signature: Vec<u8>,
     }
     ```
 
 *   **Transport & Topic:**
-    *   **Mechanism:** Direct messaging.
+    *   **Mechanism:** Direct messaging (likely over a persistent or quickly re-established stream for the duration of the interactive session).
     *   **Topic:** Not applicable.
 
-*   **Processing by Receiving Nodes:**
-    *   Verify the `signature` against the `originator_did`. Invalid inputs MUST be discarded.
-    *   Validate the `timestamp` to prevent processing of excessively old inputs.
-    *   Ensure the input is valid and authorized.
-    *   If the input is valid and authorized, the node may proceed to pass the input to the job.
+*   **Processing by Receiving Node (Executor):**
+    1.  Verify the `signature` against the `originator_did`'s public key. If invalid, discard and potentially log a security event.
+    2.  Validate the `timestamp` to ensure reasonable freshness.
+    3.  Verify that its own DID matches the `executor_did` field.
+    4.  Confirm that the `announcement_id` corresponds to an active, interactive job that this executor is currently running for the specified `originator_did`.
+    5.  Use the `sequence_number` to ensure inputs are processed in the correct order.
+        *   If an input arrives out of order, the executor MAY buffer it for a short period, waiting for missing inputs.
+        *   If a duplicate `sequence_number` is received, it SHOULD be discarded.
+    6.  If all checks pass, the `data` payload is delivered to the appropriate WASM instance or execution environment handling the interactive job.
 
 *   **Security Considerations:**
-    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the input is from the claimed `originator_did` and hasn't been tampered with.
-    *   **Replay Attacks:** The `timestamp` helps differentiate inputs and can mitigate replay attacks if nodes track recently seen IDs.
-    *   **Job Validity:** This message sends job input data; it doesn't guarantee the data itself is valid or non-malicious. The input must be valid and authorized.
+    *   **Authenticity & Integrity:** The `signature` by `originator_did` is crucial to ensure the input is from the legitimate job originator and the data has not been tampered with in transit.
+    *   **Replay Attacks:** The combination of `timestamp` and `sequence_number` helps prevent replay attacks of old input segments. The executor must track the last valid `sequence_number`.
+    *   **Out-of-Order or Missing Inputs:** The `sequence_number` allows the executor to detect and potentially handle (or report) missing or out-of-order inputs. The exact handling strategy (e.g., error, wait, request retransmission) might depend on the job's requirements.
+    *   **Data Validation/Sanitization:** The executor's host environment or the WASM module itself MAY need to perform validation or sanitization on the received `data` before use, to protect against malformed or malicious inputs that could crash the job or exploit vulnerabilities.
+    *   **Denial of Service (DoS):**
+        *   An attacker (or faulty originator) could flood the executor with `JobInteractiveInputV1` messages. The executor SHOULD implement rate limiting per job session or per originator.
+        *   Excessively large `data` payloads could also be a DoS vector. The protocol or executor policy MAY define a maximum size for `data` per message.
+    *   **Unauthorized Inputs:** The executor MUST ensure that inputs are only accepted from the `originator_did` that initiated and was assigned the job specified by `announcement_id`.
+    *   **Session Management:** Ensuring that inputs are only processed for currently active and correctly authenticated interactive sessions is critical.
 
 ### 5.8. `JobInteractiveOutputV1`
 
 *   **Purpose:**
-    Used in interactive jobs to send data from the executor back to the originator during active job execution.
+    Used during an active interactive job session, allowing the `executor_did` to stream output data back to the `originator_did` from the running job. This facilitates real-time interaction with the WASM module. Each piece of output is sent as a distinct message.
 
 *   **Schema (Conceptual Rust Struct):**
     ```rust
     // Contained within MeshProtocolMessage::JobInteractiveOutputV1
     pub struct JobInteractiveOutput {
-        // DID of the executor.
+        // Identifier of the JobAnnouncement this interactive output pertains to.
+        // MUST match the announcement_id of the original JobAnnouncementV1.
+        // Type: String
+        pub announcement_id: String,
+
+        // DID of the executor sending the output.
         // Type: icn_types::identity::Did (String)
         pub executor_did: String,
 
-        // DID of the job originator.
+        // DID of the job originator for whom this output is intended.
         // Type: icn_types::identity::Did (String)
         pub originator_did: String,
 
-        // Unique identifier for this job interactive output instance.
-        // Could be a UUID or a CID of the output content.
+        // A unique identifier for this specific output message (e.g., a UUID).
+        // Helps in tracking individual output chunks.
         // Type: String
         pub output_id: String,
 
-        // Timestamp of when this job interactive output was created (UTC, ISO 8601).
-        // Type: String
-        pub timestamp: String,
+        // A strictly increasing sequence number for outputs related to a specific announcement_id.
+        // Starts at 0 or 1. Used to ensure ordered delivery and detect missing outputs.
+        // Type: u64
+        pub sequence_number: u64,
 
-        // Data for the job.
+        // The actual output data payload from the job.
         // Type: Vec<u8> (Bytes of the output data)
         pub data: Vec<u8>,
 
-        // Cryptographic signature of the fields above (excluding the signature itself),
+        // Timestamp of when this output message was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Cryptographic signature of all fields above in this JobInteractiveOutput message
+        // (announcement_id, executor_did, originator_did, output_id, sequence_number, data, timestamp),
         // created by the executor_did's private key.
-        // Ensures authenticity and integrity of the job interactive output.
         // Type: Vec<u8> (Bytes of the signature)
         pub signature: Vec<u8>,
     }
     ```
 
 *   **Transport & Topic:**
-    *   **Mechanism:** Direct messaging.
+    *   **Mechanism:** Direct messaging (likely over a persistent or quickly re-established stream for the duration of the interactive session).
     *   **Topic:** Not applicable.
 
-*   **Processing by Receiving Nodes:**
-    *   Verify the `signature` against the `executor_did`. Invalid outputs MUST be discarded.
-    *   Validate the `timestamp` to prevent processing of excessively old outputs.
-    *   Ensure the output is valid and authorized.
-    *   If the output is valid and authorized, the node may proceed to pass the output to the job.
+*   **Processing by Receiving Node (Originator):**
+    1.  Verify the `signature` against the `executor_did`'s public key. If invalid, discard and potentially log a security event.
+    2.  Validate the `timestamp` to ensure reasonable freshness.
+    3.  Verify that its own DID matches the `originator_did` field.
+    4.  Confirm that the `announcement_id` corresponds to an active, interactive job that this originator initiated and is currently running on the specified `executor_did`.
+    5.  Use the `sequence_number` to ensure outputs are processed/displayed in the correct order.
+        *   If an output arrives out of order, the originator MAY buffer it for a short period.
+        *   If a duplicate `sequence_number` is received, it SHOULD be discarded.
+    6.  If all checks pass, the `data` payload is made available to the end-user or application that initiated the interactive job.
 
 *   **Security Considerations:**
-    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the output is from the claimed `executor_did` and hasn't been tampered with.
-    *   **Replay Attacks:** The `timestamp` helps differentiate outputs and can mitigate replay attacks if nodes track recently seen IDs.
-    *   **Job Validity:** This message sends job output data; it doesn't guarantee the data itself is valid or non-malicious. The output must be valid and authorized. 
+    *   **Authenticity & Integrity:** The `signature` by `executor_did` is crucial to ensure the output is from the legitimate job executor and the data has not been tampered with.
+    *   **Replay Attacks:** The combination of `timestamp` and `sequence_number` helps prevent replay of old output segments. The originator must track the last valid `sequence_number` for this job from this executor.
+    *   **Out-of-Order or Missing Outputs:** The `sequence_number` allows the originator to detect missing or out-of-order outputs.
+    *   **Data Validation/Interpretation:** The originator (or the end-user application) is responsible for interpreting the `data`. While the source is authenticated, the data itself might be malformed if the WASM module has bugs, or it could be unexpectedly large.
+    *   **Denial of Service (DoS):**
+        *   A malicious or faulty executor could flood the originator with `JobInteractiveOutputV1` messages. The originator SHOULD implement rate limiting per job session or per executor.
+        *   Excessively large `data` payloads could also be a DoS vector. The protocol or originator policy MAY define a maximum size for `data`.
+    *   **Unauthorized Outputs:** The originator MUST ensure that outputs are only accepted from the `executor_did` to whom the job specified by `announcement_id` was assigned.
+    *   **Session Management:** Ensuring that outputs are only processed for currently active and correctly authenticated interactive sessions is critical.
+
+## 6. Topic Structure
+
+Gossipsub topics are used for broadcasting messages like capability advertisements, job announcements, and notifications of receipt availability. A consistent topic structure is essential for network organization, message filtering, and versioning.
+
+### 6.1. General Topic Pattern
+
+Planetary Mesh Gossipsub topics SHOULD follow this general pattern:
+
+`/icn/mesh/<message-type>/<version>[/<scope-specific-identifiers>]`
+
+Where:
+
+*   **`/icn/mesh/`**: A common prefix for all ICN Planetary Mesh P2P topics, preventing collisions with other libp2p applications.
+*   **`<message-type>`**: A short, descriptive name for the type of message being published on the topic. Examples:
+    *   `capabilities` (for `CapabilityAdvertisementV1`)
+    *   `jobs/announce` (for `JobAnnouncementV1`)
+    *   `receipts/available` (for `ExecutionReceiptAvailableV1`)
+*   **`<version>`**: The version of the message *schema* or *topic semantics* being used (e.g., `v1`, `v2`). This aligns with the message variant versioning (e.g., `JobAnnouncementV1` would typically use a `v1` topic version).
+*   **`[/<scope-specific-identifiers>]`** (Optional): Further path segments can be appended to create more specific, scoped topics. This allows nodes to subscribe only to messages relevant to them, reducing bandwidth and processing overhead. Examples:
+    *   `/region/<region-name>`: For messages scoped to a particular geographical or logical region (e.g., `/icn/mesh/jobs/announce/v1/region/us-east-1`).
+    *   `/type/<job-type-identifier>`: For jobs of a specific type or requiring specific resources.
+
+All topic segments SHOULD use lowercase alphanumeric characters and hyphens (`-`) for separators if needed (e.g., `us-east-1`).
+
+### 6.2. Defined Topics
+
+The following Gossipsub topics are defined for the V1 messages specified in this document:
+
+1.  **Capability Advertisements:**
+    *   **Message:** `CapabilityAdvertisementV1`
+    *   **Global Topic:** `/icn/mesh/capabilities/v1`
+    *   **Purpose:** For nodes to broadcast their capabilities.
+    *   **Scoped Variants (Optional):**
+        *   `/icn/mesh/capabilities/v1/region/<region-name>`: Nodes can subscribe to capabilities in specific regions.
+        *   (Other scopes like specific `ResourceType` could be considered in future revisions if proven beneficial).
+
+2.  **Job Announcements:**
+    *   **Message:** `JobAnnouncementV1`
+    *   **Global Topic:** `/icn/mesh/jobs/announce/v1`
+    *   **Purpose:** For originators to announce new jobs to all potential executors.
+    *   **Scoped Variants (Recommended for Executors):**
+        *   `/icn/mesh/jobs/announce/v1/region/<region-name>`: Executors can subscribe to jobs matching their operating region if the `job_params.execution_policy` specifies `region_filter`.
+        *   `/icn/mesh/jobs/announce/v1/type/<job-type-hash>`: If jobs can be categorized by a hash of their required `ResourceType`s or other core parameters, executors could subscribe to specific types.
+        *   `/icn/mesh/jobs/announce/v1/runtime/<runtime-id>`: Executors can subscribe to jobs requiring specific WASM runtimes they support.
+        *   **Note:** The exact set of recommended/supported scoped job announcement topics may evolve. For V1, the global topic and region-scoped topics are primary.
+
+3.  **Execution Receipt Availability (Optional Broadcast):**
+    *   **Message:** `ExecutionReceiptAvailableV1`
+    *   **Global Topic:** `/icn/mesh/receipts/available/v1`
+    *   **Purpose:** For executors to optionally announce the availability of new execution receipts to a wider audience (e.g., auditors, reputation systems) beyond just direct notification to the originator.
+    *   **Scoped Variants (Optional):**
+        *   `/icn/mesh/receipts/available/v1/originator/<originator-did-hash>`: If auditors want to track receipts for specific originators.
+        *   `/icn/mesh/receipts/available/v1/executor/<executor-did-hash>`: If auditors want to track receipts from specific executors.
+
+### 6.3. Topic Subscription and Publishing Strategy
+
+*   **Publishers:**
+    *   Nodes publishing `CapabilityAdvertisementV1` SHOULD publish to the global capabilities topic and MAY publish to relevant scoped topics (e.g., their specific region).
+    *   Nodes publishing `JobAnnouncementV1` SHOULD publish to the global job announcement topic. They MAY also publish to relevant scoped topics if the job has specific targeting requirements (e.g., a specific region in its `ExecutionPolicy`).
+    *   Nodes publishing `ExecutionReceiptAvailableV1` to Gossipsub (if not only sending directly) SHOULD publish to the global receipts topic.
+*   **Subscribers:**
+    *   Job originators seeking executors MAY subscribe to the global capabilities topic or filter based on cached capabilities.
+    *   Executors SHOULD subscribe to the global job announcement topic and/or more specific scoped job announcement topics that match their capabilities and policies (e.g., their region, supported runtimes).
+    *   Auditors or other monitoring services MAY subscribe to the global receipts available topic or more specific scoped receipt topics.
+
+Nodes MUST be prepared to handle messages on the global topics even if they primarily focus on scoped ones, especially for critical announcements. The use of scoped topics is an optimization to reduce irrelevant message flow.
+
+## 7. Security and Validation Summary
+
+Security and robust validation are paramount for the integrity and reliability of the Planetary Mesh P2P protocol. This section summarizes the key security considerations and validation steps that nodes MUST implement. Detailed security points for each message type are provided in Section 5.
+
+### 7.1. Core Security Principles
+
+1.  **Message Authenticity and Integrity:**
+    *   All `MeshProtocolMessage` variants that assert an identity or convey critical instructions (e.g., `JobAnnouncementV1`, `JobBidV1`, `AssignJobV1`, `JobStatusUpdateV1`, `CapabilityAdvertisementV1`, `ExecutionReceiptAvailableV1`, `JobInteractiveInputV1`, `JobInteractiveOutputV1`) MUST include a cryptographic `signature`.
+    *   This signature is created by the private key associated with the sender's DID (e.g., `originator_did` or `executor_did`).
+    *   Receiving nodes MUST verify this signature against the claimed sender's public key (retrieved via a trusted DID resolution mechanism) and the message content (excluding the signature field itself).
+    *   Failure to verify the signature MUST result in the message being discarded and potentially negative scoring for the sending peer.
+
+2.  **Authorization and Contextual Validation:**
+    *   Beyond signature verification, nodes MUST perform contextual validation. For instance:
+        *   An `AssignJobV1` message is only valid if it refers to a `JobAnnouncementV1` the recipient (executor) has bid on and if the assignment comes from the original job originator.
+        *   A `JobStatusUpdateV1` is only valid if it comes from the `executor_did` to whom the job was assigned and is for a job owned by the recipient (originator).
+        *   Interactive messages (`JobInteractiveInputV1`, `JobInteractiveOutputV1`) must be validated against an active, authenticated job session between the correct `originator_did` and `executor_did` for the given `announcement_id`.
+    *   Messages received out of context or from unauthorized DIDs MUST be discarded.
+
+3.  **Replay Attack Prevention:**
+    *   All messages include a `timestamp` field.
+    *   Nodes SHOULD maintain a reasonable window for accepting messages based on their timestamps to discard stale messages.
+    *   For interactive streams (`JobInteractiveInputV1`, `JobInteractiveOutputV1`), the `sequence_number` is critical for detecting and rejecting replayed or out-of-order messages within a specific job session.
+    *   Unique identifiers like `announcement_id`, `input_id`, and `output_id` also help in identifying and potentially discarding replayed messages if nodes track recently processed IDs.
+
+4.  **Denial of Service (DoS) Mitigation:**
+    *   **Resource Limits:** Nodes SHOULD enforce limits on message sizes (e.g., for `data` fields in interactive messages or large fields in other messages).
+    *   **Rate Limiting:** Implement rate limiting for incoming messages, especially for direct messages and within interactive sessions. This can be based on `PeerId`, `DID`, or job session.
+    *   **Gossipsub Defenses:** Libp2p's Gossipsub includes mechanisms like peer scoring, message validation feedback, and limits on mesh degree which help mitigate spam and DoS on broadcast topics.
+    *   **Validation Costs:** The computational cost of signature verification and other validation steps inherently makes spamming expensive for attackers.
+
+5.  **Data Validation (Content-Specific):**
+    *   While the protocol ensures message authenticity, the semantic validity of data payloads (e.g., `job_params` in `JobAnnouncementV1`, `data` in interactive messages) is often application-specific.
+    *   Executors SHOULD treat WASM code and input data from originators as potentially untrusted. Sandboxing (inherent in WASM runtimes) is critical.
+    *   Originators SHOULD validate outputs from executors as per their application logic.
+
+### 7.2. Mandatory Validation Steps upon Receiving any `MeshProtocolMessage`
+
+Regardless of the message variant, receiving nodes SHOULD perform the following initial checks:
+
+1.  **Deserialization:** The message MUST correctly deserialize from CBOR according to its claimed type and version.
+2.  **Basic Schema Validation:** All required fields for the specific message variant and version MUST be present and have the correct basic types. Unknown fields in CBOR maps (for extensibility) MAY be ignored if not critical for the current version's processing.
+3.  **Signature Verification:** If the message type requires a signature, it MUST be present and successfully verified against the claimed sender's DID and message content.
+4.  **Timestamp Check:** The `timestamp` SHOULD be within an acceptable window (not too old, not too far in the future).
+
+Messages failing these initial checks are considered malformed or invalid and MUST be discarded, typically without further processing. Specific contextual validation then follows, as detailed in Section 5 for each message type.
+
+### 7.3. Trust and Reputation
+
+While this P2P protocol provides mechanisms for message-level security, the overall trustworthiness of network participants (e.g., an executor's likelihood of successfully completing a job as bid, an originator's likelihood of fair payment) relies on higher-level systems such as `icn-reputation`. The P2P protocol aims to provide verifiable inputs (e.g., signed messages, `ExecutionReceipts`) that can feed into such reputation systems.
+
+## 8. Future Extensions and Considerations
+
+The V1 protocol specified in this document provides a foundational set of messages for the Planetary Mesh. As the ICN ecosystem evolves, this protocol may be extended. This section outlines potential areas for future development and considerations for protocol evolution.
+
+*   **Advanced Job Types and Capabilities:**
+    *   **Multi-Party Jobs:** Support for jobs involving more than one executor or originator (e.g., complex workflows, data sharing collaborations).
+    *   **Job Modification/Cancellation:** Formal messages for requesting modifications to an assigned job (e.g., updating inputs, changing policy) or for gracefully cancelling an in-progress job, with defined responses and state transitions.
+    *   **Streaming Jobs:** Enhanced support for jobs that inherently process continuous streams of input/output beyond the current interactive model, potentially with more sophisticated flow control.
+
+*   **Enhanced Negotiation and Bidding:**
+    *   **Counter-Bids/Negotiation:** A more interactive bidding process where originators and executors can negotiate terms (price, timelines, resources) through multiple message exchanges before settling on an assignment.
+    *   **Auction Mechanisms:** Support for different auction types for job assignments (e.g., sealed-bid, second-price auctions).
+    *   **Multi-Resource Bids:** More structured ways for executors to bid on parts of a job or offer varied service levels.
+
+*   **Protocol Version Negotiation:**
+    *   As discussed in Section 3.3, explicit version negotiation mechanisms for individual message types or sub-protocols (e.g., for interactive sessions) could be introduced. This would allow peers to advertise supported versions and select a mutually understood version for communication, rather than relying solely on sender/receiver tolerance.
+
+*   **Network-Layer Enhancements:**
+    *   **More Granular Gossipsub Topics:** Further refinement of topic scoping based on emerging job characteristics or network topology to optimize message propagation.
+    *   **Alternative Transports for Specific Messages:** Evaluating other libp2p transports or custom protocols for specific use cases if performance or feature requirements dictate (e.g., for ultra-low-latency interactive streams).
+
+*   **Data Availability and Large Data Transfer:**
+    *   While CIDs are used to reference larger data (WASM, inputs, receipts), the protocol currently assumes these are retrievable via a general-purpose DHT or other means. Future extensions might include specific protocol messages to facilitate or orchestrate direct peer-to-peer transfer of large data chunks associated with jobs, potentially with progress tracking and resumability.
+
+*   **Integration with Economic Incentives:**
+    *   More direct P2P messages related to staking, micropayments, or proof-of-execution for tying into the `icn-economics` layer more deeply at the protocol level.
+    *   Messages for disputing job outcomes or payments.
+
+*   **Observability and Network Health:**
+    *   Optional messages for nodes to share anonymized/aggregated network health statistics or diagnostic information, aiding in network monitoring and debugging.
+
+*   **Formal Verification and Testing:**
+    *   As the protocol matures, applying formal verification methods to parts of the protocol specification to prove properties like liveness or safety.
+    *   Developing standardized test suites and conformance testing tools.
+
+Any future extensions will require new RFCs or updates to this specification, clearly defining new message variants (e.g., `JobAnnouncementV2`), schemas, and interaction patterns, while adhering to the compatibility principles outlined in Section 3.
+
+## 9. References
+
+This section lists documents and standards referenced in this RFC or highly relevant to its understanding.
+
+### 9.1. ICN Documents
+
+*   **RFC-0001: Planetary Mesh Architecture:**
+    *   *Link: (Pending Publication of RFC-0001)*
+    *   Provides the overall architectural context, defines `MeshNode` components, and describes the conceptual job lifecycle that this P2P protocol facilitates.
+
+*   **ADR-0002-dag-codec: Default Codec for Merkle-DAG structures:**
+    *   *Link: (Pending Publication of ADR-0002-dag-codec)*
+    *   Specifies CBOR (`dag-cbor`) as the standard codec for ICN data structures, which is adopted by this P2P protocol for message serialization.
+
+*   **(Other relevant ICN RFCs/ADRs will be linked here upon publication, e.g., for Identity, Reputation, Economics, Execution Receipts specific formats)**
+
+### 9.2. External Standards and Technologies
+
+*   **Libp2p Specifications:**
+    *   *Link: https://libp2p.io/specs/*
+    *   The foundational P2P networking stack providing transports (TCP, QUIC), stream multiplexing, peer discovery (Kademlia DHT), and pub/sub messaging (Gossipsub) utilized by this protocol.
+
+*   **CBOR (Concise Binary Object Representation):**
+    *   *Link: RFC 8949 (https://www.rfc-editor.org/info/rfc8949)*
+    *   The data serialization format used for all `MeshProtocolMessage` variants.
+
+*   **DIDs (Decentralized Identifiers):**
+    *   *Link: https://www.w3.org/TR/did-core/*
+    *   The standard for decentralized identity used for `originator_did` and `executor_did` fields in protocol messages.
+
+*   **CIDs (Content Identifiers):**
+    *   *Link: https://github.com/multiformats/cid*
+    *   Used for content-addressing data like WASM modules, job inputs, and `ExecutionReceipts`.
+
+*   **ISO 8601 (Date and Time Format):**
+    *   *Link: https://www.iso.org/iso-8601-date-and-time-format.html*
+    *   Used for `timestamp` fields in protocol messages.
+
+## 10. Concluding Summary
+
+This RFC has detailed the V1 specification for the Planetary Mesh P2P Protocol. It defines the set of `MeshProtocolMessage` variants used for communication between `MeshNode`s, covering capability advertisement, job announcement and discovery, bidding, job assignment, status updates, receipt availability, and interactive job data exchange.
+
+Key aspects covered include:
+
+*   **Transport Mechanisms:** Utilization of libp2p's Gossipsub, direct messaging, and Kademlia DHT, with CBOR as the serialization format.
+*   **Protocol Versioning:** A strategy for message variant versioning (e.g., `V1`, `V2` suffixes) and guidelines for maintaining backward and forward compatibility.
+*   **Detailed Message Specifications:** For each of the eight V1 message types, this document provides its purpose, a conceptual schema, recommended transport, processing logic by receiving nodes, and specific security considerations.
+*   **Topic Structure:** A proposed naming convention for Gossipsub topics to ensure clarity and enable efficient message routing and filtering.
+*   **Security and Validation:** A summary of overarching security principles, including message authenticity via signatures, contextual authorization, replay attack prevention, DoS mitigation, and the importance of data validation.
+
+This specification aims to provide a clear and robust foundation for developers building or interacting with the ICN Planetary Mesh. It is intended to be a living document, with future extensions and revisions managed through subsequent RFCs or updates, as outlined in the "Future Extensions and Considerations" section.
+
+By adhering to this protocol, `MeshNode` implementations can interoperate effectively, contributing to a resilient, secure, and scalable decentralized computation network. 
