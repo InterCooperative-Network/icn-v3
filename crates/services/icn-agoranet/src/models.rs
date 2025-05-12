@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use std::collections::HashMap;
 use uuid::Uuid;
+use sqlx::Type;
 
 // Timestamp alias for clarity
 pub type Timestamp = DateTime<Utc>;
@@ -330,17 +331,16 @@ pub struct TokenStatsResponse {
     pub community_id: Option<String>,
 }
 
-/// The type of entity holding tokens.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, ToSchema)]
+/// Represents the type of an entity in the ledger (User, Community, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Eq, Hash, PartialEq)] 
+#[sqlx(type_name = "entity_type", rename_all = "lowercase")]
 pub enum EntityType {
-    /// Federation (organization that coordinates coops and communities)
-    Federation,
-    /// Cooperative (economic entity)
-    Cooperative,
-    /// Community (governance entity)
-    Community,
-    /// Individual user
     User,
+    Community,
+    Cooperative,
+    Contract, // e.g., a smart contract address or identifier
+    ResourceProvider, // Represents a node providing resources
+    // Add other entity types as needed
 }
 
 /// Reference to any token-holding entity.

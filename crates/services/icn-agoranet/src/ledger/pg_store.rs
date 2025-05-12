@@ -5,6 +5,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use sqlx::postgres::PgQueryResult;
 use uuid::Uuid;
 use std::sync::Arc;
+use sqlx::Row;
 
 use crate::models::{EntityRef, EntityType, Transfer, TransferRequest};
 use super::store::{LedgerStore, LedgerError, TransferQuery, LedgerStats, BatchTransferResponse};
@@ -303,6 +304,7 @@ impl LedgerStore for PostgresLedgerStore {
                     initiator: row.initiator,
                     timestamp: row.timestamp,
                     memo: row.memo,
+                    metadata: None,
                 };
                 Ok(Some(transfer))
             },
@@ -452,6 +454,7 @@ impl LedgerStore for PostgresLedgerStore {
                 initiator,
                 timestamp,
                 memo,
+                metadata: None,
             });
         }
 
@@ -682,6 +685,7 @@ impl LedgerStore for PostgresLedgerStore {
             initiator,
             timestamp: Utc::now(),
             memo: request.memo.clone(),
+            metadata: None,
         };
 
         // Process the transfer
