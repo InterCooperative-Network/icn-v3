@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use strum_macros::Display;
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 #[repr(u32)]
 pub enum ResourceType {
     Cpu    = 1,

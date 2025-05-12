@@ -4,6 +4,7 @@ use utoipa::{IntoParams, ToSchema};
 use std::collections::HashMap;
 use uuid::Uuid;
 use sqlx::Type;
+use strum_macros::Display;
 
 // Timestamp alias for clarity
 pub type Timestamp = DateTime<Utc>;
@@ -332,12 +333,13 @@ pub struct TokenStatsResponse {
 }
 
 /// Represents the type of an entity in the ledger (User, Community, etc.)
-#[derive(Debug, Clone, Serialize, Deserialize, Type, Eq, Hash, PartialEq)] 
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Eq, Hash, PartialEq, Display, ToSchema)] 
 #[sqlx(type_name = "entity_type", rename_all = "lowercase")]
 pub enum EntityType {
     User,
-    Community,
-    Cooperative,
+    // Federation, // This variant seems to be causing issues, commented out for now
+    Organization,
+    Asset,
     Contract, // e.g., a smart contract address or identifier
     ResourceProvider, // Represents a node providing resources
     // Add other entity types as needed

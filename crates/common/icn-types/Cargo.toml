@@ -18,6 +18,8 @@ icn-crypto = { path = "../icn-crypto" }
 icn-identity = { path = "../icn-identity" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync", "rt"] }
+strum = "0.26"
+strum_macros = "0.26"
 
 [dev-dependencies]
 serde_test = "1"
