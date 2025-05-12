@@ -38,6 +38,7 @@ pub struct MeshNode {
     pub(crate) command_rx: Receiver<NodeCommand>,
     pub test_observed_reputation_submissions: Arc<RwLock<Vec<TestObservedReputationSubmission>>>,
     pub mock_reputation_store: Arc<RwLock<HashMap<Did, f64>>>,
+    pub verified_reputation_records: Arc<RwLock<HashMap<Cid, ReputationRecord>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +61,48 @@ pub struct TestObservedReputationSubmission {
 pub struct ScoredBid {
     pub bid: Bid,
     pub score: f64,
+}
+
+// Placeholder for DID resolution - replace with actual implementation
+fn resolve_did_to_public_key(did: &Did) -> Option<IcnPublicKey> {
+    // In a real implementation, this would query a DID resolver, a local cache,
+    // or use other methods to retrieve the public key associated with the DID.
+    // For testing, you might have a static map or specific logic.
+    tracing::debug!("Attempting to resolve DID: {} to a public key (STUBBED)", did);
+    // Example: If you have a way to check against known test DIDs and their public keys:
+    // if did.as_str() == "did:example:issuer1" {
+    //     // return Some(IcnPublicKey::from_bytes(KNOWN_ISSUER1_PUBLIC_KEY_BYTES).unwrap());
+    // }
+    None // Default to None if no key is found by the stubbed logic
+}
+
+fn verify_reputation_record_signature(record: &ReputationRecord) -> Result<(), String> {
+    use icn_types::reputation::get_reputation_record_signing_payload;
+    // Assuming IcnPublicKey is available from icn_identity and has a verify method
+    // Assuming Signature is the type used in ReputationRecord and by IcnPublicKey::verify
+    use icn_identity::IcnPublicKey; 
+
+    // Step 1: Recreate the signing payload
+    // The get_reputation_record_signing_payload function expects a record without a signature for payload generation.
+    // So, we clone the record and clear its signature field before generating the payload.
+    let mut record_for_payload_generation = record.clone();
+    record_for_payload_generation.signature = None;
+
+    let payload = get_reputation_record_signing_payload(&record_for_payload_generation)
+        .map_err(|e| format!("Failed to get signing payload for reputation record: {:?}", e))?;
+
+    // Step 2: Resolve the DID to public key
+    let public_key = resolve_did_to_public_key(&record.issuer)
+        .ok_or_else(|| format!("Could not resolve public key for issuer DID: {}", record.issuer))?;
+
+    // Step 3: Verify signature
+    let signature_to_verify = record.signature.as_ref()
+        .ok_or_else(|| "ReputationRecord is missing a signature to verify".to_string())?;
+    
+    // Assuming IcnPublicKey has a method like `verify(&self, msg: &[u8], signature: &YourSignatureType) -> Result<(), Error>`
+    // Adjust if your `verify` method or `Signature` type is different.
+    public_key.verify(&payload, signature_to_verify)
+        .map_err(|e| format!("Signature verification failed for issuer {}: {:?}", record.issuer, e))
 }
 
 fn evaluate_bid_against_policy(
@@ -163,6 +206,7 @@ impl MeshNode {
                 command_rx,
                 test_observed_reputation_submissions: Arc::new(RwLock::new(Vec::new())),
                 mock_reputation_store: Arc::new(RwLock::new(HashMap::new())),
+                verified_reputation_records: Arc::new(RwLock::new(HashMap::new())),
             },
             internal_action_rx,
         ))
@@ -412,6 +456,34 @@ impl MeshNode {
         Ok(())
     }
 
+    async fn fetch_reputation_record_cbor_via_kad(&mut self, record_cid: Cid) -> Result<Vec<u8>, String> {
+        tracing::debug!("Attempting to fetch reputation record CBOR for CID: {} via Kademlia GET_RECORD", record_cid);
+        let record_key = libp2p::kad::RecordKey::new(&record_cid.to_bytes());
+
+        let (tx, rx) = oneshot::channel();
+        let query_id = self.swarm.behaviour_mut().kademlia.get_record(record_key);
+        self.pending_kad_fetches.write().unwrap().insert(query_id, tx);
+
+        // Timeout for Kademlia GET operation
+        // TODO: Make timeout duration configurable
+        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(result)) => {
+                tracing::info!("Successfully received Kademlia GET_RECORD result for reputation record CID: {}", record_cid);
+                result
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Kademlia GET_RECORD oneshot channel error for reputation record CID: {}: {:?}", record_cid, e);
+                Err(format!("Oneshot channel error for {}: {:?}", record_cid, e))
+            }
+            Err(_) => {
+                tracing::warn!("Kademlia GET_RECORD timed out for reputation record CID: {}", record_cid);
+                // Clean up the pending fetch on timeout to prevent leaks if KAD doesn't respond
+                self.pending_kad_fetches.write().unwrap().remove(&query_id);
+                Err(format!("Kademlia GET_RECORD timed out for {}", record_cid))
+            }
+        }
+    }
+
     async fn handle_internal_action(&mut self, action: InternalNodeAction) -> Result<(), anyhow::Error> {
         match action {
             InternalNodeAction::ReputationSubmittedForTest(submission_data) => {
@@ -420,14 +492,82 @@ impl MeshNode {
             }
             InternalNodeAction::FetchReputationRecord { record_cid, subject_did, issuer_did } => {
                 tracing::info!(
-                    record_cid = %record_cid,
-                    subject_did = %subject_did,
-                    issuer_did = %issuer_did,
-                    "Received internal action to fetch reputation record. (Fetch logic TBD)"
+                    cid = %record_cid,
+                    subject = %subject_did,
+                    issuer = %issuer_did,
+                    "Fetching ReputationRecord via Kademlia"
                 );
-                // TODO: Phase 2, Step 5: Implement Kademlia GET logic to fetch the CBOR data for record_cid.
-                // This might involve calling a new method like self.fetch_reputation_record_via_kad(record_cid, issuer_did /* as potential provider */).await;
-                // Upon successful fetch, you would then verify the record and store it.
+
+                match self.fetch_reputation_record_cbor_via_kad(record_cid).await {
+                    Ok(record_cbor) => {
+                        // Step 1: Deserialize
+                        match serde_cbor::from_slice::<ReputationRecord>(&record_cbor) {
+                            Ok(reputation_record) => {
+                                // Step 2: Recompute CID to verify against the requested CID
+                                let recomputed_hash = Code::Sha2_256.digest(&record_cbor);
+                                let recomputed_cid = Cid::new_v1(IpldCodec::DagCbor.into(), recomputed_hash);
+
+                                if recomputed_cid != record_cid {
+                                    tracing::warn!(
+                                        expected = %record_cid,
+                                        actual = %recomputed_cid,
+                                        subject = %reputation_record.subject,
+                                        "CID mismatch: fetched ReputationRecord data does not match expected CID"
+                                    );
+                                    return Ok(()); // Early exit if CID doesn't match
+                                }
+
+                                // Step 3: Verify signature
+                                match verify_reputation_record_signature(&reputation_record) {
+                                    Ok(_) => {
+                                        tracing::info!(
+                                            cid = %record_cid,
+                                            issuer = %reputation_record.issuer,
+                                            subject = %reputation_record.subject,
+                                            "Signature on ReputationRecord is valid."
+                                        );
+
+                                        // Step 4: Store the verified record
+                                        // The key is the CID of the reputation record itself.
+                                        self.verified_reputation_records
+                                            .write()
+                                            .unwrap()
+                                            .insert(record_cid, reputation_record.clone()); // Use record_cid as key
+
+                                        tracing::info!(
+                                            cid = %record_cid,
+                                            subject = %reputation_record.subject,
+                                            "Stored verified ReputationRecord."
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            cid = %record_cid,
+                                            issuer = %reputation_record.issuer,
+                                            subject = %reputation_record.subject,
+                                            "ReputationRecord signature verification failed: {}", e
+                                        );
+                                        // Do not store if signature is invalid
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    cid = %record_cid,
+                                    "Failed to deserialize fetched ReputationRecord CBOR: {:?}", e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            cid = %record_cid,
+                            subject = %subject_did,
+                            issuer = %issuer_did,
+                            "Kademlia fetch for ReputationRecord failed: {:?}", e
+                        );
+                    }
+                }
             }
             _ => {
                 tracing::trace!("Unhandled or placeholder internal action: {:?}", action);
