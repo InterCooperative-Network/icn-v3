@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
-pub mod types;
-pub mod policy;
 pub mod economics;
+pub mod policy;
+pub mod types;
 
-pub use types::ResourceType;
-pub use policy::ResourceAuthorizationPolicy;
 pub use economics::Economics;
+pub use policy::ResourceAuthorizationPolicy;
+pub use icn_types::resource::ResourceType;
 // Using a different name for the import to avoid conflict
 pub use economics::EconomicsError as ResourceAuthorizationError;
 pub use economics::LedgerKey;

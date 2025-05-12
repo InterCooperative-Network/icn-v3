@@ -1,4 +1,5 @@
-use crate::{policy::ResourceAuthorizationPolicy, types::ResourceType};
+use crate::policy::ResourceAuthorizationPolicy;
+use icn_types::resource::ResourceType;
 use icn_identity::Did;
 use icn_types::org::{CooperativeId, CommunityId};
 use std::collections::HashMap;

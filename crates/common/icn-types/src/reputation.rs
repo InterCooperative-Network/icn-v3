@@ -207,7 +207,7 @@ pub fn compute_score(profile: &ReputationProfile) -> f64 {
     let raw_score = BASE_SCORE
         + SUCCESS_WEIGHT * success_rate
         + TIMELINESS_WEIGHT * on_time_rate
-        + ACCURACY_WEIGHT * avg_accuracy
+        + ACCURACY_WEIGHT * (avg_accuracy as f64)
         + STAKE_WEIGHT * stake_log
         - PENALTY_WEIGHT * dishonesty_events_count;
 

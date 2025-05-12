@@ -1,6 +1,6 @@
 use crate::error::CryptoError;
 use ed25519_dalek::{
-    Keypair as DalekKeypair, PublicKey, SecretKey, Signature, Signer as DalekSigner, Verifier,
+    Keypair as DalekKeypair, PublicKey, SecretKey, Signature as DalekSignature, Signer as DalekSigner, Verifier,
 };
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ impl Keypair {
             ));
         }
 
-        let sig = Signature::from_bytes(signature)
+        let sig = DalekSignature::from_bytes(signature)
             .map_err(|e| CryptoError::VerificationError(e.to_string()))?;
 
         self.inner

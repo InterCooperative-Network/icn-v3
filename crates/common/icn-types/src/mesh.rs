@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
-use icn_economics::ResourceType;
+use crate::resource::ResourceType;
 use icn_identity::Did; // Assuming Did is available from icn_identity
 use crate::org::{CooperativeId, CommunityId}; // Assuming these are in icn_types::org
 use crate::jobs::policy::ExecutionPolicy; // New import
+use crate::error::MeshError;
+use crate::trust::TrustBundleId;
 
 /// Quality of Service profile for a Mesh Job
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

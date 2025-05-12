@@ -1,5 +1,5 @@
-use crate::types::ResourceType;
 use serde::{Deserialize, Serialize};
+use icn_types::resource::ResourceType;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceAuthorizationPolicy {

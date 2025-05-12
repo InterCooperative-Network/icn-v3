@@ -156,3 +156,20 @@ pub enum VcError {
     #[error("Missing required field: {0}")]
     MissingField(String),
 }
+
+/// Mesh-related error types
+#[derive(thiserror::Error, Debug)]
+pub enum MeshError {
+    #[error("Network error: {0}")]
+    Network(String),
+    #[error("Job submission failed: {0}")]
+    JobSubmission(String),
+    #[error("Receipt error: {0}")]
+    ReceiptError(String),
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+    #[error("Operation timeout: {0}")]
+    Timeout(String),
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+}

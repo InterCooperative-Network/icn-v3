@@ -8,6 +8,7 @@ pub mod trust;
 pub mod mesh;
 pub mod jobs;
 pub mod reputation;
+pub mod resource;
 pub mod runtime_receipt;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
