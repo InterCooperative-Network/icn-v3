@@ -37,6 +37,13 @@ pub mod job_execution_context;
 mod wasm;
 pub use wasm::register_host_functions;
 
+// Import metrics module
+pub mod metrics;
+
+// Import reputation integration module
+pub mod reputation_integration;
+use reputation_integration::{ReputationUpdater, HttpReputationUpdater, NoopReputationUpdater};
+
 /// Distribution worker for periodic mana payouts
 pub mod distribution_worker;
 
@@ -233,6 +240,9 @@ pub struct Runtime {
 
     /// Host environment
     host_env: Option<Arc<Mutex<ConcreteHostEnvironment>>>,
+    
+    /// Optional reputation updater
+    reputation_updater: Option<Arc<dyn ReputationUpdater>>,
 }
 
 impl Runtime {
@@ -248,12 +258,19 @@ impl Runtime {
         Self {
             vm: CoVm::default(),
             storage,
-            context: RuntimeContext::new(),
+            context: RuntimeContext::default(),
             engine,
             linker,
             module_cache,
             host_env,
+            reputation_updater: None,
         }
+    }
+    
+    /// Set a reputation updater for this runtime
+    pub fn with_reputation_updater(mut self, updater: Arc<dyn ReputationUpdater>) -> Self {
+        self.reputation_updater = Some(updater);
+        self
     }
     
     /// Get a reference to the runtime context
@@ -465,6 +482,25 @@ impl Runtime {
             .map_err(|e| RuntimeError::ReceiptError(e.to_string()))?;
 
         let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;
+        
+        // Create a copy of the receipt with the CID included
+        let receipt_with_cid = RuntimeExecutionReceipt {
+            receipt_cid: Some(receipt_cid.clone()),
+            ..receipt.clone()
+        };
+        
+        // If a reputation updater is configured, submit the reputation record
+        if let Some(updater) = &self.reputation_updater {
+            match updater.submit_receipt_based_reputation(&receipt_with_cid).await {
+                Ok(_) => {
+                    tracing::info!("Successfully submitted reputation record for receipt {}", receipt.id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to submit reputation record for receipt {}: {}", receipt.id, e);
+                    // We don't fail the method if reputation update fails - just log the error
+                }
+            }
+        }
 
         Ok(receipt_cid)
     }
@@ -546,6 +582,24 @@ impl Runtime {
             coop_id: None,
             community_id: None,
         })
+    }
+
+    /// Create a new runtime with the given context
+    pub fn with_context(storage: Arc<dyn RuntimeStorage>, context: RuntimeContext) -> Self {
+        let mut runtime = Self::new(storage);
+        runtime.context = context.clone();
+        
+        // Configure reputation updater if both URL and identity are available
+        if let (Some(url), Some(identity)) = (context.reputation_service_url(), context.identity()) {
+            let updater = Arc::new(HttpReputationUpdater::new(
+                url.clone(),
+                identity.did().clone(),
+            ));
+            runtime = runtime.with_reputation_updater(updater);
+            tracing::info!("Configured reputation updater with service URL: {}", url);
+        }
+        
+        runtime
     }
 }
 

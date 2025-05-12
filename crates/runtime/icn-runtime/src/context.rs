@@ -8,6 +8,8 @@ use icn_types::mesh::MeshJob;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use icn_identity::IdentityIndex;
+use icn_identity::KeyPair;
+use crate::reputation_integration::{ReputationUpdater, HttpReputationUpdater};
 
 /// High-level execution state of the currently running job / stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +62,12 @@ pub struct RuntimeContext {
 
     /// Optional identity index for DID -> org lookups
     pub identity_index: Option<Arc<IdentityIndex>>,
+
+    /// Optional identity for the runtime
+    identity: Option<KeyPair>,
+    
+    /// Optional reputation service URL
+    reputation_service_url: Option<String>,
 }
 
 impl RuntimeContext {
@@ -78,6 +86,8 @@ impl RuntimeContext {
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
             identity_index: None,
+            identity: None,
+            reputation_service_url: None,
         }
     }
 
@@ -96,6 +106,8 @@ impl RuntimeContext {
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
             identity_index: None,
+            identity: None,
+            reputation_service_url: None,
         }
     }
 
@@ -149,6 +161,18 @@ impl RuntimeContext {
     pub fn update_status(&mut self, status: ExecutionStatus) {
         self.execution_status = status;
     }
+
+    pub fn dag_store(&self) -> Arc<SharedDagStore> {
+        self.dag_store.clone()
+    }
+    
+    pub fn identity(&self) -> Option<&KeyPair> {
+        self.identity.as_ref()
+    }
+    
+    pub fn reputation_service_url(&self) -> Option<&String> {
+        self.reputation_service_url.as_ref()
+    }
 }
 
 impl Default for RuntimeContext {
@@ -166,6 +190,8 @@ pub struct RuntimeContextBuilder {
     trust_validator: Option<Arc<TrustValidator>>,
     economics: Option<Arc<Economics>>,
     identity_index: Option<Arc<IdentityIndex>>,
+    identity: Option<KeyPair>,
+    reputation_service_url: Option<String>,
 }
 
 impl RuntimeContextBuilder {
@@ -179,6 +205,8 @@ impl RuntimeContextBuilder {
             trust_validator: None,
             economics: None,
             identity_index: None,
+            identity: None,
+            reputation_service_url: None,
         }
     }
 
@@ -224,26 +252,41 @@ impl RuntimeContextBuilder {
         self
     }
 
+    /// Set the identity for the runtime
+    pub fn with_identity(mut self, identity: KeyPair) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    /// Set the reputation service URL for automatic reputation updates
+    pub fn with_reputation_service(mut self, url: String) -> Self {
+        self.reputation_service_url = Some(url);
+        self
+    }
+
     /// Build the RuntimeContext
     pub fn build(self) -> RuntimeContext {
         let dag_store = self.dag_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
         let receipt_store = self.receipt_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
-        let economics = self.economics.unwrap_or_else(|| {
-            Arc::new(Economics::new(ResourceAuthorizationPolicy::default()))
-        });
+        let federation_id = self.federation_id;
+        let executor_id = self.executor_id;
+        let trust_validator = self.trust_validator;
+        let economics = self.economics.unwrap_or_else(|| Arc::new(Economics::new(ResourceAuthorizationPolicy::default())));
         let resource_ledger = Arc::new(RwLock::new(HashMap::new()));
         let pending_mesh_jobs = Arc::new(Mutex::new(VecDeque::new()));
         let mana_manager = Arc::new(Mutex::new(ManaManager::new()));
         let interactive_input_queue = Arc::new(Mutex::new(VecDeque::new()));
         let execution_status = ExecutionStatus::Running;
         let identity_index = self.identity_index;
+        let identity = self.identity;
+        let reputation_service_url = self.reputation_service_url;
 
-        RuntimeContext {
+        let mut context = RuntimeContext {
             dag_store,
             receipt_store,
-            federation_id: self.federation_id,
-            executor_id: self.executor_id,
-            trust_validator: self.trust_validator,
+            federation_id,
+            executor_id,
+            trust_validator,
             economics,
             resource_ledger,
             pending_mesh_jobs,
@@ -251,6 +294,12 @@ impl RuntimeContextBuilder {
             interactive_input_queue,
             execution_status,
             identity_index,
-        }
+            identity,
+            reputation_service_url,
+        };
+        
+        // The reputation updater will be configured when the RuntimeContext is used to create a Runtime instance
+        
+        context
     }
 } 
