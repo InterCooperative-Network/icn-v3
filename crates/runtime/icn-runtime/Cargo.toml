@@ -15,7 +15,6 @@ log = "0.4.20"
 tracing = "0.1"
 icn-types = { path = "../../common/icn-types" }
 icn-identity = { path = "../../common/icn-identity" }
-icn-identity-core = { path = "../../common/icn-identity-core", optional = true }
 icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
 icn-core-vm = { path = "../icn-core-vm" }
 icn-economics = { path = "../../common/icn-economics" }
@@ -38,5 +37,4 @@ wat = "1.0"
 wasm-encoder = "0.31"
 
 [features]
-default = []
-legacy-identity = ["icn-identity-core"] 
+default = [] 

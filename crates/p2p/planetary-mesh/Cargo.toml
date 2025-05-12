@@ -20,7 +20,7 @@ icn-identity = { path = "../../common/icn-identity" }
 icn-economics = { path = "../../common/icn-economics" }
 icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
 icn-runtime = { path = "../../runtime/icn-runtime" }
-icn-core-vm = { path = "../../core/icn-core-vm" }
+icn-core-vm = { path = "../../runtime/icn-core-vm" }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.4", features = ["v4", "serde"] }
 serde_cbor = "0.11"

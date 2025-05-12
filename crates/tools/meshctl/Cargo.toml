@@ -15,7 +15,7 @@ log = "0.4.20"
 clap = { version = "4.4.7", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["full"] }
 icn-types = { path = "../../common/icn-types" }
-icn-identity-core = { path = "../../common/icn-identity-core" }
+icn-identity = { path = "../../common/icn-identity" }
 icn-economics = { path = "../../common/icn-economics" }
 icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
 planetary-mesh = { path = "../../p2p/planetary-mesh" }

@@ -39,7 +39,7 @@ pub struct Proof {
     pub verification_method: String,
     #[serde(rename = "proofPurpose")]
     pub proof_purpose: String,
-    pub jws: String, // detached JWS (compact, but we'll store raw sig bytes)
+    pub signature_value_hex: String, // hex-encoded raw signature bytes
 }
 
 #[derive(Debug, Error)]
@@ -96,7 +96,7 @@ where
             created: chrono::Utc::now(),
             verification_method: kp.did.as_str().into(),
             proof_purpose: "assertionMethod".into(),
-            jws: hex::encode(sig.to_bytes()), // placeholder encoding
+            signature_value_hex: hex::encode(sig.to_bytes()),
         });
 
         Ok(SignedCredential { vc: self, signature: sig })

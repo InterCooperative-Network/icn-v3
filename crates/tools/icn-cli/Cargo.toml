@@ -14,7 +14,6 @@ log = "0.4.20"
 clap = { version = "4.4.6", features = ["derive"] }
 tokio = { version = "1.33.0", features = ["full"] }
 icn-types = { path = "../../common/icn-types" }
-icn-identity-core = { path = "../../common/icn-identity-core" }
 icn-ccl-compiler = { path = "../../ccl/icn-ccl-compiler" }
 icn-core-vm = { path = "../../runtime/icn-core-vm" }
 icn-runtime = { path = "../../runtime/icn-runtime" }

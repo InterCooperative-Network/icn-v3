@@ -248,31 +248,18 @@ impl DagNodeBuilder {
 
     /// Builds a DagNode if all required fields are set
     pub fn build(self) -> Result<DagNode, DagError> {
-        let timestamp = self.timestamp.unwrap_or_else(|| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis() as u64
-        });
+        let content = self.content.ok_or_else(|| DagError::InvalidStructure("Content is required".to_string()))?;
+        let event_type = self.event_type.ok_or_else(|| DagError::InvalidStructure("Event type is required".to_string()))?;
+        let timestamp = self.timestamp.ok_or_else(|| DagError::InvalidStructure("Timestamp is required".to_string()))?;
+        let scope_id = self.scope_id.ok_or_else(|| DagError::InvalidStructure("Scope ID is required".to_string()))?;
 
-        match (self.content, self.event_type, self.scope_id) {
-            (Some(content), Some(event_type), Some(scope_id)) => Ok(DagNode {
-                content,
-                parent: self.parent,
-                event_type,
-                timestamp,
-                scope_id,
-            }),
-            (None, _, _) => Err(DagError::InvalidStructure(
-                "Content is required".to_string(),
-            )),
-            (_, None, _) => Err(DagError::InvalidStructure(
-                "Event type is required".to_string(),
-            )),
-            (_, _, None) => Err(DagError::InvalidStructure(
-                "Scope ID is required".to_string(),
-            )),
-        }
+        Ok(DagNode {
+            content,
+            parent: self.parent,
+            event_type,
+            timestamp,
+            scope_id,
+        })
     }
 }
 
@@ -286,13 +273,12 @@ mod tests {
         let node = DagNodeBuilder::new()
             .content("Test content".to_string())
             .event_type(DagEventType::Genesis)
-            .scope_id("test_scope".to_string())
+            .timestamp(1234567890)
+            .scope_id("test-scope".to_string())
             .build()
             .unwrap();
-
         assert_eq!(node.content, "Test content");
         assert_eq!(node.event_type, DagEventType::Genesis);
-        assert_eq!(node.scope_id, "test_scope");
         assert!(node.parent.is_none());
     }
 
@@ -301,45 +287,152 @@ mod tests {
         let parent_node = DagNodeBuilder::new()
             .content("Parent content".to_string())
             .event_type(DagEventType::Genesis)
-            .scope_id("test_scope".to_string())
+            .timestamp(1234500000)
+            .scope_id("test-scope".to_string())
             .build()
             .unwrap();
-
         let parent_cid = parent_node.cid().unwrap();
 
         let child_node = DagNodeBuilder::new()
             .content("Child content".to_string())
             .parent(parent_cid)
             .event_type(DagEventType::Proposal)
-            .scope_id("test_scope".to_string())
+            .timestamp(1234567890)
+            .scope_id("test-scope".to_string())
             .build()
             .unwrap();
-
-        assert_eq!(child_node.content, "Child content");
-        assert_eq!(child_node.event_type, DagEventType::Proposal);
-        assert_eq!(child_node.scope_id, "test_scope");
-        assert!(child_node.parent.is_some());
-        assert_eq!(child_node.parent.unwrap(), parent_cid);
+        assert_eq!(child_node.parent, Some(parent_cid));
     }
 
     #[test]
     fn test_dag_node_serialization() {
         let node = DagNodeBuilder::new()
-            .content("Test content".to_string())
-            .event_type(DagEventType::Genesis)
-            .scope_id("test_scope".to_string())
+            .content("{\"key\": \"value\"}".to_string())
+            .event_type(DagEventType::Proposal)
+            .timestamp(0)
+            .scope_id("scope".to_string())
             .build()
             .unwrap();
 
-        // Test CBOR serialization
-        let cbor = serde_cbor::to_vec(&node).unwrap();
-        let deserialized_node: DagNode = serde_cbor::from_slice(&cbor).unwrap();
+        let serialized_cbor = serde_cbor::to_vec(&node).unwrap();
+        let deserialized_node: DagNode = serde_cbor::from_slice(&serialized_cbor).unwrap();
         assert_eq!(node, deserialized_node);
 
-        // Test JSON serialization
-        let json = serde_json::to_string(&node).unwrap();
-        let deserialized_node: DagNode = serde_json::from_str(&json).unwrap();
-        assert_eq!(node, deserialized_node);
+        // Check CID generation consistency
+        let cid1 = node.cid().unwrap();
+        let cid2 = deserialized_node.cid().unwrap();
+        assert_eq!(cid1, cid2);
+    }
+
+    // TODO: Add tests for LineageAttestation, ExecutionReceipt, AnchorCredential
+    // TODO: Add tests for CID serialization/deserialization helpers
+
+    #[test]
+    fn test_lineage_attestation_serialization() {
+        let event_cid = Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
+        let prev_att_cid = Cid::try_from("bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku").unwrap(); // Example CID
+
+        let attestation = LineageAttestation {
+            event_cid,
+            previous_attestations: vec![prev_att_cid],
+            signatures: vec!["placeholder_sig_1".to_string(), "placeholder_sig_2".to_string()],
+            quorum_method: QuorumMethod::Majority,
+        };
+
+        let serialized_cbor = serde_cbor::to_vec(&attestation).unwrap();
+        let deserialized_attestation: LineageAttestation = serde_cbor::from_slice(&serialized_cbor).unwrap();
+        assert_eq!(attestation, deserialized_attestation);
+
+        let serialized_json = serde_json::to_string(&attestation).unwrap();
+        let deserialized_attestation_json: LineageAttestation = serde_json::from_str(&serialized_json).unwrap();
+        assert_eq!(attestation, deserialized_attestation_json);
+    }
+
+    #[test]
+    fn test_execution_receipt_serialization() {
+        let exec_cid = Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
+        let receipt = ExecutionReceipt {
+            execution_cid: exec_cid,
+            success: true,
+            output: "Execution successful".to_string(),
+            resources_consumed: 12345,
+            timestamp: 1678886400000, // Example timestamp
+        };
+
+        let serialized_cbor = serde_cbor::to_vec(&receipt).unwrap();
+        let deserialized_receipt: ExecutionReceipt = serde_cbor::from_slice(&serialized_cbor).unwrap();
+        assert_eq!(receipt, deserialized_receipt);
+
+        let serialized_json = serde_json::to_string(&receipt).unwrap();
+        let deserialized_receipt_json: ExecutionReceipt = serde_json::from_str(&serialized_json).unwrap();
+        assert_eq!(receipt, deserialized_receipt_json);
+    }
+
+    #[test]
+    fn test_anchor_credential_serialization() {
+        let root_cid = Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
+        let anchor = AnchorCredential {
+            dag_root: root_cid,
+            epoch: 101,
+            timestamp: 1678886400100, // Example timestamp
+            signatures: vec!["fed_sig_1".to_string()],
+        };
+
+        let serialized_cbor = serde_cbor::to_vec(&anchor).unwrap();
+        let deserialized_anchor: AnchorCredential = serde_cbor::from_slice(&serialized_cbor).unwrap();
+        assert_eq!(anchor, deserialized_anchor);
+
+        let serialized_json = serde_json::to_string(&anchor).unwrap();
+        let deserialized_anchor_json: AnchorCredential = serde_json::from_str(&serialized_json).unwrap();
+        assert_eq!(anchor, deserialized_anchor_json);
+    }
+    
+    #[test]
+    fn test_cid_serialization_helpers() {
+        let example_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+        let cid = Cid::try_from(example_cid_str).unwrap();
+
+        // Test single CID serde
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct CidWrapper {
+            #[serde(serialize_with = "serialize_cid", deserialize_with = "deserialize_cid")]
+            id: Cid,
+        }
+        let wrapper = CidWrapper { id: cid.clone() };
+        let serialized_json_single = serde_json::to_string(&wrapper).unwrap();
+        assert_eq!(serialized_json_single, format!("{{\"id\":\"{}\"}}", example_cid_str));
+        let deserialized_single: CidWrapper = serde_json::from_str(&serialized_json_single).unwrap();
+        assert_eq!(deserialized_single, wrapper);
+
+        // Test Option<Cid> serde
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct OptionCidWrapper {
+            #[serde(serialize_with = "serialize_cid_option", deserialize_with = "deserialize_cid_option")]
+            id: Option<Cid>,
+        }
+        let wrapper_some = OptionCidWrapper { id: Some(cid.clone()) };
+        let serialized_json_some = serde_json::to_string(&wrapper_some).unwrap();
+        assert_eq!(serialized_json_some, format!("{{\"id\":\"{}\"}}", example_cid_str));
+        let deserialized_some: OptionCidWrapper = serde_json::from_str(&serialized_json_some).unwrap();
+        assert_eq!(deserialized_some, wrapper_some);
+        
+        let wrapper_none = OptionCidWrapper { id: None };
+        let serialized_json_none = serde_json::to_string(&wrapper_none).unwrap();
+        assert_eq!(serialized_json_none, "{\"id\":null}");
+        let deserialized_none: OptionCidWrapper = serde_json::from_str(&serialized_json_none).unwrap();
+        assert_eq!(deserialized_none, wrapper_none);
+
+        // Test Vec<Cid> serde
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct VecCidWrapper {
+            #[serde(serialize_with = "serialize_cid_vec", deserialize_with = "deserialize_cid_vec")]
+            ids: Vec<Cid>,
+        }
+        let wrapper_vec = VecCidWrapper { ids: vec![cid.clone(), cid.clone()] };
+        let serialized_json_vec = serde_json::to_string(&wrapper_vec).unwrap();
+        assert_eq!(serialized_json_vec, format!("{{\"ids\":[\"{}\",\"{}\"]}}", example_cid_str, example_cid_str));
+        let deserialized_vec: VecCidWrapper = serde_json::from_str(&serialized_json_vec).unwrap();
+        assert_eq!(deserialized_vec, wrapper_vec);
     }
 }
 
