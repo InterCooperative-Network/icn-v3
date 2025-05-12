@@ -606,6 +606,12 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         }
         Ok(0)
     }
+
+    // ---------------- Mana stubs ----------------
+
+    fn host_account_get_mana(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _did_ptr: u32, _did_len: u32) -> Result<i64, AnyhowError> { Ok(0) }
+
+    fn host_account_spend_mana(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _did_ptr: u32, _did_len: u32, _amount: u64) -> Result<i32, AnyhowError> { Ok(0) }
 }
 
 #[cfg(not(feature = "full_host_abi"))]
@@ -639,4 +645,8 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     fn host_data_write_buffer(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _data_ptr: u32, _data_len: u32, _cid_buf_ptr: u32, _cid_buf_len: u32) -> Result<i32, AnyhowError> { Ok(0) }
 
     fn host_log_message(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _level: LogLevel, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_account_get_mana(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _did_ptr: u32, _did_len: u32) -> Result<i64, AnyhowError> { Ok(0) }
+
+    fn host_account_spend_mana(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _did_ptr: u32, _did_len: u32, _amount: u64) -> Result<i32, AnyhowError> { Ok(0) }
 } 

@@ -42,4 +42,6 @@ wat = "1.0"
 wasm-encoder = "0.31"
 
 [features]
-default = [] 
+# Minimal build excludes heavy host ABI and wasm linker code.
+default = []
+full_host_abi = [] 

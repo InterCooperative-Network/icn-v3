@@ -34,4 +34,6 @@ tracing = { version = "0.1", features = ["log"] }
 tempfile = "3.2"
 
 [features]
-# Add features if needed later 
+default = []
+# Enable to compile full P2P planetary mesh logic (heavy deps, WIP)
+full_mesh = [] 

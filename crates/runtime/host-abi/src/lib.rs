@@ -406,4 +406,28 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         message_ptr: u32,
         message_len: u32,
     ) -> Result<i32, AnyhowError>;
+
+    // ------------------- VI. Mana (Regenerating Execution Resource) -------------------
+
+    /// Returns the current available mana for the specified DID/org.
+    /// If `did_ptr` is 0, the host will use the executor DID of the running job.
+    ///
+    /// # Returns
+    /// * `i64` – current mana balance (can be > i32::MAX). Negative `HostAbiError` codes on failure.
+    fn host_account_get_mana(
+        &self,
+        caller: wasmtime::Caller<T>,
+        did_ptr: u32,
+        did_len: u32,
+    ) -> Result<i64, AnyhowError>;
+
+    /// Attempts to deduct `amount` mana units from the specified DID/org.
+    /// Returns 0 on success or `HostAbiError::InsufficientResources` style negative codes on failure.
+    fn host_account_spend_mana(
+        &self,
+        caller: wasmtime::Caller<T>,
+        did_ptr: u32,
+        did_len: u32,
+        amount: u64,
+    ) -> Result<i32, AnyhowError>;
 } 

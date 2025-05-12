@@ -1,3 +1,5 @@
+#![cfg(feature = "full_mesh")]
+
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -20,7 +22,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod protocol;
-pub use protocol::{MeshProtocolMessage, NodeCapability, JobId};
+pub use protocol::{MeshProtocolMessage, JobId};
 
 pub mod behaviour;
 pub use behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC};
