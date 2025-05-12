@@ -1,19 +1,19 @@
 use assert_matches::assert_matches;
-use ed25519_dalek::Keypair;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use icn_crypto::{sign_detached_jws, verify_detached_jws};
 use rand::rngs::OsRng;
 
 #[test]
 fn test_jws_sign_verify_roundtrip() {
-    let mut csprng = OsRng {};
-    let keypair = Keypair::generate(&mut csprng);
-    let public_key = keypair.public;
+    let mut csprng = OsRng;
+    let signing_key: SigningKey = SigningKey::generate(&mut csprng);
+    let public_key: VerifyingKey = VerifyingKey::from(&signing_key);
 
     // Test payload
     let payload = b"test payload for JWS signing";
 
     // Sign the payload
-    let detached_jws = sign_detached_jws(payload, &keypair).expect("Failed to sign payload");
+    let detached_jws = sign_detached_jws(payload, &signing_key).expect("Failed to sign payload");
 
     // Verify the signature
     let result = verify_detached_jws(payload, &detached_jws, &public_key);

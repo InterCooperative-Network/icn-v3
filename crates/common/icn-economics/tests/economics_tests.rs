@@ -3,16 +3,16 @@ use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType, Ledger
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 
-#[test]
-fn authorize_ok_and_record() {
+#[tokio::test]
+async fn authorize_ok_and_record() {
     let econ = Economics::new(ResourceAuthorizationPolicy::default());
     let did  = KeyPair::generate().did;
     let ledger = RwLock::new(HashMap::new());
 
     assert_eq!(econ.authorize(&did, None, None, ResourceType::Token, 10), 0);
-    assert_eq!(econ.record(&did, None, None, ResourceType::Token, 10, &ledger), 0);
+    assert_eq!(econ.record(&did, None, None, ResourceType::Token, 10, &ledger).await, 0);
 
-    let l = ledger.blocking_read();
+    let l = ledger.read().await;
     let key = LedgerKey {
         did: did.to_string(),
         coop_id: None,
@@ -22,15 +22,15 @@ fn authorize_ok_and_record() {
     assert_eq!(*l.get(&key).unwrap(), 10);
 }
 
-#[test]
-fn authorize_fail() {
+#[tokio::test]
+async fn authorize_fail() {
     let econ = Economics::new(ResourceAuthorizationPolicy { token_allowance: 5, ..Default::default() });
     let did  = KeyPair::generate().did;
     assert_eq!(econ.authorize(&did, None, None, ResourceType::Token, 10), -1);
 }
 
-#[test]
-fn test_transfer_success() {
+#[tokio::test]
+async fn test_transfer_success() {
     let econ = Economics::new(ResourceAuthorizationPolicy::default());
     let sender = KeyPair::generate().did;
     let recipient = KeyPair::generate().did;
@@ -57,7 +57,7 @@ fn test_transfer_success() {
     let result = econ.transfer(
         &sender, None, None,
         &recipient, None, None,
-        ResourceType::Token, 40, &ledger);
+        ResourceType::Token, 40, &ledger).await;
     
     assert_eq!(result, 0, "Transfer should succeed");
     
@@ -85,8 +85,8 @@ fn test_transfer_success() {
     }
 }
 
-#[test]
-fn test_transfer_insufficient_funds() {
+#[tokio::test]
+async fn test_transfer_insufficient_funds() {
     let econ = Economics::new(ResourceAuthorizationPolicy::default());
     let sender = KeyPair::generate().did;
     let recipient = KeyPair::generate().did;
@@ -113,7 +113,7 @@ fn test_transfer_insufficient_funds() {
     let result = econ.transfer(
         &sender, None, None,
         &recipient, None, None,
-        ResourceType::Token, 40, &ledger);
+        ResourceType::Token, 40, &ledger).await;
     
     assert_eq!(result, -1, "Transfer should fail due to insufficient funds");
     

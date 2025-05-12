@@ -85,7 +85,7 @@ mod tests {
         ExecutionReceipt {
             job_id: "test_job_123".to_string(),
             executor: kp.did.clone(),
-            status: JobStatus::CompletedSuccess,
+            status: JobStatus::Completed,
             result_data_cid: Some("mock_result_cid".to_string()),
             logs_cid: Some("mock_logs_cid".to_string()),
             resource_usage: usage,

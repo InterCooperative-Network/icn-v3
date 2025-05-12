@@ -14,8 +14,8 @@ members = [
     "crates/runtime/icn-runtime",
     "crates/runtime/host-abi",
     "crates/p2p/planetary-mesh",
-    # "crates/tools/icn-cli",  # Temporarily excluded
-    # "crates/tools/meshctl",  # Temporarily excluded
+    "crates/tools/icn-cli",
+    "crates/tools/meshctl",
     # "crates/services/icn-mesh-jobs",  # Temporarily excluded
     # "tests/federation_bootstrap_test",  # Temporarily excluded
 ]
@@ -36,8 +36,8 @@ default-members = [
     "crates/runtime/icn-runtime",
     "crates/runtime/host-abi",
     "crates/p2p/planetary-mesh",
-    # "crates/tools/icn-cli",
-    # "crates/tools/meshctl",
+    "crates/tools/icn-cli",
+    "crates/tools/meshctl",
     # "crates/services/icn-mesh-jobs",
     # "tests/federation_bootstrap_test",
 ]

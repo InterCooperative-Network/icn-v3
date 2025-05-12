@@ -1,8 +1,9 @@
-use chrono::Utc;
+use chrono::{Utc, DateTime, NaiveDateTime};
 use icn_economics::ResourceType;
 use icn_identity::KeyPair;
 use icn_mesh_receipts::ExecutionReceipt;
 use icn_types::org::{CooperativeId, CommunityId};
+use icn_types::mesh::JobStatus;
 use std::collections::HashMap;
 use serde_cbor;
 use serde_json;
@@ -20,12 +21,22 @@ fn test_receipt_with_org_identifiers() {
     // Generate a valid DID
     let kp = KeyPair::generate();
     
+    // Fixed timestamps for deterministic testing
+    let start_time = 1_672_502_400u64; // 2023-01-01 00:00:00 UTC
+    let end_time = 1_672_506_000u64;   // 2023-01-01 01:00:00 UTC
+    let end_dt: DateTime<Utc> = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(end_time as i64, 0), Utc);
+
     // Create a receipt with organization identifiers
     let receipt = ExecutionReceipt {
-        task_cid: "test-task-cid".to_string(),
+        job_id: "test-job-id".to_string(),
         executor: kp.did.clone(),
+        status: JobStatus::Completed,
+        result_data_cid: None,
+        logs_cid: None,
         resource_usage: usage.clone(),
-        timestamp: Utc::now(),
+        execution_start_time: start_time,
+        execution_end_time: end_time,
+        execution_end_time_dt: end_dt,
         signature: vec![1, 2, 3, 4],
         coop_id: Some(coop_id.clone()),
         community_id: Some(community_id.clone()),
@@ -59,12 +70,22 @@ fn test_cid_changes_with_different_orgs() {
     // Generate a valid DID
     let kp = KeyPair::generate();
     
+    // Fixed timestamps
+    let start_time = 1_672_502_400u64;
+    let end_time = 1_672_506_000u64;
+    let end_dt: DateTime<Utc> = DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(end_time as i64, 0), Utc);
+
     // Create a receipt with no org IDs
     let receipt1 = ExecutionReceipt {
-        task_cid: "task-123".to_string(),
+        job_id: "task-123".to_string(),
         executor: kp.did.clone(),
+        status: JobStatus::Completed,
+        result_data_cid: None,
+        logs_cid: None,
         resource_usage: usage.clone(),
-        timestamp: Utc::now(),
+        execution_start_time: start_time,
+        execution_end_time: end_time,
+        execution_end_time_dt: end_dt,
         signature: vec![1, 2, 3, 4],
         coop_id: None,
         community_id: None,

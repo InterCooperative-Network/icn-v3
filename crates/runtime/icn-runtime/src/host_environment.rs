@@ -154,7 +154,7 @@ impl ConcreteHostEnvironment {
     }
 }
 
-#[cfg(feature = "full_host_abi")]
+#[cfg(feature = "legacy_host_abi_impl")]
 impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     // **I. Job & Workflow Information **
     fn host_job_get_id(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, AnyhowError> {
@@ -637,7 +637,7 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     }
 }
 
-#[cfg(not(feature = "full_host_abi"))]
+#[cfg(not(feature = "legacy_host_abi_impl"))]
 impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     fn host_job_get_id(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
 

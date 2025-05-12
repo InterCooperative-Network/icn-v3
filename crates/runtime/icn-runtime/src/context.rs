@@ -8,6 +8,14 @@ use icn_types::mesh::MeshJob;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+/// High-level execution state of the currently running job / stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
 /// Runtime context for execution environments
 ///
 /// Provides shared infrastructure and state needed across the runtime,
@@ -42,6 +50,12 @@ pub struct RuntimeContext {
 
     /// Regenerating execution resource pools ("mana") by DID/org
     pub mana_manager: Arc<Mutex<ManaManager>>,
+
+    /// Simple FIFO queue of raw interactive input messages pushed by the host.
+    pub interactive_input_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
+
+    /// Current high-level execution status.
+    pub execution_status: ExecutionStatus,
 }
 
 impl RuntimeContext {
@@ -57,6 +71,8 @@ impl RuntimeContext {
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
+            interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
+            execution_status: ExecutionStatus::Running,
         }
     }
 
@@ -72,6 +88,8 @@ impl RuntimeContext {
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
+            interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
+            execution_status: ExecutionStatus::Running,
         }
     }
 
@@ -113,6 +131,11 @@ impl RuntimeContext {
     /// Return a builder for this context
     pub fn builder() -> RuntimeContextBuilder {
         RuntimeContextBuilder::new()
+    }
+
+    /// Update the execution status atomically.
+    pub fn update_status(&mut self, status: ExecutionStatus) {
+        self.execution_status = status;
     }
 }
 
@@ -191,6 +214,8 @@ impl RuntimeContextBuilder {
         let resource_ledger = Arc::new(RwLock::new(HashMap::new()));
         let pending_mesh_jobs = Arc::new(Mutex::new(VecDeque::new()));
         let mana_manager = Arc::new(Mutex::new(ManaManager::new()));
+        let interactive_input_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let execution_status = ExecutionStatus::Running;
 
         RuntimeContext {
             dag_store,
@@ -202,6 +227,8 @@ impl RuntimeContextBuilder {
             resource_ledger,
             pending_mesh_jobs,
             mana_manager,
+            interactive_input_queue,
+            execution_status,
         }
     }
 } 

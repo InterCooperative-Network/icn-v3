@@ -17,7 +17,7 @@ use chrono::{Utc, DateTime};
 use cid::Cid;
 use icn_identity::KeyPair as IcnKeyPair;
 use icn_types::mesh::{MeshJob, JobStatus as IcnJobStatus, MeshJobParams, QoSProfile, WorkflowType};
-use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place};
+use icn_mesh_receipts::{sign_receipt_in_place};
 use icn_mesh_protocol::P2PJobStatus;
 
 // Import the context module
@@ -562,7 +562,7 @@ mod tests {
     use anyhow::anyhow;
     use icn_identity::{TrustBundle, TrustValidator, KeyPair};
     use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType};
-    use icn_mesh_receipts::JobStatus;
+    use icn_types::mesh::JobStatus;
     use std::fs;
     use std::sync::{Arc, Mutex};
     use tokio::runtime::Runtime as TokioRuntime;
@@ -836,3 +836,5 @@ pub async fn execute_mesh_job(
 
     Ok(receipt)
 }
+
+pub use icn_mesh_receipts::ExecutionReceipt;
