@@ -250,16 +250,66 @@ async fn test_full_job_lifecycle() {
             if let Some(submission) = observed_submissions.iter().find(|s| {
                 s.job_id == job_id && 
                 s.executor_did == expected_winner_did && 
-                s.anchor_cid == captured_receipt_cid
+                s.outcome == StandardJobStatus::Succeeded && // Assuming success for this main flow
+                s.anchor_cid.is_some()
             }) {
-                println!("Observed reputation submission for {}: {:?}", expected_winner_did, submission);
-                assert_eq!(submission.outcome, StandardJobStatus::Completed, "Reputation outcome mismatch for winner.");
+                println!(
+                    "Reputation submission for job {} (executor {}) observed on originator with anchor_cid: {:?}.", 
+                    job_id, expected_winner_did, submission.anchor_cid
+                );
+                // Assert the anchor CID is present and matches the one in the DAG store (if checking originator's DAG)
+                let originator_dag_store = planetary_mesh::node::test_utils::get_receipt_store_dag_nodes_arc(&originator_node_instance); // Assuming this gets DAG store
+                assert!(
+                    originator_dag_store.read().unwrap().contains_key(&submission.anchor_cid.unwrap()),
+                    "Originator DAG store does not contain the anchored reputation record CID: {:?}",
+                    submission.anchor_cid.unwrap()
+                );
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
-    }).await.expect("Timed out waiting for observed reputation submission for the correct executor");
-    println!("Reputation update submission successfully verified for executor {} regarding job {}.", expected_winner_did, job_id);
+    }).await.expect("Timed out waiting for originator to observe reputation submission for the winning executor");
+
+    // --- NEW: Executor verifies the reputation record issued by the originator ---
+    println!("Executor ({}) waiting to receive, fetch, and verify reputation record from Originator ({}) for job {}...", 
+        expected_winner_did, originator_did, job_id);
+    
+    // Wait for the executor node (expected_winner_did, which is executor2) to receive, fetch, and verify the reputation record.
+    tokio::time::sleep(Duration::from_secs(10)).await; // Allow time for gossip, Kademlia fetch, and processing. Adjust if needed.
+
+    // Get the CID from the originator's reputation submission (we already have originator_observed_reputation_submissions)
+    let submissions_on_originator = originator_observed_reputation_submissions.read().unwrap();
+    let last_submission_by_originator = submissions_on_originator.iter()
+        .filter(|s| s.job_id == job_id && s.executor_did == expected_winner_did)
+        .last()
+        .expect("Originator should have submitted a reputation record for the winning executor");
+    
+    let expected_reputation_anchor_cid = last_submission_by_originator.anchor_cid.expect("Expected anchor_cid in originator's reputation submission");
+
+    // Check that the winning executor (Executor 2) has fetched and verified it
+    // Determine which executor node instance is the winner
+    let winning_executor_node_instance = if expected_winner_did == executor1_did { &executor1_node_instance } else { &executor2_node_instance };
+    
+    let executor_verified_records_map = test_utils::get_verified_reputation_records_arc(winning_executor_node_instance);
+    let records_map_reader = executor_verified_records_map.read().unwrap();
+
+    let verified_record_on_executor = records_map_reader.get(&expected_reputation_anchor_cid);
+    assert!(
+        verified_record_on_executor.is_some(),
+        "Winning executor ({}) did not store the verified reputation record with CID: {}. Records found: {:?}",
+        expected_winner_did, expected_reputation_anchor_cid, records_map_reader.keys()
+    );
+
+    let verified_record = verified_record_on_executor.unwrap();
+    assert_eq!(verified_record.issuer, originator_did, "Reputation record issuer DID mismatch on executor.");
+    assert_eq!(verified_record.subject, expected_winner_did, "Reputation record subject DID mismatch on executor.");
+    assert_eq!(verified_record.event.job_id(), job_id, "Reputation record job_id mismatch on executor."); // Assuming ReputationUpdateEvent has a job_id() accessor
+
+    tracing::info!(
+        "Winning executor ({}) successfully verified and stored the reputation record (CID: {}) from Originator ({}).", 
+        expected_winner_did, expected_reputation_anchor_cid, originator_did
+    );
+    // --- END OF NEW VERIFICATION LOGIC ---
 
     // 9. Teardown: Shutdown nodes gracefully
     println!("Test steps completed. Tearing down nodes.");
@@ -661,6 +711,13 @@ mod test_utils {
     // Add accessor for the new test_observed_reputation_submissions field
     pub fn get_test_observed_reputation_submissions_arc(node: &MeshNode) -> Arc<RwLock<Vec<TestObservedReputationSubmission>>> {
         node.test_observed_reputation_submissions.clone()
+    }
+
+    /// Get the verified reputation records from a node for testing.
+    pub fn get_verified_reputation_records_arc(
+        mesh_node: &MeshNode,
+    ) -> Arc<RwLock<HashMap<Cid, ReputationRecord>>> {
+        mesh_node.verified_reputation_records.clone()
     }
 
     // Updated command functions to use the Sender<NodeCommand>
