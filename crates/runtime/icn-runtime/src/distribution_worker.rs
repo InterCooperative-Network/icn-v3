@@ -6,7 +6,20 @@ use tokio::time::{self, Duration, Interval};
 use icn_types::dag::{DagNode, DagEventType};
 use icn_types::dag_store::{SharedDagStore, DagStore};
 use icn_identity::ScopeKey;
+use icn_identity::IdentityIndex;
+use icn_identity::Did;
 use icn_economics::mana::ManaManager;
+use std::str::FromStr;
+
+/// Attempt to extract the originator DID from a `DagNode`.
+/// For now we fall back to taking the final path segment of `scope_id`.
+fn extract_originator_did(node: &DagNode) -> String {
+    node.scope_id
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
 
 /// Helper: query all `DagNode`s of a given type since `since_ms` (naive in-memory filter).
 async fn query_events(
@@ -28,6 +41,7 @@ pub struct DistributionWorker {
     fraction_percent: u64,
     dag_store: SharedDagStore,
     mana_mgr: Arc<Mutex<ManaManager>>,
+    identity_index: Option<Arc<IdentityIndex>>,
     interval: Interval,
 }
 
@@ -37,6 +51,7 @@ impl DistributionWorker {
         node_scope: ScopeKey,
         dag_store: SharedDagStore,
         mana_mgr: Arc<Mutex<ManaManager>>,
+        identity_index: Option<Arc<IdentityIndex>>,
         interval_secs: u64,
     ) -> Self {
         Self {
@@ -44,6 +59,7 @@ impl DistributionWorker {
             fraction_percent: 10,
             dag_store,
             mana_mgr,
+            identity_index,
             interval: time::interval(Duration::from_secs(interval_secs)),
         }
     }
@@ -68,25 +84,26 @@ impl DistributionWorker {
             - self.interval.period().as_millis() as u64;
         let receipts = query_events(&self.dag_store, DagEventType::Receipt, since).await;
 
-        // Derive originator DIDs (naive: use last path component of `scope_id`)
-        let originators: Vec<_> = receipts
-            .into_iter()
-            .filter_map(|node| {
-                let scope = node.scope_id;
-                let parts: Vec<&str> = scope.rsplitn(2, '/').collect();
-                parts.get(0).map(|did_str| did_str.to_string())
-            })
-            .collect();
-
-        let total = originators.len() as u64;
-        if total == 0 {
+        let total_receipts = receipts.len() as u64;
+        if total_receipts == 0 {
             return 0;
         }
 
-        let share_per = payout / total;
+        let share_per = payout / total_receipts;
         let mut count = 0;
-        for origin in originators {
-            let origin_scope = ScopeKey::Individual(origin);
+
+        for node in receipts {
+            let did = extract_originator_did(&node);
+            let origin_scope = if let Some(index) = &self.identity_index {
+                if let Ok(did_parsed) = Did::from_str(&did) {
+                    index.resolve_scope_key(&did_parsed)
+                } else {
+                    ScopeKey::Individual(did.clone())
+                }
+            } else {
+                ScopeKey::Individual(did)
+            };
+
             if mgr.transfer(&self.node_scope, &origin_scope, share_per).is_ok() {
                 count += 1;
             }

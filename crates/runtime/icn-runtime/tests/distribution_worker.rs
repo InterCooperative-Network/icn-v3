@@ -37,7 +37,7 @@ async fn test_distribution_tick() {
     }
 
     // Create worker with 60s interval but call tick directly
-    let worker = DistributionWorker::new(node_scope.clone(), dag_store.clone(), mana_mgr.clone(), 60);
+    let worker = DistributionWorker::new(node_scope.clone(), dag_store.clone(), mana_mgr.clone(), None, 60);
 
     let transfers = worker.tick().await;
     assert_eq!(transfers, 2);
