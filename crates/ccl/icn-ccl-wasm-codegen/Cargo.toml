@@ -7,10 +7,16 @@ edition     = "2021"
 icn-ccl-dsl = { path = "../icn-ccl-dsl" }
 serde       = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-wasm-encoder = "0.27"
+wasm-encoder = "0.27.0"
+log = "0.4"
+anyhow = "1.0"
+icn-types = { path = "../../common/icn-types" }
+icn-economics = { path = "../../common/icn-economics" }
+serde_cbor = "0.11"
 
 [dev-dependencies]
 insta = { version = "1.34.0", features = ["json"] }
 icn-ccl-compiler = { path = "../icn-ccl-compiler" }
 icn-ccl-parser = { path = "../icn-ccl-parser" }
-wasmparser = "0.230.0" 
+wasmparser = "0.230.0"
+env_logger = "0.10" 
