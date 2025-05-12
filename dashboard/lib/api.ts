@@ -95,9 +95,6 @@ export interface TokenFilter {
   offset?: number;
 }
 
-// Define the base URL for the API, prioritizing the environment variable
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'; // Adjusted to match common pattern if /api/v1 is part of it
-
 // --- Reputation Profile Types and Functions ---
 
 export interface ReputationProfileSummary {
@@ -145,6 +142,25 @@ export async function fetchReputationProfiles(): Promise<ReputationProfileSummar
     ...profile,
     subject_did: typeof profile.did === 'object' ? profile.did.id_str : profile.did, // Assuming Did struct has id_str or serializes to string directly
   }));
+}
+
+// Type for historical data point [timestamp, score]
+export type ReputationDataPoint = [number, number];
+
+// Fetch reputation history for a given DID
+export async function fetchReputationHistory(did: string): Promise<ReputationDataPoint[]> {
+  // Use the same pattern for REPUTATION_API_URL as fetchReputationProfiles
+  const actualReputationApiUrl = process.env.NEXT_PUBLIC_REPUTATION_API_URL || (process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace("8080", "8081") : "http://localhost:8081");
+  const url = `${actualReputationApiUrl}/reputation/profiles/${encodeURIComponent(did)}/history`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    const errorBody = await res.text();
+    console.error(`Failed to fetch reputation history for ${did}: ${res.status} ${res.statusText}`, errorBody);
+    throw new Error(`Failed to fetch reputation history for ${did}: ${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data as ReputationDataPoint[]; // Assuming backend returns [timestamp, score][] directly
 }
 
 // API services
