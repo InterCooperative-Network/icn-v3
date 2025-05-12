@@ -3,7 +3,8 @@ use crate::error::TrustError;
 use crate::error::VcError;
 use crate::trust::{QuorumConfig, QuorumRule};
 use chrono::Utc;
-use ed25519_dalek::{Keypair, PublicKey};
+use crate::crypto::Keypair;
+use ed25519_dalek::VerifyingKey;
 use icn_crypto::jws::{sign_detached_jws, verify_detached_jws};
 use serde::{Deserialize, Serialize};
 use serde_json::{to_value, Map, Value};
@@ -146,12 +147,12 @@ impl VerifiableCredential {
     /// Returns a detached JWS signature that can be used to verify the credential
     pub fn sign(&self, keypair: &Keypair) -> std::result::Result<String, VcError> {
         let canonical = self.canonical_bytes()?;
-        let jws = sign_detached_jws(&canonical, keypair).map_err(VcError::Signing)?;
+        let jws = sign_detached_jws(&canonical, keypair.signing_key()).map_err(VcError::Signing)?;
         Ok(jws)
     }
 
     /// Verify the credential's signature against a public key
-    pub fn verify(&self, public_key: &PublicKey) -> std::result::Result<(), VcError> {
+    pub fn verify(&self, public_key: &VerifyingKey) -> std::result::Result<(), VcError> {
         let canonical = self.canonical_bytes()?;
 
         // Extract the JWS from the proof
@@ -170,7 +171,7 @@ impl VerifiableCredential {
         verification_method: &str,
     ) -> std::result::Result<Self, VcError> {
         // Generate the signature
-        let jws = self.sign(keypair)?;
+        let jws = sign_detached_jws(&self.canonical_bytes()?, keypair.signing_key()).map_err(VcError::Signing)?;
 
         // Create the proof
         let proof = CredentialProof {

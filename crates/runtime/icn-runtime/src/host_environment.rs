@@ -12,10 +12,10 @@ use anyhow::Result;
 use thiserror::Error;
 use host_abi::*;
 use crate::job_execution_context::{JobExecutionContext, JobPermissions};
-use icn_types::mesh::{JobId, MeshJobParams};
+use icn_types::mesh::MeshJobParams;
 use planetary_mesh::protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage};
 use planetary_mesh::JobStatus as P2PJobStatus;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use wasmer::{Memory, WasmerEnv, FunctionEnvMut, WasmPtr, Array};
 

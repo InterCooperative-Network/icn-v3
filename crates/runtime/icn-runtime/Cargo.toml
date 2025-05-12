@@ -24,7 +24,10 @@ async-trait = "0.1.74"
 wasmtime = "18.0.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-ed25519-dalek = "2.0"
+ed25519-dalek = "2.1.0"
+signature = "2.1.0"
+rand_core = "0.6"
+cid = { version = "0.10", features = ["serde-codec"] }
 
 [dev-dependencies]
 icn-identity = { path = "../../common/icn-identity" }

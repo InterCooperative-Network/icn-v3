@@ -1,8 +1,7 @@
 use crate::error::CryptoError;
-use ed25519_dalek::{
-    Keypair as DalekKeypair, PublicKey, SecretKey, Signature as DalekSignature, Signer as DalekSigner, Verifier,
-};
-use rand::rngs::OsRng;
+use ed25519_dalek::{Signature as DalekSignature, SigningKey, VerifyingKey};
+use signature::{Signer as DalekSigner, Verifier as DalekVerifier}; // Aliased to avoid conflict
+use rand_core::OsRng; // Changed from rand::rngs::OsRng
 use serde::{Deserialize, Serialize};
 
 /// A trait for objects that can sign messages
@@ -16,14 +15,23 @@ pub trait Signer {
 
 /// Ed25519 keypair implementation
 pub struct Keypair {
-    inner: DalekKeypair,
+    signing_key: SigningKey,
+    // VerifyingKey can be derived from SigningKey, so not strictly needed to store
+    // but storing it can be convenient if used frequently.
+    // For this refactor, we'll derive it when needed or assume it's passed if Keypair is from_verifying_key.
 }
 
 impl Clone for Keypair {
     fn clone(&self) -> Self {
-        // Since DalekKeypair doesn't implement Clone, we need to recreate it from the secret key
-        let secret_bytes = self.inner.secret.as_bytes();
-        Keypair::from_secret_key(secret_bytes).expect("Failed to clone keypair")
+        // SigningKey::from_bytes takes &[u8], SecretKey::as_bytes() returns [u8; 32]
+        // Need to ensure the types match or handle conversion.
+        // For simplicity, assuming SigningKey can be reconstructed if we have its bytes.
+        // ed25519_dalek::SigningKey itself is cloneable if the feature "std" or "alloc" is enabled for it.
+        // Let's assume it's cloneable for now for a simpler refactor.
+        // If not, we'd use `SigningKey::from_bytes(&self.signing_key.to_bytes())`
+        Self {
+            signing_key: self.signing_key.clone(),
+        }
     }
 }
 
@@ -31,46 +39,44 @@ impl Keypair {
     /// Generate a new random keypair
     pub fn generate() -> Result<Self, CryptoError> {
         let mut csprng = OsRng {};
-        let keypair = DalekKeypair::generate(&mut csprng);
-        Ok(Self { inner: keypair })
+        let signing_key = SigningKey::generate(&mut csprng);
+        Ok(Self { signing_key })
     }
 
     /// Create a keypair from existing secret key bytes
-    pub fn from_secret_key(secret_key: &[u8]) -> Result<Self, CryptoError> {
-        if secret_key.len() != 32 {
-            return Err(CryptoError::KeyGenError(
-                "Invalid secret key length".to_string(),
-            ));
-        }
-
-        let secret = SecretKey::from_bytes(secret_key)
-            .map_err(|e| CryptoError::KeyGenError(e.to_string()))?;
-        let public = PublicKey::from(&secret);
-
-        Ok(Self {
-            inner: DalekKeypair { secret, public },
-        })
+    pub fn from_secret_key(secret_key_bytes: &[u8]) -> Result<Self, CryptoError> {
+        let sk_array: &[u8; 32] = secret_key_bytes.try_into().map_err(|_| {
+            CryptoError::KeyGenError("Invalid secret key length, must be 32 bytes".to_string())
+        })?;
+        let signing_key = SigningKey::from_bytes(sk_array);
+        Ok(Self { signing_key })
     }
 
     /// Get the secret key bytes
     pub fn secret_key_bytes(&self) -> Vec<u8> {
-        self.inner.secret.as_bytes().to_vec()
+        self.signing_key.to_bytes().to_vec()
     }
 
-    /// Verify a signature against a message
-    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CryptoError> {
-        if signature.len() != 64 {
-            return Err(CryptoError::VerificationError(
-                "Invalid signature length".to_string(),
-            ));
-        }
+    /// Get the verifying key (public key)
+    pub fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
 
-        let sig = DalekSignature::from_bytes(signature)
-            .map_err(|e| CryptoError::VerificationError(e.to_string()))?;
+    /// Get a reference to the internal signing key
+    pub fn signing_key(&self) -> &SigningKey {
+        &self.signing_key
+    }
 
-        self.inner
-            .public
-            .verify(message, &sig)
+    /// Verify a signature against a message using this keypair's public key
+    pub fn verify(&self, message: &[u8], signature_bytes: &[u8]) -> Result<bool, CryptoError> {
+        let sig_array: &[u8; 64] = signature_bytes.try_into().map_err(|_| {
+            CryptoError::VerificationError("Invalid signature length, must be 64 bytes".to_string())
+        })?;
+        let dalek_sig = DalekSignature::from_bytes(sig_array);
+
+        self.signing_key
+            .verifying_key()
+            .verify(message, &dalek_sig)
             .map(|_| true)
             .map_err(|e| CryptoError::VerificationError(e.to_string()))
     }
@@ -78,40 +84,41 @@ impl Keypair {
 
 impl Signer for Keypair {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let signature = self.inner.sign(message);
+        // self.signing_key is ed25519_dalek::SigningKey which implements signature::Signer
+        let signature: DalekSignature = self.signing_key.sign(message);
         Ok(signature.to_bytes().to_vec())
     }
 
     fn public_key(&self) -> Vec<u8> {
-        self.inner.public.as_bytes().to_vec()
+        self.signing_key.verifying_key().as_bytes().to_vec()
     }
 }
 
 /// DID key format utilities
 pub mod did {
-    use super::*;
+    use super::*; // Imports Keypair, CryptoError, VerifyingKey etc.
     use base64::{engine::general_purpose, Engine};
 
     /// Creates a did:key identifier from a public key
-    pub fn key_to_did(public_key: &[u8]) -> String {
+    pub fn key_to_did(public_key_bytes: &[u8]) -> String { // Changed arg name for clarity
         let multicodec_prefix = [0xed, 0x01]; // ed25519-pub multicodec
-        let mut prefixed = Vec::with_capacity(2 + public_key.len());
+        let mut prefixed = Vec::with_capacity(2 + public_key_bytes.len());
         prefixed.extend_from_slice(&multicodec_prefix);
-        prefixed.extend_from_slice(public_key);
+        prefixed.extend_from_slice(public_key_bytes);
 
         let encoded = general_purpose::URL_SAFE_NO_PAD.encode(&prefixed);
         format!("did:key:z{}", encoded)
     }
 
     /// Extracts a public key from a did:key identifier
-    pub fn did_to_key(did: &str) -> Result<Vec<u8>, CryptoError> {
-        if !did.starts_with("did:key:z") {
+    pub fn did_to_key(did_string: &str) -> Result<Vec<u8>, CryptoError> { // Changed arg name
+        if !did_string.starts_with("did:key:z") {
             return Err(CryptoError::KeyGenError(
                 "Invalid DID key format".to_string(),
             ));
         }
 
-        let encoded = &did[10..]; // Skip "did:key:z"
+        let encoded = &did_string[10..]; // Skip "did:key:z"
         let decoded = general_purpose::URL_SAFE_NO_PAD
             .decode(encoded)
             .map_err(|e| CryptoError::KeyGenError(format!("Invalid base64: {}", e)))?;
@@ -126,6 +133,8 @@ pub mod did {
     }
 }
 
+// This Signature struct seems to be a custom one for ICN, not ed25519_dalek::Signature.
+// It was previously clashing. Now DalekSignature is the alias for ed25519_dalek's one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Signature {
     pub algorithm: String,     // e.g., "Ed25519"

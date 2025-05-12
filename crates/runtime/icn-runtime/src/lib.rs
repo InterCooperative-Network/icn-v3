@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use wasmtime::{Module, Caller, Engine, Instance, Linker, Store, TypedFunc, Val, Trap};
@@ -8,7 +8,7 @@ use icn_economics::ResourceType;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use uuid::Uuid;
 use std::str::FromStr;
@@ -17,7 +17,7 @@ use chrono::Utc;
 use cid::Cid;
 use icn_identity::KeyPair as IcnKeyPair;
 use icn_types::mesh::MeshJob;
-use icn_types::main::JobStatus as StandardJobStatus;
+use icn_types::mesh::JobStatus as StandardJobStatus;
 use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place};
 
 // Import the context module
@@ -185,40 +185,6 @@ pub trait RuntimeStorage: Send + Sync {
 
     /// Anchor a CID to the DAG
     async fn anchor_to_dag(&self, cid: &str) -> Result<String>;
-}
-
-/// Execution receipt issued after successful execution of a proposal
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionReceipt {
-    /// Proposal ID this receipt is for
-    pub proposal_id: String,
-
-    /// Content ID (CID) of the executed WASM module
-    pub wasm_cid: String,
-
-    /// Content ID (CID) of the source CCL
-    pub ccl_cid: String,
-
-    /// Execution metrics
-    pub metrics: CoreVmExecutionMetrics,
-
-    /// Anchored CIDs during execution
-    pub anchored_cids: Vec<String>,
-
-    /// Resource usage during execution
-    pub resource_usage: Vec<(String, u64)>,
-
-    /// Timestamp of execution
-    pub timestamp: u64,
-
-    /// DAG epoch of execution
-    pub dag_epoch: Option<u64>,
-
-    /// Receipt CID (filled after anchoring)
-    pub receipt_cid: Option<String>,
-
-    /// Signature from the executing federation
-    pub federation_signature: Option<String>,
 }
 
 /// The ICN Runtime for executing governance proposals

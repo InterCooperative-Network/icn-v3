@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::{Keypair, PublicKey, Signature, Signer, Verifier};
+use ed25519_dalek::{Signature, Signer, VerifyingKey, SigningKey};
+use signature::Verifier;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -33,7 +34,7 @@ struct JwsHeader {
 ///
 /// Returns a string in the format: `<base64url(header)>..<base64url(signature)>`
 /// The payload is not included in the detached JWS.
-pub fn sign_detached_jws(payload: &[u8], keypair: &Keypair) -> Result<String> {
+pub fn sign_detached_jws(payload: &[u8], keypair: &SigningKey) -> Result<String> {
     // Create JWS header
     let header = JwsHeader {
         alg: "EdDSA".to_string(),
@@ -63,7 +64,7 @@ pub fn sign_detached_jws(payload: &[u8], keypair: &Keypair) -> Result<String> {
 pub fn verify_detached_jws(
     payload: &[u8],
     detached_jws: &str,
-    public_key: &PublicKey,
+    public_key: &VerifyingKey,
 ) -> Result<()> {
     // Split detached JWS into components
     let parts: Vec<&str> = detached_jws.split('.').collect();
@@ -76,8 +77,9 @@ pub fn verify_detached_jws(
 
     // Base64 decode the signature
     let signature_bytes = URL_SAFE_NO_PAD.decode(signature_b64)?;
-    let signature =
-        Signature::from_bytes(&signature_bytes).map_err(|_| JwsError::InvalidSignature)?;
+    let signature_array: &[u8; 64] = signature_bytes.as_slice().try_into()
+        .map_err(|_| JwsError::InvalidSignature)?;
+    let signature = Signature::from_bytes(signature_array);
 
     // Reconstitute the signing input
     let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
