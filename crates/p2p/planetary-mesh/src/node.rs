@@ -1211,7 +1211,7 @@ impl MeshNode {
                                                     if let Ok(mut discovered_receipts) = self.discovered_receipt_announcements.write() {
                                                         discovered_receipts.insert(job_id.clone(), (parsed_receipt_cid, executor_did.clone()));
                                                         println!("[MeshNode] Stored receipt announcement for job {}.", job_id);
-                                                    } else {
+                                                        } else {
                                                         eprintln!("[MeshNode] Failed to get write lock for discovered_receipt_announcements for job {}.", job_id);
                                                         // Continue, as we might still want to process if we are the originator
                                                     }
