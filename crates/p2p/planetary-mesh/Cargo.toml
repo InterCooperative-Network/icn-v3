@@ -13,7 +13,7 @@ serde_json = "1.0.108"
 log = "0.4.20"
 async-trait = "0.1.73"
 tokio = { version = "1", features = ["full"] }
-libp2p = { version = "0.53", features = ["gossipsub", "mdns", "macros", "tcp", "yamux", "noise", "tokio"] }
+libp2p = { version = "0.53", features = ["gossipsub", "mdns", "macros", "tcp", "yamux", "noise", "tokio", "kad"] }
 wasmtime = "12.0.2"
 icn-types = { path = "../../common/icn-types" }
 icn-identity = { path = "../../common/icn-identity" }
@@ -26,6 +26,9 @@ uuid = { version = "1.4", features = ["v4", "serde"] }
 serde_cbor = "0.11"
 rand = "0.8"
 futures = "0.3"
+icn-runtime = { path = "../../runtime/icn-runtime" }
+reqwest = { version = "0.11", features = ["json", "blocking", "rustls-tls"] }
+tracing = { version = "0.1", features = ["log"] }
 
 [dev-dependencies]
 tempfile = "3.2"

@@ -13,7 +13,7 @@ members = [
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
     "crates/runtime/host-abi",
-    # "crates/p2p/planetary-mesh",  # Temporarily excluded for compilation
+    "crates/p2p/planetary-mesh",
     # "crates/tools/icn-cli",  # Temporarily excluded
     # "crates/tools/meshctl",  # Temporarily excluded
     # "crates/services/icn-mesh-jobs",  # Temporarily excluded
@@ -35,7 +35,7 @@ default-members = [
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
     "crates/runtime/host-abi",
-    # "crates/p2p/planetary-mesh",
+    "crates/p2p/planetary-mesh",
     # "crates/tools/icn-cli",
     # "crates/tools/meshctl",
     # "crates/services/icn-mesh-jobs",

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use icn_types::dag_store::SharedDagStore;
 use icn_identity::TrustValidator;
-use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType, LedgerKey};
+use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType, LedgerKey, ManaManager};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use icn_types::mesh::MeshJob;
@@ -39,6 +39,9 @@ pub struct RuntimeContext {
 
     /// Queue for mesh jobs submitted via host_submit_mesh_job awaiting P2P dispatch
     pub pending_mesh_jobs: Arc<Mutex<VecDeque<MeshJob>>>,
+
+    /// Regenerating execution resource pools ("mana") by DID/org
+    pub mana_manager: Arc<Mutex<ManaManager>>,
 }
 
 impl RuntimeContext {
@@ -53,6 +56,7 @@ impl RuntimeContext {
             economics: Arc::new(Economics::new(ResourceAuthorizationPolicy::default())),
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
+            mana_manager: Arc::new(Mutex::new(ManaManager::new())),
         }
     }
 
@@ -67,6 +71,7 @@ impl RuntimeContext {
             economics: Arc::new(Economics::new(ResourceAuthorizationPolicy::default())),
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
+            mana_manager: Arc::new(Mutex::new(ManaManager::new())),
         }
     }
 
@@ -185,6 +190,7 @@ impl RuntimeContextBuilder {
         });
         let resource_ledger = Arc::new(RwLock::new(HashMap::new()));
         let pending_mesh_jobs = Arc::new(Mutex::new(VecDeque::new()));
+        let mana_manager = Arc::new(Mutex::new(ManaManager::new()));
 
         RuntimeContext {
             dag_store,
@@ -195,6 +201,7 @@ impl RuntimeContextBuilder {
             economics,
             resource_ledger,
             pending_mesh_jobs,
+            mana_manager,
         }
     }
 } 

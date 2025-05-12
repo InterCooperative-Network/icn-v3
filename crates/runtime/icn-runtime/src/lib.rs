@@ -772,13 +772,32 @@ mod tests {
 pub async fn execute_mesh_job(
     mesh_job: MeshJob,
     local_keypair: &IcnKeyPair,
-    _runtime_context: Arc<RuntimeContext>,
+    runtime_context: Arc<RuntimeContext>,
 ) -> Result<ExecutionReceipt, anyhow::Error> {
     tracing::info!(
         "[RuntimeExecute] Attempting to execute job_id: {}, wasm_cid: {}",
         mesh_job.job_id,
         mesh_job.params.wasm_cid
     );
+
+    // ------------------- Mana check & consumption -------------------
+    let executor_did_str = local_keypair.did.to_string();
+
+    {
+        let mut mana_mgr = runtime_context.mana_manager.lock().unwrap();
+        // Ensure pool exists with default parameters (max 10_000 mana, regen 1/sec)
+        mana_mgr.ensure_pool(&executor_did_str, 10_000, 1);
+        if let Some(pool) = mana_mgr.pool_mut(&executor_did_str) {
+            // Rough cost estimate: sum of declared resource amounts or fallback to 50
+            let declared_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
+            let cost = if declared_cost > 0 { declared_cost } else { 50 };
+            if let Err(e) = pool.consume(cost) {
+                tracing::warn!("[RuntimeExecute] Insufficient mana for executor {}: {}", executor_did_str, e);
+                return Err(anyhow::anyhow!(e));
+            }
+            tracing::info!("[RuntimeExecute] Consumed {} mana for executor {} (remaining: {})", cost, executor_did_str, pool.available());
+        }
+    }
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
