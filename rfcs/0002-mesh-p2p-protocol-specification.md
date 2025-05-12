@@ -376,18 +376,19 @@ All message payloads are serialized using CBOR.
     ```rust
     // Contained within MeshProtocolMessage::AssignJobV1
     pub struct JobAssignment {
-        // DID of the job originator.
+        // Identifier of the JobAnnouncement this assignment pertains to.
+        // MUST match the announcement_id of the original JobAnnouncementV1.
+        // Type: String
+        pub announcement_id: String,
+
+        // DID of the job originator sending this assignment.
         // Type: icn_types::identity::Did (String)
         pub originator_did: String,
 
-        // DID of the selected executor.
+        // DID of the selected executor being assigned the job.
+        // MUST match the executor_did from the accepted JobBidV1.
         // Type: icn_types::identity::Did (String)
         pub executor_did: String,
-
-        // Unique identifier for this job assignment instance.
-        // Could be a UUID or a CID of the assignment content.
-        // Type: String
-        pub assignment_id: String,
 
         // Timestamp of when this job assignment was created (UTC, ISO 8601).
         // Type: String
@@ -395,7 +396,6 @@ All message payloads are serialized using CBOR.
 
         // Cryptographic signature of the fields above (excluding the signature itself),
         // created by the originator_did's private key.
-        // Ensures authenticity and integrity of the job assignment.
         // Type: Vec<u8> (Bytes of the signature)
         pub signature: Vec<u8>,
     }
@@ -405,16 +405,18 @@ All message payloads are serialized using CBOR.
     *   **Mechanism:** Direct messaging.
     *   **Topic:** Not applicable.
 
-*   **Processing by Receiving Nodes:**
-    *   Verify the `signature` against the `originator_did`. Invalid assignments MUST be discarded.
-    *   Validate the `timestamp` to prevent processing of excessively old assignments.
-    *   Ensure the assignment is valid and authorized.
-    *   If the assignment is valid and authorized, the node may proceed to the next stage of job execution.
+*   **Processing by Receiving Nodes (Executor):**
+    *   Verify the `signature` against the `originator_did` (the public key for which should be discoverable).
+    *   Validate the `timestamp` to ensure the assignment is recent and not a replay.
+    *   Verify that the `announcement_id` corresponds to a job the executor bid on (and ideally, that the bid was accepted or is still considered active by the executor).
+    *   Verify that the `executor_did` in the message matches the receiving node's own DID. This prevents processing an assignment intended for another executor.
+    *   If all checks pass, the executor retrieves the original `JobParams` associated with the `announcement_id` (which it should have cached from the `JobAnnouncementV1`). It then prepares the execution environment and proceeds to execute the job as per these parameters.
 
 *   **Security Considerations:**
-    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the assignment is from the claimed `originator_did` and hasn't been altered.
-    *   **Replay Attacks:** The `timestamp` helps differentiate assignments and can mitigate replay attacks if nodes track recently seen IDs.
-    *   **Job Validity:** This message assigns a job; it doesn't guarantee the job itself (e.g., the job parameters or execution policy) is valid or non-malicious. The assignment must be valid and authorized.
+    *   **Authenticity & Integrity:** The `signature` by `originator_did` is critical to ensure the assignment is legitimate and unaltered.
+    *   **Replay Attacks:** The `timestamp` and the requirement for the `announcement_id` to correspond to an active/pending bid help mitigate replay attacks.
+    *   **Mis-assignment/Targeting:** The executor MUST verify it is the intended recipient (`executor_did`) for the specified `announcement_id`. An attacker should not be able to trick an executor into running a job it didn't agree to or that was meant for someone else.
+    *   **Consistency of Job Parameters:** The executor executes the job based on the `JobParams` associated with the `announcement_id` it originally processed. The `AssignJobV1` message confirms this link. If there were a discrepancy or if the `JobParams` could change post-announcement (not recommended for V1), this message might need to carry a hash or CID of the agreed-upon `JobParams` for re-verification.
 
 ### 5.5. `JobStatusUpdateV1`
 
@@ -425,26 +427,33 @@ All message payloads are serialized using CBOR.
     ```rust
     // Contained within MeshProtocolMessage::JobStatusUpdateV1
     pub struct JobStatusUpdate {
-        // DID of the executor.
+        // Identifier of the JobAnnouncement this status update pertains to.
+        // MUST match the announcement_id of the original JobAnnouncementV1.
+        // Type: String
+        pub announcement_id: String,
+
+        // DID of the executor providing the status update.
         // Type: icn_types::identity::Did (String)
         pub executor_did: String,
 
-        // Unique identifier for this job status update instance.
-        // Could be a UUID or a CID of the update content.
+        // Current P2P-level status of the job at the executor.
+        // This string should correspond to a well-defined P2P job lifecycle state
+        // (e.g., "PreparingExecution", "RunningWasm", "ExecutionFailed").
+        // See RFC-0001 Section 4.2 for discussion on local vs. canonical job statuses.
         // Type: String
-        pub update_id: String,
+        pub p2p_job_status: String,
 
-        // Status of the job.
-        // Type: icn_types::mesh::JobStatus (String)
-        pub status: String,
+        // Optional additional details or context for the status (e.g., error message, progress info).
+        // CBOR map or string.
+        // Type: Option<String> // Or Option<std::collections::HashMap<String, String>> for structured details
+        pub details: Option<String>,
 
-        // Timestamp of when this job status update was created (UTC, ISO 8601).
+        // Timestamp of when this status update was generated (UTC, ISO 8601).
         // Type: String
         pub timestamp: String,
 
         // Cryptographic signature of the fields above (excluding the signature itself),
         // created by the executor_did's private key.
-        // Ensures authenticity and integrity of the job status update.
         // Type: Vec<u8> (Bytes of the signature)
         pub signature: Vec<u8>,
     }
@@ -454,16 +463,17 @@ All message payloads are serialized using CBOR.
     *   **Mechanism:** Direct messaging.
     *   **Topic:** Not applicable.
 
-*   **Processing by Receiving Nodes:**
-    *   Verify the `signature` against the `executor_did`. Invalid updates MUST be discarded.
-    *   Validate the `timestamp` to prevent processing of excessively old updates.
-    *   Ensure the update is valid and authorized.
-    *   If the update is valid and authorized, the node may proceed to update the job status.
+*   **Processing by Receiving Nodes (Originator):**
+    *   Verify the `signature` against the `executor_did` (the public key for which should be discoverable).
+    *   Validate the `timestamp` to ensure the update is recent.
+    *   Confirm that the `announcement_id` corresponds to an active job that this originator assigned to the specified `executor_did`.
+    *   Update its local state for the job based on the `p2p_job_status` and `details`. This might trigger UI updates or further originator-side logic.
 
 *   **Security Considerations:**
-    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the update is from the claimed `executor_did` and hasn't been altered.
-    *   **Replay Attacks:** The `timestamp` helps differentiate updates and can mitigate replay attacks if nodes track recently seen IDs.
-    *   **Job Validity:** This message updates a job status; it doesn't guarantee the status itself is valid or non-malicious. The update must be valid and authorized.
+    *   **Authenticity & Integrity:** The `signature` by `executor_did` is vital.
+    *   **Replay Attacks:** `timestamp` and correlation with `announcement_id` help prevent replay of old statuses.
+    *   **Unauthorized Updates:** The originator MUST verify that the status update is for a job it owns and that was assigned to this `executor_did`. An executor should not be able to send status updates for jobs it is not assigned to, or to the wrong originator.
+    *   **Status Validity:** While the message itself is validated, the truthfulness of the `p2p_job_status` (e.g., an executor falsely claiming progress) is harder to verify at this P2P layer. This is managed by trust in the executor (via reputation) and ultimately confirmed by the `ExecutionReceipt`.
 
 ### 5.6. `ExecutionReceiptAvailableV1`
 
