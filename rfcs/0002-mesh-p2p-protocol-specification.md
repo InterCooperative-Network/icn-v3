@@ -244,4 +244,361 @@ All message payloads are serialized using CBOR.
     *   **Replay Attacks:** The `timestamp` helps mitigate replay attacks of old capability advertisements. Nodes should define a reasonable window for accepting advertisements.
     *   **Denial of Service (DoS):** Malicious nodes could flood the capability topic with spurious advertisements. Gossipsub's peer scoring mechanisms, combined with signature verification costs and potentially rate limiting, help mitigate this.
     *   **Stale Information:** Nodes should re-advertise periodically and when capabilities change to ensure the network has reasonably up-to-date information. Consumers of this information must be aware that it's eventually consistent.
-    *   **Misrepresentation:** A node might falsely advertise capabilities. While the signature confirms *who* sent it, it doesn't inherently prove the capabilities are real. This is where reputation systems (`icn-reputation`) and the outcomes of actual job executions (via `ExecutionReceipts`) become important for building trust. The optional `attestation_cid` can point to more robust, verifiable claims if needed. 
+    *   **Misrepresentation:** A node might falsely advertise capabilities. While the signature confirms *who* sent it, it doesn't inherently prove the capabilities are real. This is where reputation systems (`icn-reputation`) and the outcomes of actual job executions (via `ExecutionReceipts`) become important for building trust. The optional `attestation_cid` can point to more robust, verifiable claims if needed.
+
+### 5.2. `JobAnnouncementV1`
+
+*   **Purpose:**
+    Used by a `MeshNode` (job originator) to announce a new computational job to the network. This message makes the job discoverable by potential executor nodes. It contains the essential parameters of the job, including its definition (or a pointer to it) and the execution policy that executors must satisfy.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::JobAnnouncementV1
+    pub struct JobAnnouncement {
+        // Unique identifier for this job announcement instance.
+        // Could be a UUID or a CID of the announcement content.
+        // Type: String
+        pub announcement_id: String,
+
+        // DID of the node originating this job announcement.
+        // Type: icn_types::identity::Did (String)
+        pub originator_did: String,
+
+        // The canonical MeshJobParams defining the job.
+        // This struct is defined in `icn-types/src/mesh.rs`.
+        // It includes wasm_cid, input_cids, execution_policy, etc.
+        // For network efficiency, if MeshJobParams is large, this could
+        // alternatively be a CID pointing to the full MeshJobParams stored
+        // in a discoverable location (e.g., DHT, IPFS). For V1, we'll assume
+        // it's embedded directly for simplicity unless it proves too large in practice.
+        // Type: icn_types::mesh::MeshJobParams
+        pub job_params: icn_types::mesh::MeshJobParams,
+
+        // Timestamp of when this job announcement was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Optional: Duration for which bids will be accepted for this job (e.g., "PT30M" for 30 minutes).
+        // If None, bidding duration might be determined by originator's local policy
+        // or until explicitly closed.
+        // Type: Option<String> (ISO 8601 duration format)
+        pub bidding_duration: Option<String>,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the originator_did's private key.
+        // Ensures authenticity and integrity of the job announcement.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Gossipsub.
+    *   **Topic:** A well-known global job announcement topic, e.g., `/icn/mesh/jobs/announce/v1`.
+        *   Alternatively, or in addition, scoped topics based on job characteristics (e.g., required `ResourceType` from `ExecutionPolicy`, region) could be used to reduce noise, e.g., `/icn/mesh/jobs/announce/region/us-east-1/v1`. This will be further detailed in Section 6.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the `originator_did`. Invalid announcements MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old announcements.
+    *   Evaluate the embedded `job_params.execution_policy` against the node's own capabilities (as advertised in its `NodeCapability`) and local policies.
+    *   If the node is capable and interested in bidding, it may store the `JobAnnouncement` details and prepare a `JobBidV1`.
+    *   Nodes should be mindful of the `bidding_duration` if provided.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the job announcement is from the claimed `originator_did` and hasn't been altered.
+    *   **Replay Attacks:** The `timestamp` and `announcement_id` help differentiate announcements and can mitigate replay attacks if nodes track recently seen IDs.
+    *   **Denial of Service (DoS) / Spam:** Malicious nodes could flood job announcement topics. Gossipsub peer scoring, signature verification costs, and potentially requiring a small stake or fee (future work via `icn-economics`) for announcements can help.
+    *   **Job Validity:** This message announces a job; it doesn't guarantee the job itself (e.g., the WASM CID or input CIDs in `job_params`) is valid or non-malicious. Executors must perform their own due diligence before fetching and executing job code (see `AssignJobV1` and execution phase).
+    *   **Policy Truthfulness:** The `ExecutionPolicy` within `job_params` is originator-defined. While it dictates requirements for bidders, it doesn't guarantee the originator will honor bids fairly. Reputation systems play a role here.
+
+### 5.3. `JobBidV1`
+
+*   **Purpose:**
+    Carries an executor's formal bid for a job, including price and other relevant metadata like `executor_did` and `region`.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::JobBidV1
+    pub struct JobBid {
+        // DID of the executor bidding for the job.
+        // Type: icn_types::identity::Did (String)
+        pub executor_did: String,
+
+        // Price for the job.
+        // Type: icn_types::mesh::Price (Decimal)
+        pub price: icn_types::mesh::Price,
+
+        // Region of the job.
+        // Type: icn_types::jobs::policy::ExecutionPolicy::region_filter (String)
+        pub region: String,
+
+        // Timestamp of when this bid was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the executor_did's private key.
+        // Ensures authenticity and integrity of the bid.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Direct messaging.
+    *   **Topic:** Not applicable.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the `executor_did`. Invalid bids MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old bids.
+    *   Evaluate the bid against the job's requirements and the executor's capabilities.
+    *   If the bid is acceptable, the node may proceed to the next stage of job assignment.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the bid is from the claimed `executor_did` and hasn't been altered.
+    *   **Replay Attacks:** The `timestamp` helps differentiate bids and can mitigate replay attacks if nodes track recently seen IDs.
+    *   **Job Validity:** This message announces a bid; it doesn't guarantee the bid itself (e.g., the price or region) is valid or non-malicious. The bid must be evaluated against the job's requirements and the executor's capabilities.
+
+### 5.4. `AssignJobV1`
+
+*   **Purpose:**
+    Sent by a job originator to a selected executor to formally assign them the job.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::AssignJobV1
+    pub struct JobAssignment {
+        // DID of the job originator.
+        // Type: icn_types::identity::Did (String)
+        pub originator_did: String,
+
+        // DID of the selected executor.
+        // Type: icn_types::identity::Did (String)
+        pub executor_did: String,
+
+        // Unique identifier for this job assignment instance.
+        // Could be a UUID or a CID of the assignment content.
+        // Type: String
+        pub assignment_id: String,
+
+        // Timestamp of when this job assignment was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the originator_did's private key.
+        // Ensures authenticity and integrity of the job assignment.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Direct messaging.
+    *   **Topic:** Not applicable.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the `originator_did`. Invalid assignments MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old assignments.
+    *   Ensure the assignment is valid and authorized.
+    *   If the assignment is valid and authorized, the node may proceed to the next stage of job execution.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the assignment is from the claimed `originator_did` and hasn't been altered.
+    *   **Replay Attacks:** The `timestamp` helps differentiate assignments and can mitigate replay attacks if nodes track recently seen IDs.
+    *   **Job Validity:** This message assigns a job; it doesn't guarantee the job itself (e.g., the job parameters or execution policy) is valid or non-malicious. The assignment must be valid and authorized.
+
+### 5.5. `JobStatusUpdateV1`
+
+*   **Purpose:**
+    Sent by an executor to the job originator to provide updates on the current status of an assigned job.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::JobStatusUpdateV1
+    pub struct JobStatusUpdate {
+        // DID of the executor.
+        // Type: icn_types::identity::Did (String)
+        pub executor_did: String,
+
+        // Unique identifier for this job status update instance.
+        // Could be a UUID or a CID of the update content.
+        // Type: String
+        pub update_id: String,
+
+        // Status of the job.
+        // Type: icn_types::mesh::JobStatus (String)
+        pub status: String,
+
+        // Timestamp of when this job status update was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the executor_did's private key.
+        // Ensures authenticity and integrity of the job status update.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Direct messaging.
+    *   **Topic:** Not applicable.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the `executor_did`. Invalid updates MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old updates.
+    *   Ensure the update is valid and authorized.
+    *   If the update is valid and authorized, the node may proceed to update the job status.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the update is from the claimed `executor_did` and hasn't been altered.
+    *   **Replay Attacks:** The `timestamp` helps differentiate updates and can mitigate replay attacks if nodes track recently seen IDs.
+    *   **Job Validity:** This message updates a job status; it doesn't guarantee the status itself is valid or non-malicious. The update must be valid and authorized.
+
+### 5.6. `ExecutionReceiptAvailableV1`
+
+*   **Purpose:**
+    Sent by an executor after job completion to announce that the signed `ExecutionReceipt` (identified by its CID) is available.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::ExecutionReceiptAvailableV1
+    pub struct ExecutionReceiptAvailable {
+        // CID of the signed ExecutionReceipt.
+        // Type: icn_types::cid::Cid (String)
+        pub cid: String,
+
+        // Timestamp of when this ExecutionReceipt was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the executor's private key.
+        // This ensures authenticity and integrity of the ExecutionReceipt.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Direct messaging.
+    *   **Topic:** Not applicable.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the executor's private key. Invalid receipts MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old receipts.
+    *   Ensure the receipt is valid and authorized.
+    *   If the receipt is valid and authorized, the node may proceed to store the receipt.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the receipt is from the claimed executor and hasn't been tampered with.
+    *   **Replay Attacks:** The `timestamp` helps differentiate receipts and can mitigate replay attacks if nodes track recently seen CIDs.
+    *   **Job Validity:** This message announces a receipt; it doesn't guarantee the receipt itself is valid or non-malicious. The receipt must be valid and authorized.
+
+### 5.7. `JobInteractiveInputV1`
+
+*   **Purpose:**
+    Used in interactive jobs to send data from the originator to the executor during active job execution.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::JobInteractiveInputV1
+    pub struct JobInteractiveInput {
+        // DID of the job originator.
+        // Type: icn_types::identity::Did (String)
+        pub originator_did: String,
+
+        // DID of the executor.
+        // Type: icn_types::identity::Did (String)
+        pub executor_did: String,
+
+        // Unique identifier for this job interactive input instance.
+        // Could be a UUID or a CID of the input content.
+        // Type: String
+        pub input_id: String,
+
+        // Timestamp of when this job interactive input was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Data for the job.
+        // Type: Vec<u8> (Bytes of the input data)
+        pub data: Vec<u8>,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the originator_did's private key.
+        // Ensures authenticity and integrity of the job interactive input.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Direct messaging.
+    *   **Topic:** Not applicable.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the `originator_did`. Invalid inputs MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old inputs.
+    *   Ensure the input is valid and authorized.
+    *   If the input is valid and authorized, the node may proceed to pass the input to the job.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the input is from the claimed `originator_did` and hasn't been tampered with.
+    *   **Replay Attacks:** The `timestamp` helps differentiate inputs and can mitigate replay attacks if nodes track recently seen IDs.
+    *   **Job Validity:** This message sends job input data; it doesn't guarantee the data itself is valid or non-malicious. The input must be valid and authorized.
+
+### 5.8. `JobInteractiveOutputV1`
+
+*   **Purpose:**
+    Used in interactive jobs to send data from the executor back to the originator during active job execution.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::JobInteractiveOutputV1
+    pub struct JobInteractiveOutput {
+        // DID of the executor.
+        // Type: icn_types::identity::Did (String)
+        pub executor_did: String,
+
+        // DID of the job originator.
+        // Type: icn_types::identity::Did (String)
+        pub originator_did: String,
+
+        // Unique identifier for this job interactive output instance.
+        // Could be a UUID or a CID of the output content.
+        // Type: String
+        pub output_id: String,
+
+        // Timestamp of when this job interactive output was created (UTC, ISO 8601).
+        // Type: String
+        pub timestamp: String,
+
+        // Data for the job.
+        // Type: Vec<u8> (Bytes of the output data)
+        pub data: Vec<u8>,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the executor_did's private key.
+        // Ensures authenticity and integrity of the job interactive output.
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Direct messaging.
+    *   **Topic:** Not applicable.
+
+*   **Processing by Receiving Nodes:**
+    *   Verify the `signature` against the `executor_did`. Invalid outputs MUST be discarded.
+    *   Validate the `timestamp` to prevent processing of excessively old outputs.
+    *   Ensure the output is valid and authorized.
+    *   If the output is valid and authorized, the node may proceed to pass the output to the job.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the output is from the claimed `executor_did` and hasn't been tampered with.
+    *   **Replay Attacks:** The `timestamp` helps differentiate outputs and can mitigate replay attacks if nodes track recently seen IDs.
+    *   **Job Validity:** This message sends job output data; it doesn't guarantee the data itself is valid or non-malicious. The output must be valid and authorized. 
