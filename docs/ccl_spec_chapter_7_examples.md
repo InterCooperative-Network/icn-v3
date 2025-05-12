@@ -13,74 +13,99 @@ This example implements a three-stage workflow for budget proposals: Draft, Voti
 ### 7.1.1 CCL Source: `budget_increase_proposal.ccl`
 
 ```ccl
-// budget_increase_proposal.ccl
+// budget_increase_proposal.ccl (Revised based on RFCs 0003-0007)
 
 proposal_def "Budget Increase" {
   description "Request to raise the operational budget for the next fiscal period."
-  duration    "14d" // Default voting duration if not specified by the voting stage
-  min_votes   5     // Minimum number of votes required for the proposal to be considered (not necessarily quorum for approval)
-  // Assumed context variables available at runtime for an instance of this proposal:
-  // - proposal.id: string (unique ID of this proposal instance)
-  // - proposal.submitter_id: string (DID of the submitter)
-  // - proposal.content: any (the full content/details of the budget request)
-  // - proposal.valid_amount: boolean (pre-validated flag indicating if requested amount is sensible)
+  // Default duration for proposal-level concerns (e.g., overall lifecycle if not stage-specific)
+  // For now, this is a String. Canonical Duration type is pending (RFC-0007 Future Extensions).
+  default_duration    "14d" 
+  min_votes   5     // Number (Canonical Type: Number - i64 or u64)
+
+  // Context variables available at runtime for an instance of this proposal,
+  // typically populated by the host into contract.properties:
+  // - contract.properties.id: String (Unique ID of this proposal instance)
+  // - contract.properties.submitter_id: DID (String, DID Format)
+  // - contract.properties.content: Any (The full content/details of the budget request)
+  // - contract.properties.valid_amount: Boolean (Pre-validated flag)
+  // - contract.properties.definition.description: String (from proposal_def)
+  // - contract.properties.definition.default_duration: String (from proposal_def)
+  // - contract.properties.definition.min_votes: Number (from proposal_def)
 }
 
 process_def "BudgetIncreaseProcess" {
   // Defines the state machine for this proposal type
   stages {
     stage "Draft" {
-      enter_action { // Action taken immediately upon entering the "Draft" stage
-        log_event(
+      enter_action { 
+        // HOST_ACTION: maps to host_log_event(name: String, detail: String, context: Object)
+        log_event( 
             name: "budget_proposal.draft_started", 
             detail: "New budget proposal instance created and entered Draft stage.",
-            context: { proposal_id: proposal.id }
+            // Accessing proposal instance ID from context
+            context: { proposal_id: contract.properties.id } 
         );
       }
-      on "submit" { // Event triggering a state evaluation
-        if proposal.valid_amount == true { // Condition using a context variable
-          transition_to "Voting"
+      on "submit" { // Event "submit"
+        // Condition uses a pre-validated boolean flag from the proposal's instance properties
+        if contract.properties.valid_amount == true { 
+          // HOST_ACTION: maps to host_transition_stage(stage_name: String)
+          transition_to "Voting" 
         } else {
+          // HOST_ACTION: maps to host_log_event(...)
           log_event(
             name: "budget_proposal.invalid_submission",
-            level: "warn", // Example of specifying log level
+            level: "warn", 
             detail: "Submission rejected due to invalid amount.",
-            context: { proposal_id: proposal.id, reason: "InvalidAmount" }
+            context: { proposal_id: contract.properties.id, reason: "InvalidAmount" }
           );
-          // Implicitly stays in "Draft" or could transition to a "FailedValidation" stage
-          // For this example, we assume it remains in Draft for correction.
+          // Stays in "Draft"
         }
       }
     } // End of "Draft" stage
 
     stage "Voting" {
+      // Stage-specific properties, conceptually available via contract.current_stage.definition.*
+      // For now, this is a String. Canonical Duration type is pending (RFC-0007 Future Extensions).
+      duration "10d" 
+
       enter_action {
+        // HOST_ACTION: maps to host_anchor_data(path: String, data: Any, metadata: Object) -> String? (CID)
         anchor_data { 
-            path concat("proposals/", proposal.id, "/budget_request_v1.ccl_content"), // Dynamic path
-            data proposal.content, // Anchors the proposal content itself
-            metadata { contentType: "application/vnd.icn.ccl.proposal.v1+json" } // Example metadata
+            // Path constructed using stdlib concat() and proposal instance ID
+            path concat("proposals/", contract.properties.id, "/budget_request_v1.ccl_content"), 
+            data contract.properties.content, // Anchors the proposal content
+            metadata { contentType: "application/vnd.icn.ccl.proposal.v1+json" } 
         }
+        // HOST_ACTION: maps to host_log_event(...)
         log_event(
             name: "budget_proposal.voting_started",
             detail: "Proposal content anchored. Voting period now open.",
-            context: { proposal_id: proposal.id, voting_duration: self.duration } // self refers to current block's properties
+            // Accessing stage-specific duration; assuming runtime makes this available
+            // e.g., contract.current_stage.definition.duration or similar path
+            context: { proposal_id: contract.properties.id, voting_duration: self.duration } 
         );
       }
-      duration "10d" // Specific duration for this stage, overrides proposal_def default for voting
       
-      on "vote_cast" { // Event for each vote
-        perform_metered_action("ProcessIncomingVote", ResourceType.CPU, 10); 
-        // Actual vote tallying logic might be complex, handled by host or specific opcodes
+      on "vote_cast" { // Event "vote_cast"
+        // HOST_ACTION: maps to host_perform_metered_action(action_name: String, resource_type: ResourceTypeName, amount: Number)
+        // ResourceTypeName is a String enum as per RFC-0007
+        perform_metered_action("ProcessIncomingVote", "CPU", 10); 
       }
 
-      on "voting_closed" { // Event when voting period ends
-        // Assumed context variables available from voting system:
-        // - tally.approved_count: number
-        // - tally.rejected_count: number
-        // - tally.total_votes_cast: number
-        if tally.approved_count >= proposal.min_votes { // Using min_votes from proposal_def
+      on "voting_closed" { // Event "voting_closed"
+        // Assumed context variables available from voting system via trigger.parameters
+        // (Types: Number as per RFC-0007)
+        // - trigger.parameters.approved_count: Number
+        // - trigger.parameters.rejected_count: Number
+        // - trigger.parameters.total_votes_cast: Number
+        
+        // Accessing min_votes from the proposal definition's properties
+        if trigger.parameters.approved_count >= contract.properties.definition.min_votes { 
+          // HOST_ACTION: maps to host_transition_stage(stage_name: String)
           transition_to "Approved"
         } else {
+          // HOST_ACTION: maps to host_transition_stage(stage_name: String)
           transition_to "Rejected"
         }
       }
@@ -88,19 +113,25 @@ process_def "BudgetIncreaseProcess" {
 
     stage "Approved" {
       enter_action {
+        // HOST_ACTION: maps to host_log_event(...)
         log_event(
             name: "budget_proposal.approved",
             detail: "Budget proposal approved.",
-            context: { proposal_id: proposal.id }
+            context: { proposal_id: contract.properties.id }
         );
+        // HOST_ACTION: maps to host_mint_token(token_type: String, recipient: DID, amount: Number, data: Object) -> String? (TokenID/ReceiptID)
         mint_token {
-          token_type      "BudgetApprovalReceipt"
-          recipient proposal.submitter_id
-          amount    1 // A single non-fungible receipt token
+          token_type      "BudgetApprovalReceipt" // String
+          recipient contract.properties.submitter_id // DID (String)
+          amount    1 // Number
           data      { 
-            proposal_id: proposal.id, 
-            approved_on: timestamp(), // timestamp() is a stdlib function
-            document_cid: self.previous_stage_anchor_cid // Conceptual: access to output of previous action
+            proposal_id: contract.properties.id, // String
+            // timestamp() is a stdlib function returning Number (u64) as per RFC-0006
+            approved_on: timestamp(), 
+            // ⚠️ TODO (RFC-0008): Mechanism for accessing results of previous host actions (like anchor_data CID) is needed.
+            // Current `self.previous_stage_anchor_cid` is conceptual and not yet supported by defined context/ABI.
+            // Placeholder: document_cid: get_context_value("contract.state.last_anchor_cid") 
+            document_cid: self.previous_stage_anchor_cid 
           } 
         }
       }
@@ -108,11 +139,12 @@ process_def "BudgetIncreaseProcess" {
 
     stage "Rejected" {
         enter_action {
+            // HOST_ACTION: maps to host_log_event(...)
             log_event(
                 name: "budget_proposal.rejected",
-                level: "info",
+                level: "info", // String
                 detail: "Budget proposal rejected.",
-                context: { proposal_id: proposal.id }
+                context: { proposal_id: contract.properties.id }
             );
         }
     } // End of "Rejected" stage
@@ -139,7 +171,7 @@ This CCL contract defines a structured, multi-stage process for handling "Budget
 *   **`anchor_data {}`**: An action to store data verifiably on the ICN DAG, mapping to relevant host ABI calls for data writing and anchoring.
 *   **`perform_metered_action(...)`**: Explicitly declares that an action consumes resources, interfacing with the ICN economics system via `host_check_resource_authorization` and `host_record_resource_usage`.
 *   **`mint_token {}`**: An action to create new tokens, mapping to `host_mint_token`.
-*   **Contextual Variables**: The CCL code relies on runtime-provided context (e.g., `proposal.id`, `proposal.submitter_id`, `tally.approved_count`). `self.` refers to properties defined in the current CCL block's scope (e.g., `self.duration` within the "Voting" stage refers to its "10d" duration). `timestamp()` is an example of a CCL standard library function.
+*   **Contextual Variables**: The CCL code relies on runtime-provided context (e.g., `proposal.id`, `proposal.submitter_id`, `tally.approved_count`). `self.` refers to properties defined in the current CCL block's scope (e.g., a stage's own `duration`). `timestamp()` is an example of a CCL standard library function.
 
 ### 7.1.4 Conceptual DSL AST Mapping (`icn-ccl-dsl`) (Excerpt)
 
@@ -595,45 +627,39 @@ A simplified conceptual sequence for the `action_handler`:
 ```rust
 // Program.ops (for HandleBudgetAllocationRequest):
 [
-    // Opcode::SetActionHandlerContext { handler_name: "HandleBudgetAllocationRequest", trigger: "budget.allocation.requested" },
+    // Step 1: Meter initial request
+    Opcode::UseResource { resource_type: "CPU", amount: 20 },
 
-    // Step 1: Permission Check
-    Opcode::CheckPermission { permission_name_ptr: ..., permission_name_len: ... }, // "treasury.allocate_budget"
-    // This opcode would cause the host to check against caller.role and roles_def.
-    // If it fails, the host might trap, or set a flag that subsequent opcodes check.
-    // For a non-halting version, it might return a boolean to a register.
+    // Step 2: Basic permission/role check
+    Opcode::IfConditionExpr { condition_expr_string: "caller.role == "guest"" },
+        Opcode::CallHostFunction { function_name: "log_event", args_json: "..." },
+        Opcode::FailAction { reason_ptr: ..., reason_len: ... },
+    Opcode::EndIf,
 
-    // Step 2: Validate Request
-    Opcode::IfConditionExpr { condition_expr_string: "request.amount <= 0" }, // Host evaluates this with context
-        Opcode::CallHostFunction { function_name: "log_event", args_json: "{...}" },
-        Opcode::FailAction { reason_ptr: ..., reason_len: ... }, // "Invalid request amount." - Halts this action
-    Opcode::EndIf, // No Else branch for this specific If
-
-    // Step 3: Perform Metered Action
-    Opcode::UseResource { resource_type: "Transaction", amount: 50 }, // "ProcessBudgetAllocation" is descriptive
-
-    // Step 4: Anchor Data
-    Opcode::AnchorData { 
-        path_expr: "concat("treasury/allocations/", request.category, "/", request.id)",
-        data_json_expr: "{\"allocated_to\": caller.id, ... , \"timestamp\": timestamp()}", // Host resolves expr
-        metadata_json: "{\"contentType\":\"application/vnd.icn.treasury.allocation.v1+json\"}"
+    // Step 3: Validate Spending Request (single host call)
+    Opcode::CallHostFunctionComplex { // Assumes a more complex host call
+        function_name: "validate_spending_request_against_budget_def".to_string(),
+        args_json: "{\"budget_name\": \"<resolved_request.budget_name>\", ...}", // Host resolves context
+        // Host returns 0 on success, error code on failure (e.g., rule violation)
     },
+    // Check return status from validate_spending_request; if error, FailAction or Trap.
 
-    // Step 5: Mint Token
-    Opcode::MintToken {
-        token_type: "BudgetAllocationReceipt",
-        recipient_ref: "caller.id",
-        amount: 1,
-        data_json_expr: "{\"request_id\": request.id, ... , \"allocated_at\": timestamp()}"
+    // Step 4: Disburse Funds (single host call to economics layer)
+    Opcode::CallHostFunctionComplex {
+        function_name: "disburse_funds_from_budget".to_string(),
+        args_json: "{\"budget_name\": \"<resolved_request.budget_name>\", ...}",
+    },
+    // Check return status; if error, FailAction or Trap.
+
+    // Step 5: Anchor Data
+    Opcode::AnchorData { 
+        path_expr: "concat(\"treasury/allocations/\", request.category, \"/\", request.id)",
+        data_json_expr: "{...}", // Host resolves context and expressions like timestamp(), generate_uuid()
+        metadata_json: "..."
     },
 
     // Step 6: Log Success
     Opcode::CallHostFunction { function_name: "log_event", args_json: "{\"name\":\"budget_allocation.succeeded\", ...}" },
-
-    // Conceptual: Opcodes for on_fail (if not handled by host trap on CheckPermission failure)
-    // Opcode::IfErrorCondition { error_type: "PermissionDenied" }, // Checks a flag set by a failing CheckPermission
-    //     Opcode::CallHostFunction { function_name: "log_event", args_json: "{\"name\":\"budget_allocation.unauthorized\", ...}" },
-    // Opcode::EndIfError,
 ]
 ```
 The `roles_def` itself might be compiled into a data structure that the host loads or that `CheckPermission` opcodes refer to by name ("CooperativeRoles").
@@ -887,7 +913,7 @@ It showcases how CCL can model financial controls and integrate them with the IC
     // Within DslModule::ActionHandler steps vec!:
     ActionStep::PerformMeteredAction { action_name: "ProcessDisbursementRequest", resource_type: "CPU", amount: 20 },
     ActionStep::If(IfExpr { // Basic role check example
-        condition_raw: "caller.role == "guest"",
+        condition_raw: "caller.role == "guest""",
         then_rules: vec![ /* log_event, fail_action */ ],
         else_rules: None,
     }),
