@@ -9,7 +9,7 @@ use axum::{
 use cid::Cid;
 use futures::{stream::StreamExt, SinkExt};
 use icn_identity::Did;
-use icn_types::jobs::{Bid, JobRequest, JobStatus, ResourceEstimate};
+use icn_types::jobs::{Bid, JobRequest, JobStatus, ResourceEstimate, ResourceRequirements};
 use icn_types::reputation::{ReputationRecord, ReputationUpdateEvent, ReputationProfile};
 use icn_types::mesh::MeshJobParams;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ use tracing_subscriber;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use multihash::{Code, Multihash};
+use dotenv::dotenv;
+use std::ops::Deref;
 
 // Added for SqliteStore integration
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
@@ -35,9 +37,15 @@ mod sqlite_store; // Declare the new module
 use sqlite_store::SqliteStore; // Import the SqliteStore struct
 
 mod reputation_client;
+mod reputation_cache; // Add reputation_cache module
+mod metrics; // Add metrics module  
 mod bid_logic;
 mod job_assignment; // Added module
+mod models; // Add models module
+
+// Import our types
 use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector, GovernedExecutorSelector, ExecutionPolicy}; // Updated import
+use crate::models::{BidEvaluatorConfig, ScoreComponent, ReputationSummary, BidExplanation, BidsExplainResponse};
 
 // ADDITION START
 // Define a type alias for the shared P2P node state
@@ -155,6 +163,38 @@ fn generate_job_cid_from_payload(
     Ok(Cid::new_v1(cid:: известных_кодеков::DAG_CBOR, multihash))
 }
 
+// Add bid extension trait
+trait BidExtension {
+    fn score_components(&self) -> Option<&Vec<ScoreComponent>>;
+}
+
+impl BidExtension for Bid {
+    fn score_components(&self) -> Option<&Vec<ScoreComponent>> {
+        // Default implementation returns None since standard Bid doesn't have this field
+        None
+    }
+}
+
+// Add an enhanced bid wrapper
+struct EnhancedBidWrapper {
+    inner: Bid,
+    components: Option<Vec<ScoreComponent>>,
+}
+
+impl Deref for EnhancedBidWrapper {
+    type Target = Bid;
+    
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl BidExtension for EnhancedBidWrapper {
+    fn score_components(&self) -> Option<&Vec<ScoreComponent>> {
+        self.components.as_ref()
+    }
+}
+
 /// Start the ICN Mesh Jobs server with P2P integration.
 pub async fn run_server(
     database_url: String,
@@ -256,6 +296,7 @@ pub async fn run_server(
         .route("/jobs/:job_id/start", post(start_job_handler))
         .route("/jobs/:job_id/complete", post(mark_job_completed_handler))
         .route("/jobs/:job_id/fail", post(mark_job_failed_handler))
+        .route("/metrics", get(metrics_handler))
         .layer(Extension(store.clone()))
         .layer(Extension(reputation_url.clone()))
         .layer(Extension(shared_p2p.clone()));
@@ -585,7 +626,7 @@ async fn assign_best_bid_handler(
     metrics::record_bid_evaluation(&selection_reason);
     
     // Record component scores if we have them (from the ReputationExecutorSelector)
-    if let Some(components) = winning_bid.score_components.as_ref() {
+    if let Some(components) = winning_bid.score_components() {
         for component in components {
             metrics::record_bid_component_score(
                 &component.name, 
@@ -1071,4 +1112,30 @@ fn calculate_resource_match(estimate: &ResourceEstimate, requirements: &Resource
     
     // Average the match scores
     (cpu_match + memory_match + storage_match) / 3.0
+}
+
+/// Handler for Prometheus metrics endpoint
+async fn metrics_handler() -> impl IntoResponse {
+    let encoder = prometheus::TextEncoder::new();
+    let registry = metrics::get_registry();
+    
+    let mut buffer = Vec::new();
+    if let Err(e) = encoder.encode(&registry.gather(), &mut buffer) {
+        tracing::error!("Failed to encode Prometheus metrics: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to encode metrics").into_response();
+    }
+    
+    match String::from_utf8(buffer) {
+        Ok(metrics_text) => {
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/plain")],
+                metrics_text
+            ).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to convert metrics to UTF-8: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to format metrics").into_response()
+        }
+    }
 } 

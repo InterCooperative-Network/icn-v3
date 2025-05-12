@@ -1,13 +1,243 @@
 use anyhow::Result;
-// Use the updated types directly from icn_types
-use icn_types::jobs::{Bid, JobRequest}; // NodeMetadata is part of Bid
-use crate::bid_logic; // Still need this for calculate_bid_selection_score
+use async_trait::async_trait;
+use cid::Cid;
+use icn_identity::Did;
+use icn_types::jobs::{Bid, JobRequest};
+use std::sync::Arc;
+use crate::bid_logic;
+use crate::models::BidEvaluatorConfig;
+use crate::reputation_client::{ReputationClient, ReputationProfile};
+use crate::metrics;
+
+/// Defines the selection strategy to use for assigning jobs to executors
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectionStrategy {
+    /// Select the bid with the lowest price
+    LowestPrice,
+    /// Select the bid based on reputation score
+    Reputation,
+    /// Select the bid using a hybrid approach
+    Hybrid,
+}
+
+/// Defines the policy parameters for the GovernedExecutorSelector.
+/// This might be sourced from job metadata, governance proposals, or runtime configuration.
+#[derive(Debug, Clone)]
+pub struct ExecutionPolicy {
+    pub rep_weight: f64,
+    pub price_weight: f64,
+    pub region_filter: Option<String>,
+    pub min_reputation: Option<f64>,
+    pub selection_strategy: SelectionStrategy,
+}
+
+impl Default for ExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            rep_weight: 0.7,
+            price_weight: 0.3,
+            region_filter: None,
+            min_reputation: None,
+            selection_strategy: SelectionStrategy::Reputation,
+        }
+    }
+}
 
 /// Trait for selecting the best executor (winning bid) for a given job request.
+#[async_trait]
 pub trait ExecutorSelector: Send + Sync {
-    /// Given a job request and a list of bids, returns the winning bid and its score,
+    /// Given a job request and a list of bids, returns the winning bid, its score, and the reason,
     /// or `None` if no bid is acceptable.
-    fn select(&self, request: &JobRequest, bids: &[Bid]) -> Result<Option<(Bid, f64)>>;
+    async fn select(&self, request: &JobRequest, bids: &[Bid], job_id: Cid) -> Result<Option<(Bid, f64, String)>>;
+}
+
+/// Selector that chooses the executor with the lowest price.
+pub struct LowestPriceExecutorSelector {}
+
+#[async_trait]
+impl ExecutorSelector for LowestPriceExecutorSelector {
+    async fn select(&self, _request: &JobRequest, bids: &[Bid], _job_id: Cid) -> Result<Option<(Bid, f64, String)>> {
+        if bids.is_empty() {
+            return Ok(None);
+        }
+        
+        // Find the bid with the lowest price
+        let mut best_bid = &bids[0];
+        let mut lowest_price = best_bid.price;
+        
+        for bid in bids {
+            if bid.price < lowest_price {
+                best_bid = bid;
+                lowest_price = bid.price;
+            }
+        }
+        
+        let reason = format!("lowest_price_{}", lowest_price);
+        metrics::record_bid_evaluation(&reason);
+        
+        Ok(Some((best_bid.clone(), 1.0, reason)))
+    }
+}
+
+/// Selector that uses reputation scores to choose the best executor.
+pub struct ReputationExecutorSelector {
+    pub config: BidEvaluatorConfig,
+    pub reputation_client: Arc<dyn ReputationClient>,
+}
+
+#[async_trait]
+impl ExecutorSelector for ReputationExecutorSelector {
+    async fn select(&self, request: &JobRequest, bids: &[Bid], _job_id: Cid) -> Result<Option<(Bid, f64, String)>> {
+        if bids.is_empty() {
+            return Ok(None);
+        }
+        
+        // Calculate max price for normalization
+        let max_price = bids.iter().map(|b| b.price).max().unwrap_or(1);
+        
+        let mut best: Option<(Bid, f64, String)> = None;
+        
+        for bid in bids {
+            // Calculate normalized price (0-1 where 0 is best)
+            let normalized_price = if max_price > 0 { bid.price as f64 / max_price as f64 } else { 0.0 };
+            
+            // Calculate resource match (0-1 where 1 is best)
+            let resource_match = self.calculate_resource_match(&bid.estimate, &request.requirements);
+            
+            // Fetch reputation profile
+            let profile = match self.reputation_client.fetch_profile(&bid.bidder.0).await {
+                Ok(profile) => profile,
+                Err(e) => {
+                    tracing::warn!("Failed to fetch reputation for {}: {}", bid.bidder.0, e);
+                    // Use a default profile with neutral reputation
+                    ReputationProfile {
+                        node_id: bid.bidder.0.clone(),
+                        total_jobs: 0,
+                        successful_jobs: 0,
+                        failed_jobs: 0,
+                        jobs_on_time: 0,
+                        jobs_late: 0,
+                        average_execution_ms: None,
+                        average_bid_accuracy: None,
+                        dishonesty_events: 0,
+                        endorsements: vec![],
+                        computed_score: 50.0, // Neutral score
+                    }
+                }
+            };
+            
+            // Calculate score using the client's logic
+            let score = self.reputation_client.calculate_bid_score(
+                &self.config,
+                &profile,
+                normalized_price,
+                resource_match
+            );
+            
+            // Determine if this is the best bid so far
+            if best.is_none() || score > best.as_ref().unwrap().1 {
+                // Create reason string based on dominant factor
+                let reason = if profile.computed_score > 75.0 {
+                    format!("high_reputation_{}", bid.bidder.0)
+                } else if normalized_price < 0.3 {
+                    format!("low_price_{}", bid.bidder.0)
+                } else if resource_match > 0.8 {
+                    format!("good_resource_match_{}", bid.bidder.0)
+                } else {
+                    format!("balanced_score_{}", bid.bidder.0)
+                };
+                
+                best = Some((bid.clone(), score, reason));
+            }
+        }
+        
+        Ok(best)
+    }
+}
+
+impl ReputationExecutorSelector {
+    // Helper method to calculate resource match
+    fn calculate_resource_match(&self, estimate: &icn_types::jobs::ResourceEstimate, requirements: &icn_types::jobs::ResourceRequirements) -> f64 {
+        // CPU match - estimate should be >= requirement
+        let cpu_match = if estimate.cpu >= requirements.cpu {
+            1.0
+        } else {
+            estimate.cpu as f64 / requirements.cpu as f64
+        };
+        
+        // Memory match
+        let memory_match = if estimate.memory_mb >= requirements.memory_mb {
+            1.0
+        } else {
+            estimate.memory_mb as f64 / requirements.memory_mb as f64
+        };
+        
+        // Storage match
+        let storage_match = if estimate.storage_mb >= requirements.storage_mb {
+            1.0
+        } else {
+            estimate.storage_mb as f64 / requirements.storage_mb as f64
+        };
+        
+        // Average the match scores
+        (cpu_match + memory_match + storage_match) / 3.0
+    }
+}
+
+/// Hybrid selector that combines aspects of ExecutionPolicy with reputation-based scoring.
+pub struct HybridExecutorSelector {
+    pub policy: ExecutionPolicy,
+    pub reputation_client: Arc<dyn ReputationClient>,
+}
+
+#[async_trait]
+impl ExecutorSelector for HybridExecutorSelector {
+    async fn select(&self, request: &JobRequest, bids: &[Bid], job_id: Cid) -> Result<Option<(Bid, f64, String)>> {
+        if bids.is_empty() {
+            return Ok(None);
+        }
+        
+        // Filter by minimum reputation if specified
+        let filtered_bids = if let Some(min_rep) = self.policy.min_reputation {
+            let mut valid_bids = Vec::new();
+            
+            for bid in bids {
+                let profile = match self.reputation_client.fetch_profile(&bid.bidder.0).await {
+                    Ok(profile) => profile,
+                    Err(_) => continue, // Skip bids where we can't fetch reputation
+                };
+                
+                // Check if reputation meets minimum
+                if profile.computed_score >= min_rep {
+                    valid_bids.push(bid.clone());
+                }
+            }
+            
+            valid_bids
+        } else {
+            bids.to_vec()
+        };
+        
+        if filtered_bids.is_empty() {
+            return Ok(None);
+        }
+        
+        // Create a config from the policy
+        let config = BidEvaluatorConfig {
+            weight_price: self.policy.price_weight,
+            weight_reputation: self.policy.rep_weight,
+            weight_resources: 0.1, // Default
+            weight_timeliness: 0.1, // Default
+        };
+        
+        // Use the ReputationExecutorSelector for actual scoring
+        let reputation_selector = ReputationExecutorSelector {
+            config,
+            reputation_client: self.reputation_client.clone(),
+        };
+        
+        reputation_selector.select(request, &filtered_bids, job_id).await
+    }
 }
 
 /// Default executor selector, using reputation and price weights.
@@ -23,9 +253,10 @@ impl DefaultExecutorSelector {
     }
 }
 
+#[async_trait]
 impl ExecutorSelector for DefaultExecutorSelector {
-    fn select(&self, request: &JobRequest, bids: &[Bid]) -> Result<Option<(Bid, f64)>> {
-        let mut best: Option<(Bid, f64)> = None;
+    async fn select(&self, request: &JobRequest, bids: &[Bid], _job_id: Cid) -> Result<Option<(Bid, f64, String)>> {
+        let mut best: Option<(Bid, f64, String)> = None;
         for bid in bids {
             let score = bid_logic::calculate_bid_selection_score(
                 bid,
@@ -35,7 +266,7 @@ impl ExecutorSelector for DefaultExecutorSelector {
             );
             if score > 0.0 { // Ensure score is positive
                 if best.is_none() || score > best.as_ref().unwrap().1 {
-                    best = Some((bid.clone(), score));
+                    best = Some((bid.clone(), score, "default_scoring".to_string()));
                 }
             }
         }
@@ -43,62 +274,14 @@ impl ExecutorSelector for DefaultExecutorSelector {
     }
 }
 
-/// Defines the policy parameters for the GovernedExecutorSelector.
-/// This might be sourced from job metadata, governance proposals, or runtime configuration.
-#[derive(Debug, Clone)]
-pub struct ExecutionPolicy {
-    pub rep_weight: f64,
-    pub price_weight: f64,
-    pub region_filter: Option<String>,
-    pub min_reputation: Option<f64>,
-}
-
-/// Governed executor selector, using an ExecutionPolicy.
+/// Legacy selector, to be phased out
 pub struct GovernedExecutorSelector {
     pub policy: ExecutionPolicy,
 }
 
 impl GovernedExecutorSelector {
+    /// Create a new governed selector with the given policy.
     pub fn new(policy: ExecutionPolicy) -> Self {
         Self { policy }
-    }
-}
-
-impl ExecutorSelector for GovernedExecutorSelector {
-    fn select(&self, request: &JobRequest, bids: &[Bid]) -> Result<Option<(Bid, f64)>> {
-        let mut best_bid: Option<(Bid, f64)> = None;
-
-        for bid in bids {
-            // Filter based on policy using bid.node_metadata
-            if let Some(ref required_region) = self.policy.region_filter {
-                let bid_region = bid.node_metadata.as_ref().and_then(|meta| meta.region.as_ref());
-                if bid_region.map(|s| s.as_str()) != Some(required_region.as_str()) {
-                    tracing::debug!(bidder = %bid.bidder, job_id = %request.wasm_cid, "Bidder filtered out by region policy. Required: {:?}, Bidder has: {:?}", required_region, bid_region);
-                    continue;
-                }
-            }
-
-            if let Some(min_rep) = self.policy.min_reputation {
-                let bid_reputation = bid.node_metadata.as_ref().and_then(|meta| meta.reputation);
-                if bid_reputation.unwrap_or(0.0) < min_rep {
-                     tracing::debug!(bidder = %bid.bidder, job_id = %request.wasm_cid, "Bidder filtered out by reputation policy. Min required: {}, Bidder has: {:?}", min_rep, bid_reputation);
-                    continue;
-                }
-            }
-
-            let score = bid_logic::calculate_bid_selection_score(
-                bid,
-                request,
-                self.policy.rep_weight,
-                self.policy.price_weight,
-            );
-
-            if score > 0.0 { // Ensure score is positive
-                 if best_bid.is_none() || score > best_bid.as_ref().unwrap().1 {
-                    best_bid = Some((bid.clone(), score));
-                }
-            }
-        }
-        Ok(best_bid)
     }
 } 

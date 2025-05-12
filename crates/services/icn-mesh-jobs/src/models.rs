@@ -1,3 +1,6 @@
+use serde::{Serialize, Deserialize};
+use icn_types::jobs::Bid;
+
 /// Component of a bid score for explanation purposes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoreComponent {
@@ -63,4 +66,18 @@ pub struct BidEvaluatorConfig {
     pub weight_resources: f64,
     pub weight_reputation: f64,
     pub weight_timeliness: f64,
+}
+
+/// Enhanced Bid with additional information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedBid {
+    /// Original bid information
+    #[serde(flatten)]
+    pub bid: icn_types::jobs::Bid,
+    
+    /// Detailed score component breakdown (if evaluated)
+    pub score_components: Option<Vec<ScoreComponent>>,
+    
+    /// Reason this bid was selected (if it was the winner)
+    pub selection_reason: Option<String>,
 } 
