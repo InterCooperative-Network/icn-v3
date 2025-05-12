@@ -478,42 +478,76 @@ All message payloads are serialized using CBOR.
 ### 5.6. `ExecutionReceiptAvailableV1`
 
 *   **Purpose:**
-    Sent by an executor after job completion to announce that the signed `ExecutionReceipt` (identified by its CID) is available.
+    Sent by the `executor_did` after successful job completion to announce that the signed `ExecutionReceipt` is available for retrieval. This message primarily targets the `originator_did` of the job, but can also be broadcast more widely (e.g., via Gossipsub) for general discoverability by auditors or other interested parties. It provides the necessary information (primarily the CID of the receipt) for any authorized party to fetch the full `ExecutionReceipt`.
 
 *   **Schema (Conceptual Rust Struct):**
     ```rust
     // Contained within MeshProtocolMessage::ExecutionReceiptAvailableV1
     pub struct ExecutionReceiptAvailable {
-        // CID of the signed ExecutionReceipt.
-        // Type: icn_types::cid::Cid (String)
-        pub cid: String,
+        // Identifier of the JobAnnouncement this receipt pertains to.
+        // MUST match the announcement_id of the original JobAnnouncementV1.
+        // Type: String
+        pub announcement_id: String,
 
-        // Timestamp of when this ExecutionReceipt was created (UTC, ISO 8601).
+        // DID of the job originator for whom the job was executed.
+        // Type: icn_types::identity::Did (String)
+        pub originator_did: String,
+
+        // DID of the executor who executed the job and generated the receipt.
+        // Type: icn_types::identity::Did (String)
+        pub executor_did: String,
+
+        // CID of the full, signed ExecutionReceipt.
+        // The actual ExecutionReceipt object (likely stored on DHT or directly providable
+        // by the executor) contains detailed execution results, proofs, and its own signature.
+        // Type: icn_types::cid::Cid (String)
+        pub receipt_cid: String,
+
+        // Timestamp of when this availability announcement was created (UTC, ISO 8601).
         // Type: String
         pub timestamp: String,
 
-        // Cryptographic signature of the fields above (excluding the signature itself),
-        // created by the executor's private key.
-        // This ensures authenticity and integrity of the ExecutionReceipt.
+        // Cryptographic signature of the fields above in this ExecutionReceiptAvailable message
+        // (i.e., announcement_id, originator_did, executor_did, receipt_cid, timestamp),
+        // created by the executor_did's private key.
+        // This signature authenticates this *announcement* message.
         // Type: Vec<u8> (Bytes of the signature)
         pub signature: Vec<u8>,
     }
     ```
 
 *   **Transport & Topic:**
-    *   **Mechanism:** Direct messaging.
-    *   **Topic:** Not applicable.
+    *   **Primary Mechanism:** Direct messaging to the `originator_did` of the job.
+    *   **Secondary Mechanism (Optional):** Gossipsub for broader dissemination.
+        *   **Topic Example:** `/icn/mesh/receipts/available/v1`
+        *   Nodes subscribing to this topic might include auditors, reputation services, or other components that track job completion and receipt availability across the network.
+    *   The choice of transport may depend on originator preferences or network policy.
 
 *   **Processing by Receiving Nodes:**
-    *   Verify the `signature` against the executor's private key. Invalid receipts MUST be discarded.
-    *   Validate the `timestamp` to prevent processing of excessively old receipts.
-    *   Ensure the receipt is valid and authorized.
-    *   If the receipt is valid and authorized, the node may proceed to store the receipt.
+    *   **General Validation (Applicable to Originator and other Subscribers):**
+        1.  Verify the `signature` of this `ExecutionReceiptAvailableV1` message against the `executor_did`'s public key. If invalid, discard.
+        2.  Validate the `timestamp` to ensure freshness and prevent replay attacks of stale announcements.
+    *   **Processing by Job Originator (`originator_did`):**
+        1.  Confirm that its own DID matches the `originator_did` field in the message.
+        2.  Verify that the `announcement_id` corresponds to a job it originated and that was assigned to the specified `executor_did`.
+        3.  If all checks pass, the originator notes that the `ExecutionReceipt` (identified by `receipt_cid`) is available for the job.
+        4.  The originator SHOULD then attempt to retrieve the full `ExecutionReceipt` from the network (e.g., via Kad-DHT `get` on the `receipt_cid`, or by directly requesting it from the `executor_did` if its address is known).
+        5.  Upon successful retrieval, the originator MUST rigorously validate the `ExecutionReceipt` itself (e.g., its internal signature, consistency with job parameters, results, proofs).
+    *   **Processing by Other Subscribing Nodes (e.g., Auditors):**
+        1.  These nodes may use the information (`receipt_cid`, `executor_did`, `originator_did`, `announcement_id`) to log the availability of the receipt.
+        2.  They MAY choose to fetch and validate the `ExecutionReceipt` based on their own criteria and policies (e.g., if auditing jobs for a specific originator or involving a particular executor).
 
 *   **Security Considerations:**
-    *   **Authenticity & Integrity:** The `signature` is crucial to ensure the receipt is from the claimed executor and hasn't been tampered with.
-    *   **Replay Attacks:** The `timestamp` helps differentiate receipts and can mitigate replay attacks if nodes track recently seen CIDs.
-    *   **Job Validity:** This message announces a receipt; it doesn't guarantee the receipt itself is valid or non-malicious. The receipt must be valid and authorized.
+    *   **Authenticity of Announcement:** The `signature` on this message, verified against `executor_did`, ensures that the announcement itself is authentic and has not been tampered with. It confirms that the specified `executor_did` claims a receipt with `receipt_cid` is available for the job `announcement_id`.
+    *   **Integrity of Announcement:** The signature also ensures the integrity of the announced `receipt_cid` and other fields.
+    *   **Replay Attacks (Announcement):** The `timestamp` and tracking of seen `announcement_id`/`receipt_cid` pairs help mitigate replaying old availability announcements.
+    *   **False/Malicious Announcements:** An executor could maliciously announce a `receipt_cid` that:
+        *   Does not exist.
+        *   Points to a malformed or invalid `ExecutionReceipt`.
+        *   Points to an `ExecutionReceipt` for a different job or signed by an unexpected party.
+        Receiving nodes (especially the originator) mitigate this by *always* fetching and thoroughly validating the actual `ExecutionReceipt` referenced by `receipt_cid`. Failure to provide a valid, corresponding receipt would severely damage the executor's reputation.
+    *   **Receipt Validity is Separate:** This message only *announces* availability. The actual `ExecutionReceipt` obtained via `receipt_cid` MUST be independently and rigorously validated (its own internal signature, contents, proofs, linkage to the job, etc.) according to ICN standards for `ExecutionReceipts`. This message does not provide any guarantees about the validity of the receipt itself, only about its claimed existence and location.
+    *   **Spamming Announcements:** If Gossipsub is used, malicious nodes could spam the topic. Standard Gossipsub defenses (peer scoring, message validation costs) apply.
 
 ### 5.7. `JobInteractiveInputV1`
 
