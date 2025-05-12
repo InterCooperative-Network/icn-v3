@@ -29,6 +29,9 @@ pub use context::RuntimeContextBuilder;
 mod host_environment;
 pub use host_environment::ConcreteHostEnvironment;
 
+// Import the job execution context module
+pub mod job_execution_context;
+
 // Import the wasm module
 mod wasm;
 pub use wasm::register_host_functions;

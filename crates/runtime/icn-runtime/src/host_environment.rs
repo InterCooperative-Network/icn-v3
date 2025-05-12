@@ -13,8 +13,7 @@ use thiserror::Error;
 use host_abi::*;
 use crate::job_execution_context::{JobExecutionContext, JobPermissions};
 use icn_types::mesh::MeshJobParams;
-use planetary_mesh::protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage};
-use planetary_mesh::JobStatus as P2PJobStatus;
+// use planetary_mesh::protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage}; // Temporarily commented out
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use wasmer::{Memory, WasmerEnv, FunctionEnvMut, WasmPtr, Array};
@@ -60,25 +59,25 @@ pub struct ConcreteHostEnvironment {
     /// Optional community ID for this execution context
     pub community_id: Option<CommunityId>,
     
-    /// In a real system, these would be Arcs to actual service implementations
-    pub p2p_service: Arc<dyn P2pService>,
-    pub storage_service: Arc<dyn StorageService>,
+    // /// In a real system, these would be Arcs to actual service implementations
+    // pub p2p_service: Arc<dyn P2pService>, // Temporarily commented out
+    // pub storage_service: Arc<dyn StorageService>, // Temporarily commented out, may be unrelated to planetary-mesh
 }
 
 impl ConcreteHostEnvironment {
     /// Create a new host environment with the given context and caller
     pub fn new(
         ctx: Arc<Mutex<JobExecutionContext>>,
-        p2p_service: Arc<dyn P2pService>,
-        storage_service: Arc<dyn StorageService>,
+        // p2p_service: Arc<dyn P2pService>, // Temporarily commented out
+        // storage_service: Arc<dyn StorageService>, // Temporarily commented out
         caller_did: Did,
         runtime_ctx: Arc<RuntimeContext>,
     ) -> Self {
         Self {
             ctx,
             rt: runtime_ctx,
-            p2p_service,
-            storage_service,
+            // p2p_service,
+            // storage_service,
             caller_did,
             is_governance: false,
             coop_id: None,
@@ -95,12 +94,12 @@ impl ConcreteHostEnvironment {
             is_governance: true,
             coop_id: None,
             community_id: None,
-            p2p_service: Arc::new(|target_did: Did, message: MeshProtocolMessage| -> Result<(), String> {
-                Err(String::from("Governance context does not support P2P communication"))
-            }),
-            storage_service: Arc::new(|data: &[u8]| -> Result<String, String> {
-                Err(String::from("Governance context does not support storage"))
-            }),
+            // p2p_service: Arc::new(|_target_did: Did, _message: MeshProtocolMessage| -> Result<(), String> { // Temporarily commented out
+            //     Err(String::from("Governance context does not support P2P communication"))
+            // }),
+            // storage_service: Arc::new(|_data: &[u8]| -> Result<String, String> { // Temporarily commented out
+            //     Err(String::from("Governance context does not support storage"))
+            // }),
         }
     }
     
