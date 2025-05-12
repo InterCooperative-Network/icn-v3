@@ -123,7 +123,25 @@ impl MeshNode {
     ) -> Result<(Self, Receiver<InternalNodeAction>), anyhow::Error> {
         let (internal_action_tx, internal_action_rx) = mpsc::channel(100);
 
-        let swarm = Swarm::new(...);
+        let mut swarm: Swarm<MeshBehaviour> = vervangen_door_uw_daadwerkelijke_swarm_creatie_logica_hier();
+
+        // Subscribe to the reputation records topic
+        let reputation_topic = Topic::new("reputation-records-v1".to_string());
+        match swarm.behaviour_mut().gossipsub.subscribe(&reputation_topic) {
+            Ok(subscribed) => {
+                if subscribed {
+                    tracing::info!("Successfully subscribed to '{}' gossipsub topic.", reputation_topic.hash());
+                } else {
+                    // This case should ideally not happen if subscribe returns Ok(true) for new subscription
+                    tracing::warn!("Subscription to '{}' topic reported Ok(false), might already be subscribed or other issue.", reputation_topic.hash());
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to subscribe to '{}' gossipsub topic: {:?}", reputation_topic.hash(), e);
+                // Depending on policy, you might want to return an error here:
+                // return Err(anyhow::anyhow!("Failed to subscribe to reputation topic: {}", e));
+            }
+        }
 
         Ok((
             MeshNode {
@@ -399,6 +417,17 @@ impl MeshNode {
             InternalNodeAction::ReputationSubmittedForTest(submission_data) => {
                 tracing::debug!("Test: Recording observed reputation submission: {:?}", submission_data);
                 self.test_observed_reputation_submissions.write().unwrap().push(submission_data);
+            }
+            InternalNodeAction::FetchReputationRecord { record_cid, subject_did, issuer_did } => {
+                tracing::info!(
+                    record_cid = %record_cid,
+                    subject_did = %subject_did,
+                    issuer_did = %issuer_did,
+                    "Received internal action to fetch reputation record. (Fetch logic TBD)"
+                );
+                // TODO: Phase 2, Step 5: Implement Kademlia GET logic to fetch the CBOR data for record_cid.
+                // This might involve calling a new method like self.fetch_reputation_record_via_kad(record_cid, issuer_did /* as potential provider */).await;
+                // Upon successful fetch, you would then verify the record and store it.
             }
             _ => {
                 tracing::trace!("Unhandled or placeholder internal action: {:?}", action);
