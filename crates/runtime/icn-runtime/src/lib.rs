@@ -222,7 +222,7 @@ pub struct Runtime {
     engine: Engine,
 
     /// Wasmtime linker
-    linker: Linker<wasm::linker::StoreData>,
+    linker: Linker<wasm::StoreData>,
 
     /// Module cache
     module_cache: Option<Arc<dyn ModuleCache>>,
@@ -374,7 +374,7 @@ impl Runtime {
         args: Vec<Val>,
     ) -> Result<Box<[Val]>, RuntimeError> {
         
-        let mut store_data = wasm::linker::StoreData::new();
+        let mut store_data = wasm::StoreData::new();
         if let Some(host_env_arc) = &self.host_env {
             let host_env_clone = host_env_arc.lock().unwrap();
             store_data.set_host((*host_env_clone).clone());
@@ -400,7 +400,7 @@ impl Runtime {
     }
 
     /// Helper to load (or get from cache) and compile module (made async)
-    async fn load_module(&self, wasm_bytes: &[u8], _store: &mut Store<wasm::linker::StoreData>) -> Result<Module, RuntimeError> {
+    async fn load_module(&self, wasm_bytes: &[u8], _store: &mut Store<wasm::StoreData>) -> Result<Module, RuntimeError> {
         let module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| RuntimeError::LoadError(format!("Failed to compile WASM: {}", e)))?;
         Ok(module)
