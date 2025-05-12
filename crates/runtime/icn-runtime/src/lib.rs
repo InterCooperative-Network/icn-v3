@@ -37,6 +37,9 @@ pub mod job_execution_context;
 mod wasm;
 pub use wasm::register_host_functions;
 
+/// Distribution worker for periodic mana payouts
+pub mod distribution_worker;
+
 /// Module cache trait for caching compiled WASM modules
 #[async_trait]
 pub trait ModuleCache: Send + Sync {

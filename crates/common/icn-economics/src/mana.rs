@@ -59,6 +59,12 @@ impl ManaPool {
             self.last_updated = now;
         }
     }
+
+    /// Credit the pool with additional mana, respecting the max cap.
+    pub fn credit(&mut self, amount: u64) {
+        self.apply_regeneration();
+        self.current = (self.current + amount).min(self.max);
+    }
 }
 
 fn now_secs() -> u64 {
@@ -94,5 +100,27 @@ impl ManaManager {
             Some(pool) => pool.consume(amount),
             None => Err(ManaError::InsufficientMana { requested: amount, available: 0 }),
         }
+    }
+
+    /// Atomically transfer mana between scopes.
+    ///
+    /// * `from` – scope to deduct from (must have sufficient balance).
+    /// * `to`   – scope to credit.  If the target pool does not yet exist it will be
+    ///           created with `max = amount` and `regen_per_sec = 1` (sane default).
+    pub fn transfer(&mut self, from: &ScopeKey, to: &ScopeKey, amount: u64) -> Result<(), ManaError> {
+        // First, attempt to deduct from the source (includes regeneration update).
+        self.spend(from, amount)?;
+
+        // Ensure the destination pool exists with at least `amount` max capacity.
+        if !self.pools.contains_key(to) {
+            self.ensure_pool(to, amount, 1);
+        }
+
+        // Safe: pool exists now.
+        if let Some(pool) = self.pools.get_mut(to) {
+            pool.credit(amount);
+        }
+
+        Ok(())
     }
 } 

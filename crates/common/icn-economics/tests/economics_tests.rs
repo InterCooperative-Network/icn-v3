@@ -40,7 +40,7 @@ async fn test_transfer_success() {
     // Lower usage = more tokens available
     // 0 usage = full balance (e.g., 100 tokens)
     {
-        let mut l = ledger.blocking_write();
+        let mut l = ledger.write().await;
         let sender_key = LedgerKey {
             did: sender.to_string(),
             coop_id: None,
@@ -63,7 +63,7 @@ async fn test_transfer_success() {
     
     // Verify balances after transfer
     {
-        let l = ledger.blocking_read();
+        let l = ledger.read().await;
         
         // Sender should now have usage of 40 (60 tokens left)
         let sender_key = LedgerKey {
@@ -97,7 +97,7 @@ async fn test_transfer_insufficient_funds() {
     // - Usage of 0 means full balance (100 tokens)
     // - Usage of 80 means 20 tokens available
     {
-        let mut l = ledger.blocking_write();
+        let mut l = ledger.write().await;
         let sender_key = LedgerKey {
             did: sender.to_string(),
             coop_id: None,
@@ -119,7 +119,7 @@ async fn test_transfer_insufficient_funds() {
     
     // Verify balances unchanged
     {
-        let l = ledger.blocking_read();
+        let l = ledger.read().await;
         
         // Sender should still have 20 tokens (80 usage)
         let sender_key = LedgerKey {
