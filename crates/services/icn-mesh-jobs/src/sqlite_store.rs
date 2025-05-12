@@ -31,6 +31,8 @@ use crate::storage::MeshJobStore;
 // The user provided: use crate::AppError; I will keep this, assuming it's correctly pathed from the crate root.
 use crate::AppError;
 
+use crate::{JobRequest, Bid};
+use icn_types::mesh::JobStatus;
 
 // Helper to generate CID for a JobRequest
 // This is a basic implementation. In a production system, you'd use a canonical serialization format.
@@ -133,7 +135,7 @@ impl MeshJobStore for SqliteStore {
                 let params: MeshJobParams = serde_json::from_str(&row.params_json)
                     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize MeshJobParams for job {}: {}", job_id_str, e)))?;
                 
-                let originator_did = Did(row.originator_did);
+                let originator_did = Did::new_ed25519(row.originator_did);
 
                 let job_request = JobRequest {
                     id: *job_id, // Use the input job_id CID
@@ -146,11 +148,11 @@ impl MeshJobStore for SqliteStore {
                     "Bidding" => JobStatus::Bidding,
                     "Assigned" => {
                         let bidder_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status in job {}", job_id_str)))?;
-                        JobStatus::Assigned { bidder: icn_identity::Did(bidder_did_str) }
+                        JobStatus::Assigned { bidder: Did::new_ed25519(bidder_did_str) }
                     }
                     "Running" => {
                         let runner_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status in job {}", job_id_str)))?;
-                        JobStatus::Running { runner: icn_identity::Did(runner_did_str) }
+                        JobStatus::Running { runner: Did::new_ed25519(runner_did_str) }
                     }
                     "Completed" => JobStatus::Completed,
                     "Failed" => {
@@ -404,7 +406,7 @@ impl MeshJobStore for SqliteStore {
             bids.push(Bid {
                 id: Some(row.id), // <-- POPULATE THE ID FIELD
                 job_id,
-                bidder: icn_identity::Did(row.bidder_did),
+                bidder: Did::new_ed25519(row.bidder_did),
                 price: row.price as u64, // TokenAmount is u64
                 estimate,
                 reputation_score: row.reputation_score,
@@ -580,7 +582,7 @@ impl MeshJobStore for SqliteStore {
             let params: MeshJobParams = serde_json::from_str(&row.params_json)
                 .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize MeshJobParams for worker job {}: {}", row.job_id, e)))?;
 
-            let originator_did = Did(row.originator_did);
+            let originator_did = Did::new_ed25519(row.originator_did);
 
             let job_request = JobRequest {
                 id: job_cid,
@@ -589,19 +591,25 @@ impl MeshJobStore for SqliteStore {
             };
 
             let job_status = match row.status_type.as_str() {
-                // "Pending" and "Bidding" should not occur based on WHERE clause but good to be exhaustive if query changes
                 "Assigned" => {
-                    let bidder_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status in worker job {}", job_request.id))))?;
-                    JobStatus::Assigned { bidder: icn_identity::Did(bidder_did_str) }
+                    let bidder_did_str = row.status_did.ok_or_else(|| {
+                        AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status in worker job {}", job_request.id))
+                    })?;
+                    JobStatus::Assigned { bidder: Did::new_ed25519(bidder_did_str) }
                 }
                 "Running" => {
-                    let runner_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status in worker job {}", job_request.id))))?;
-                    JobStatus::Running { runner: icn_identity::Did(runner_did_str) }
+                    let runner_did_str = row.status_did.ok_or_else(|| {
+                        AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status in worker job {}", job_request.id))
+                    })?;
+                    JobStatus::Running { runner: Did::new_ed25519(runner_did_str) }
                 }
-                // "Completed" and "Failed" should not occur based on WHERE clause
-                _ => return Err(AppError::Internal(anyhow::anyhow!("Unexpected job status type '{}' for worker job {}", row.status_type, job_request.id))),
+                _ => return Err(AppError::Internal(anyhow::anyhow!(
+                    "Unexpected job status type '{}' for worker job {}", 
+                    row.status_type, 
+                    job_request.id
+                )))
             };
-            worker_jobs.push((job_request, job_status)); // Changed from (job_cid, job_request, job_status)
+            worker_jobs.push((job_request, job_status));
         }
         Ok(worker_jobs)
     }

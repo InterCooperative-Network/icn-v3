@@ -28,5 +28,9 @@ prometheus = "0.13.3"
 once_cell = "1.18.0"
 async-trait = "0.1.73"
 
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+sha2 = "0.10"
+multihash = "0.18"
+
 [features]
 default = [] 
