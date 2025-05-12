@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use wasmtime::{Caller, Trap, Memory as WasmtimeMemory, Extern};
 use tracing;
 use std::convert::TryFrom;
-use anyhow::{anyhow, Result as AnyhowError};
+use anyhow::{anyhow, Error as AnyhowError};
 use cid::Cid;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::sync::mpsc::{Sender, Receiver};

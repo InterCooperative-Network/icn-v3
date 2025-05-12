@@ -5,7 +5,9 @@
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 use uuid::Uuid;
-use icn_economics::ResourceType;
+
+// Re-export ResourceType so other crates can use it via icn_ccl_dsl::ResourceType
+pub use icn_economics::ResourceType;
 
 /// Represents a generic section of the CCL that hasn't been fully modeled yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
