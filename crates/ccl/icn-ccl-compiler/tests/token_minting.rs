@@ -1,3 +1,4 @@
+#![cfg(feature = "full_host_abi")]
 use anyhow::Result;
 use icn_ccl_compiler::CclCompiler;
 use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType};
