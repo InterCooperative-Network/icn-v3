@@ -25,4 +25,13 @@ async-trait = "0.1.74"
 icn-identity = { path = "../../common/icn-identity" }
 hex = "0.4.3"
 
-[dev-dependencies] 
+[dev-dependencies]
+
+[features]
+default = []
+_compile_cli = []
+
+[[bin]]
+name = "icn"
+path = "src/main.rs"
+required-features = ["_compile_cli"] 

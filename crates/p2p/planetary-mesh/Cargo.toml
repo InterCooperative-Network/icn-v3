@@ -39,4 +39,5 @@ required-features = ["_compile_planetary_mesh"]
 [features]
 default = []
 # Enable to compile full P2P planetary mesh logic (heavy deps, WIP)
-full_mesh = [] 
+full_mesh = []
+_compile_planetary_mesh = [] 
