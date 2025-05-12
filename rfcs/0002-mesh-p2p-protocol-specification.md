@@ -320,17 +320,25 @@ All message payloads are serialized using CBOR.
     ```rust
     // Contained within MeshProtocolMessage::JobBidV1
     pub struct JobBid {
+        // Identifier of the JobAnnouncement this bid is for.
+        // Type: String (Should match JobAnnouncement.announcement_id)
+        pub announcement_id: String,
+
         // DID of the executor bidding for the job.
         // Type: icn_types::identity::Did (String)
         pub executor_did: String,
 
-        // Price for the job.
-        // Type: icn_types::mesh::Price (Decimal)
-        pub price: icn_types::mesh::Price,
+        // PeerId of the executor node, for direct P2P communication.
+        // Type: libp2p_identity::PeerId (String representation or bytes)
+        pub executor_peer_id: String,
 
-        // Region of the job.
-        // Type: icn_types::jobs::policy::ExecutionPolicy::region_filter (String)
-        pub region: String,
+        // Proposed price for executing the job.
+        // Type: Option<icn_types::jobs::TokenAmount>
+        pub price: Option<icn_types::jobs::TokenAmount>,
+
+        // The region this executor is operating from, if relevant to the bid.
+        // Type: Option<String>
+        pub region: Option<String>,
 
         // Timestamp of when this bid was created (UTC, ISO 8601).
         // Type: String
@@ -338,7 +346,6 @@ All message payloads are serialized using CBOR.
 
         // Cryptographic signature of the fields above (excluding the signature itself),
         // created by the executor_did's private key.
-        // Ensures authenticity and integrity of the bid.
         // Type: Vec<u8> (Bytes of the signature)
         pub signature: Vec<u8>,
     }
@@ -351,13 +358,14 @@ All message payloads are serialized using CBOR.
 *   **Processing by Receiving Nodes:**
     *   Verify the `signature` against the `executor_did`. Invalid bids MUST be discarded.
     *   Validate the `timestamp` to prevent processing of excessively old bids.
-    *   Evaluate the bid against the job's requirements and the executor's capabilities.
-    *   If the bid is acceptable, the node may proceed to the next stage of job assignment.
+    *   Evaluate the bid against the job's requirements (from the corresponding `JobAnnouncement`) and the executor's capabilities.
+    *   If the bid is acceptable, the originator node may store it and consider it during executor selection.
 
 *   **Security Considerations:**
     *   **Authenticity & Integrity:** The `signature` is crucial to ensure the bid is from the claimed `executor_did` and hasn't been altered.
-    *   **Replay Attacks:** The `timestamp` helps differentiate bids and can mitigate replay attacks if nodes track recently seen IDs.
-    *   **Job Validity:** This message announces a bid; it doesn't guarantee the bid itself (e.g., the price or region) is valid or non-malicious. The bid must be evaluated against the job's requirements and the executor's capabilities.
+    *   **Replay Attacks:** The `timestamp` and its relation to the `announcement_id` help differentiate bids and can mitigate replay attacks if originators track bids per announcement.
+    *   **Bid Validity:** This message conveys a bid. The originator must verify that the `announcement_id` corresponds to an active job it announced and that the bid terms (`price`, `region`, implicit capabilities of `executor_did`) meet the `ExecutionPolicy`.
+    *   **Unauthorized Bids:** Ensure the `executor_did` is a valid network participant (e.g., not on a blocklist, meets minimum reputation if such a pre-filter is applied before full bid evaluation).
 
 ### 5.4. `AssignJobV1`
 
