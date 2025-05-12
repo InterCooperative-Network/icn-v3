@@ -1,6 +1,6 @@
 use crate::context::RuntimeContext;
 use icn_economics::ResourceType;
-use icn_economics::mana::ScopeKey;
+use icn_identity::ScopeKey;
 use icn_identity::Did;
 use icn_mesh_receipts::{ExecutionReceipt, verify_embedded_signature, SignError as ReceiptSignError};
 use icn_types::org::{CooperativeId, CommunityId};
@@ -97,10 +97,13 @@ impl ConcreteHostEnvironment {
 
     /// Determine the accounting scope key for mana operations.
     fn scope_key(&self) -> ScopeKey {
+        // 1) If explicit coop/community overrides exist, honour them first.
         if let Some(coop) = &self.coop_id {
             ScopeKey::Cooperative(coop.to_string())
         } else if let Some(comm) = &self.community_id {
             ScopeKey::Community(comm.to_string())
+        } else if let Some(index) = &self.rt.identity_index {
+            index.resolve_scope_key(&self.caller_did)
         } else if let Some(fid) = &self.rt.federation_id {
             // Fallback to federation scope if runtime context specifies it explicitly
             ScopeKey::Federation(fid.to_string())

@@ -19,7 +19,7 @@ use icn_identity::KeyPair as IcnKeyPair;
 use icn_types::mesh::{MeshJob, JobStatus as IcnJobStatus, MeshJobParams, QoSProfile, WorkflowType};
 use icn_mesh_receipts::{sign_receipt_in_place};
 use icn_mesh_protocol::P2PJobStatus;
-use icn_economics::mana::ScopeKey;
+use icn_identity::ScopeKey;
 
 // Import the context module
 mod context;

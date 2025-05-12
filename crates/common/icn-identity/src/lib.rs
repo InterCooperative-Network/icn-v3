@@ -14,6 +14,8 @@ mod quorum;
 mod trust_bundle;
 mod trust_validator;
 mod vc;
+mod identity_index;
+mod scope_key;
 #[cfg(test)]
 mod tests;
 
@@ -22,4 +24,6 @@ pub use keypair::{KeyPair, Signature};
 pub use quorum::{QuorumError, QuorumProof, QuorumType};
 pub use trust_bundle::{FederationMetadata, TrustBundle, TrustBundleError};
 pub use trust_validator::{TrustValidator, TrustValidationError};
-pub use vc::{VerifiableCredential, SignedCredential, CredentialError, Proof}; 
+pub use vc::{VerifiableCredential, SignedCredential, CredentialError, Proof};
+pub use identity_index::IdentityIndex;
+pub use scope_key::ScopeKey; 

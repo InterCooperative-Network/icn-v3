@@ -1,17 +1,8 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use icn_identity::ScopeKey;
 
 pub type Did = String;
-
-/// Key used for indexing mana pools based on organizational scope.
-/// Allows accounting at federation, coop, community, or individual level.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ScopeKey {
-    Federation(String),
-    Cooperative(String),
-    Community(String),
-    Individual(String),
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManaError {

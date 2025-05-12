@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use icn_types::mesh::MeshJob;
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use icn_identity::IdentityIndex;
 
 /// High-level execution state of the currently running job / stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +57,9 @@ pub struct RuntimeContext {
 
     /// Current high-level execution status.
     pub execution_status: ExecutionStatus,
+
+    /// Optional identity index for DID -> org lookups
+    pub identity_index: Option<Arc<IdentityIndex>>,
 }
 
 impl RuntimeContext {
@@ -73,6 +77,7 @@ impl RuntimeContext {
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
+            identity_index: None,
         }
     }
 
@@ -90,6 +95,7 @@ impl RuntimeContext {
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
+            identity_index: None,
         }
     }
 
@@ -128,6 +134,12 @@ impl RuntimeContext {
         self.trust_validator.as_ref()
     }
 
+    /// Set the identity index
+    pub fn with_identity_index(mut self, index: Arc<IdentityIndex>) -> Self {
+        self.identity_index = Some(index);
+        self
+    }
+
     /// Return a builder for this context
     pub fn builder() -> RuntimeContextBuilder {
         RuntimeContextBuilder::new()
@@ -153,6 +165,7 @@ pub struct RuntimeContextBuilder {
     executor_id: Option<String>,
     trust_validator: Option<Arc<TrustValidator>>,
     economics: Option<Arc<Economics>>,
+    identity_index: Option<Arc<IdentityIndex>>,
 }
 
 impl RuntimeContextBuilder {
@@ -165,6 +178,7 @@ impl RuntimeContextBuilder {
             executor_id: None,
             trust_validator: None,
             economics: None,
+            identity_index: None,
         }
     }
 
@@ -204,6 +218,12 @@ impl RuntimeContextBuilder {
         self
     }
 
+    /// Set the identity index
+    pub fn with_identity_index(mut self, index: Arc<IdentityIndex>) -> Self {
+        self.identity_index = Some(index);
+        self
+    }
+
     /// Build the RuntimeContext
     pub fn build(self) -> RuntimeContext {
         let dag_store = self.dag_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
@@ -216,6 +236,7 @@ impl RuntimeContextBuilder {
         let mana_manager = Arc::new(Mutex::new(ManaManager::new()));
         let interactive_input_queue = Arc::new(Mutex::new(VecDeque::new()));
         let execution_status = ExecutionStatus::Running;
+        let identity_index = self.identity_index;
 
         RuntimeContext {
             dag_store,
@@ -229,6 +250,7 @@ impl RuntimeContextBuilder {
             mana_manager,
             interactive_input_queue,
             execution_status,
+            identity_index,
         }
     }
 } 

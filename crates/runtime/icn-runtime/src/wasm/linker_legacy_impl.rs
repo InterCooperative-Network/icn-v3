@@ -7,7 +7,7 @@ use wasmtime::{Caller, Linker, Trap, Memory};
 use crate::host_environment::ConcreteHostEnvironment;
 use icn_mesh_receipts::ExecutionReceipt;
 use serde_cbor;
-use icn_economics::mana::ScopeKey;
+use icn_identity::ScopeKey;
 
 /// Minimal host_anchor_receipt implementation. Reads CBOR bytes from guest
 /// memory, decodes an `ExecutionReceipt`, and calls `anchor_receipt` on the
