@@ -11,6 +11,7 @@ use std::error::Error;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::time;
+use tokio::runtime;
 use icn_economics::ResourceType;
 use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile, JobId as IcnJobId, JobStatus as StandardJobStatus, OrganizationScopeIdentifier};
 use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place, ReceiptError, SignError as ReceiptSignError, DagNode};
@@ -593,7 +594,7 @@ impl MeshNode {
                 // ADDITION: Trigger execution
                 let job_id_clone_for_trigger = job_id.clone();
                 // Ensure MeshNode is Clone to allow this.
-                let self_clone = self.clone(); // Use self.clone() as MeshNode derives Clone
+                let self_clone = self.clone_for_async_tasks(); // Use self.clone() as MeshNode derives Clone
                 tokio::spawn(async move {
                     // Note: trigger_execution_for_job now takes &self
                     if let Err(e) = self_clone.trigger_execution_for_job(&job_id_clone_for_trigger).await {
@@ -992,9 +993,6 @@ impl MeshNode {
                     let mut assignments_to_make: Vec<(IcnJobId, Did, MeshJob)> = Vec::new();
                     let originated_jobs_guard = self.announced_originated_jobs.read().unwrap_or_else(|e| {
                         tracing::error!("[BidSelection] Failed to get read lock on announced_originated_jobs: {}", e);
-                        // Return a Ref<'_, HashMap<...>> to an empty map or handle error appropriately
-                        // For now, this might panic if the lock is poisoned. A better approach might be:
-                        // if let Ok(guard) = self.announced_originated_jobs.read() { guard } else { return; /* or empty map */ }
                         panic!("announced_originated_jobs RwLock poisoned"); // Or handle gracefully
                     });
                     let assigned_by_originator_guard = self.assigned_by_originator.read().unwrap_or_else(|e| {
@@ -1006,9 +1004,14 @@ impl MeshNode {
                         panic!("bids RwLock poisoned"); // Or handle gracefully
                     });
 
+                    // Initialize reputation client
+                    let reputation_client = crate::reputation_integration::DefaultReputationClient::with_default_config();
+                    // Load bid evaluator config (in the future this will come from a CCL policy)
+                    let bid_config = crate::reputation_integration::BidEvaluatorConfig::default();
+
                     for (job_id, (_manifest, mesh_job_details)) in originated_jobs_guard.iter() {
                         if assigned_by_originator_guard.contains(job_id) {
-                            tracing::trace!("[BidSelection] Job {} already assigned by originator. Skipping selection.", job_id);
+                            tracing::trace!("[BidSelection] Job {} already assigned. Skipping selection.", job_id);
                             continue;
                         }
 
@@ -1018,12 +1021,86 @@ impl MeshNode {
                                 continue;
                             }
 
-                            // Select the bid with the minimum price
-                            if let Some(winning_bid) = bids_for_job.iter().min_by_key(|b| b.price) {
-                                tracing::info!(
-                                    "[BidSelection] Winning bid for job {}: Price = {}, Bidder = {}. Assigning job.",
-                                    job_id, winning_bid.price, winning_bid.bidder
+                            // Using reputation-based bid evaluation
+                            let mut winning_bid = None;
+                            let mut highest_score = f64::MIN;
+                            let mut bid_scores = Vec::new();
+
+                            // Find the min and max bid values for normalization
+                            let min_price = bids_for_job.iter().map(|b| b.price).min().unwrap_or(0);
+                            let max_price = bids_for_job.iter().map(|b| b.price).max().unwrap_or(0);
+                            let price_range = max_price.saturating_sub(min_price) as f64;
+
+                            // Evaluate each bid with reputation-based scoring
+                            for bid in bids_for_job.iter() {
+                                // Fetch reputation profile asynchronously - use block_on since we're in async context already
+                                let runtime_handle = runtime::Handle::current();
+                                let reputation_profile = match runtime_handle.block_on(reputation_client.fetch_profile(&bid.bidder)) {
+                                    Ok(profile) => profile,
+                                    Err(e) => {
+                                        tracing::warn!("[BidSelection] Could not fetch reputation profile for bidder {}: {}. Using default score.", bid.bidder, e);
+                                        // Create a default profile with neutral values
+                                        icn_types::reputation::ReputationProfile {
+                                            node_id: bid.bidder.clone(),
+                                            last_updated: chrono::Utc::now(),
+                                            total_jobs: 0,
+                                            successful_jobs: 0,
+                                            failed_jobs: 0,
+                                            jobs_on_time: 0,
+                                            jobs_late: 0,
+                                            average_execution_ms: None,
+                                            average_bid_accuracy: None,
+                                            dishonesty_events: 0,
+                                            endorsements: vec![],
+                                            current_stake: None,
+                                            computed_score: 50.0, // Neutral score
+                                            latest_anchor_cid: None,
+                                        }
+                                    }
+                                };
+
+                                // Calculate normalized price (0.0 to 1.0, where 0.0 is the best/lowest price)
+                                let normalized_price = if price_range > 0.0 {
+                                    (bid.price as f64 - min_price as f64) / price_range
+                                } else {
+                                    0.0 // If all prices are the same
+                                };
+
+                                // This would be replaced with actual resource matching calculation
+                                // based on job requirements vs. node capabilities
+                                let resource_match = 0.8; // Placeholder value
+
+                                // Calculate the combined bid score
+                                let bid_score = reputation_client.calculate_bid_score(
+                                    &bid_config,
+                                    &reputation_profile,
+                                    normalized_price,
+                                    resource_match
                                 );
+
+                                bid_scores.push((bid.bidder.clone(), bid_score, normalized_price, reputation_profile.computed_score / 100.0));
+
+                                // Update winning bid if this has the highest score
+                                if bid_score > highest_score {
+                                    highest_score = bid_score;
+                                    winning_bid = Some(bid);
+                                }
+                            }
+
+                            if let Some(winning_bid) = winning_bid {
+                                tracing::info!(
+                                    "[BidSelection] Winning bid for job {}: Price = {}, Bidder = {}. Total score = {}. Assigning job.",
+                                    job_id, winning_bid.price, winning_bid.bidder, highest_score
+                                );
+
+                                // Debug output for all bid scores
+                                for (bidder, score, norm_price, rep_score) in bid_scores {
+                                    tracing::debug!(
+                                        "[BidSelection] Bid score for job {}: Bidder = {}, Score = {:.4}, Normalized Price = {:.4}, Reputation = {:.4}",
+                                        job_id, bidder, score, norm_price, rep_score
+                                    );
+                                }
+
                                 assignments_to_make.push((
                                     job_id.clone(),
                                     winning_bid.bidder.clone(),
@@ -1031,7 +1108,7 @@ impl MeshNode {
                                 ));
                             } else {
                                 // This case should technically not be reached if bids_for_job is not empty.
-                                tracing::debug!("[BidSelection] No winning bid could be determined for job {} (e.g., empty bid list after filtering, though filter not applied here).", job_id);
+                                tracing::debug!("[BidSelection] No winning bid could be determined for job {} (e.g., empty bid list after filtering).", job_id);
                             }
                         } else {
                             tracing::debug!("[BidSelection] No bids found in map for job {}. Skipping selection.", job_id);
@@ -1057,7 +1134,6 @@ impl MeshNode {
                                     "[BidSelection] Failed to assign job {} to executor {}: {:?}. Job will be reconsidered later.",
                                     job_id, selected_executor_did, e
                                 );
-                                // Do not add to assigned_by_originator, so it can be retried.
                             }
                         }
                     }

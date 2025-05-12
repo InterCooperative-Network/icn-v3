@@ -28,6 +28,9 @@ pub use behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC};
 pub mod node;
 pub use node::MeshNode;
 
+pub mod reputation_integration;
+pub use reputation_integration::{ReputationClient, DefaultReputationClient, BidEvaluatorConfig};
+
 /// Error types specific to the planetary mesh
 #[derive(Error, Debug)]
 pub enum MeshError {

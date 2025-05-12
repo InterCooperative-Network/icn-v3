@@ -23,5 +23,9 @@ dotenv = "0.15" # For loading .env file in development
 futures = "0.3"
 tokio-stream = "0.1"
 
+# Added for prometheus and once_cell
+prometheus = "0.13.3"
+once_cell = "1.18.0"
+
 [features]
 default = ["json"] 

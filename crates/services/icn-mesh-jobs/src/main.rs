@@ -120,6 +120,7 @@ struct AssignJobResponse {
     assigned_bidder_did: String,
     winning_bid_id: i64,
     winning_score: f64,
+    reason: String,
 }
 
 /// Payload expected for creating a new job.
@@ -249,6 +250,7 @@ pub async fn run_server(
         .route("/jobs/by-worker/:worker_did", get(get_jobs_for_worker_handler))
         .route("/jobs/:job_id", get(get_job))
         .route("/jobs/:job_id/bids", post(submit_bid).get(ws_stream_bids_handler))
+        .route("/jobs/:job_id/bids/explained", get(get_bids_explained_handler))
         .route("/jobs/:job_id/begin-bidding", post(begin_bidding_handler))
         .route("/jobs/:job_id/assign", post(assign_best_bid_handler))
         .route("/jobs/:job_id/start", post(start_job_handler))
@@ -499,6 +501,7 @@ async fn submit_bid(
 async fn assign_best_bid_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Extension(p2p_node_state): Extension<SharedP2pNode>,
+    Extension(reputation_url): Extension<Arc<String>>,
     Path(job_id_str): Path<String>,
 ) -> Result<AxumJson<AssignJobResponse>, AppError> {
     let job_id_cid = Cid::try_from(job_id_str.clone()).map_err(|e| {
@@ -527,77 +530,92 @@ async fn assign_best_bid_handler(
         return Err(AppError::NotFound(format!("No bids found for job {}", job_id_str)));
     }
 
-    // 4. Determine ExecutorSelector based on ExecutionPolicy in JobRequest.params
-    let selector: Box<dyn ExecutorSelector> = {
-        // Assumes `job_request` (of type icn_types::jobs::JobRequest) now has a `params` field
-        // of type `icn_types::mesh::MeshJobParams` which in turn contains `execution_policy`.
-        // This requires `icn_types::jobs::JobRequest` to be refactored.
-        if let Some(policy) = &job_request.params.execution_policy {
-            tracing::info!(policy = ?policy, "Using GovernedExecutorSelector for job {}", job_id_str);
-            Box::new(GovernedExecutorSelector::new(policy.clone()))
-        } else {
-            tracing::info!("No execution policy found in job_request.params, using DefaultExecutorSelector for job {}", job_id_str);
-            // Provide default weights for DefaultExecutorSelector if its constructor requires them.
-            // These were 0.7 and 0.3 in the previous version.
-            Box::new(DefaultExecutorSelector::new(0.7, 0.3))
+    // 4. Create a reputation client
+    let reputation_client = Arc::new(reputation_cache::CachingReputationClient::with_defaults(reputation_url));
+    
+    // 5. Create the bid evaluator config (should be loaded from governance/CCL)
+    let config = BidEvaluatorConfig {
+        weight_price: 0.4,
+        weight_resources: 0.2,
+        weight_reputation: 0.3,
+        weight_timeliness: 0.1,
+    };
+
+    // 6. Determine ExecutorSelector based on ExecutionPolicy in JobRequest.params
+    let mut policy = ExecutionPolicy::default();
+    
+    // If the job has a policy defined, use it
+    if let Some(exec_policy) = job_request.execution_policy.as_ref() {
+        policy = exec_policy.clone();
+    }
+
+    let selector = match policy.selection_strategy {
+        SelectionStrategy::LowestPrice => {
+            tracing::info!(job_id = %job_id_str, "Using LowestPriceExecutorSelector");
+            Box::new(LowestPriceExecutorSelector {}) as Box<dyn ExecutorSelector>
+        }
+        SelectionStrategy::Reputation => {
+            tracing::info!(job_id = %job_id_str, "Using ReputationExecutorSelector with weights");
+            Box::new(ReputationExecutorSelector {
+                config: config.clone(),
+                reputation_client: reputation_client.clone(),
+            }) as Box<dyn ExecutorSelector>
+        }
+        SelectionStrategy::Hybrid => {
+            tracing::info!(job_id = %job_id_str, "Using HybridExecutorSelector with policy");
+            Box::new(HybridExecutorSelector {
+                policy,
+                reputation_client: reputation_client.clone(),
+            }) as Box<dyn ExecutorSelector>
         }
     };
 
-    // 5. Select the best bid
-    let winning_bid_tuple = selector.select(&job_request, &bids)?
-        .ok_or_else(|| AppError::NotFound(format!("No acceptable bids found for job {} based on policy", job_id_str)))?;
+    // 7. Select the winning bid
+    let selection_result = selector.select(&job_request, &bids, job_id_cid).await?;
     
-    let (winning_bid, winning_score) = winning_bid_tuple;
-
-    // Ensure winning_bid.id is present
-    let winning_bid_id = winning_bid.id.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Winning bid {} has no ID", winning_bid.bidder)))?;
-
-    // 6. Update job status to Assigned in the local store
-    store.assign_job(&job_id_cid, winning_bid.bidder.clone(), winning_bid_id).await?;
-
-    tracing::info!(job_id = %job_id_str, bidder = %winning_bid.bidder, score = winning_score, "Job assigned to bidder in local store");
-
-    // 7. Notify the winning bidder via P2P // ADDED SECTION START
-    // Reconstruct the MeshJob details for the P2P message.
-    // JobRequest (from store.get_job) contains params and originator_did.
-    let mesh_job_details_for_p2p = MeshJob {
-        job_id: job_request.id.to_string(), // Convert CID to string for P2P JobId
-        params: job_request.params.clone(),
-        originator_did: job_request.originator_did.clone(),
-        // submission_timestamp: JobRequest doesn't seem to have submission_timestamp.
-        // Using current time as a placeholder. Ideally, this would be the original job submission time.
-        submission_timestamp: Utc::now().timestamp() as u64, 
-        originator_org_scope: None, // Populate if available from JobRequest or context
+    let (winning_bid, winning_score, selection_reason) = match selection_result {
+        Some((bid, score, reason)) => (bid, score, reason),
+        None => {
+            tracing::warn!(job_id = %job_id_str, "No acceptable bid found for job");
+            return Err(AppError::NotFound(format!("No acceptable bid found for job {}", job_id_str)));
+        }
     };
 
-    let originator_did_for_p2p = job_request.originator_did.clone();
-    let target_executor_did_for_p2p = winning_bid.bidder.clone();
-    // Use the String version of job_id for the P2P call, as IcnJobId is String.
-    let job_id_string_for_p2p = job_request.id.to_string(); 
-
-    tracing::info!(
-        job_id = %job_id_string_for_p2p,
-        target_executor = %target_executor_did_for_p2p,
-        originator = %originator_did_for_p2p,
-        "Attempting to send AssignJobV1 P2P message."
-    );
+    // 8. Record metrics for the winning bid
+    metrics::record_bid_evaluation(&selection_reason);
     
-    let mut p2p_node_guard = p2p_node_state.lock().await;
-    match p2p_node_guard.assign_job_to_executor(
-        &job_id_string_for_p2p, // Pass as &String
-        target_executor_did_for_p2p,
-        mesh_job_details_for_p2p,
-        originator_did_for_p2p
-    ).await {
-        Ok(_) => tracing::info!("Successfully published AssignJobV1 for job {}", job_id_str),
-        Err(e) => {
-            // Log the error. The HTTP request itself won't fail due to this,
-            // as the primary action (DB update) succeeded.
-            // Robust P2P messaging might require a retry queue or other out-of-band handling.
-            tracing::error!("Failed to publish AssignJobV1 for job {}: {}. The job remains assigned in the database.", job_id_str, e);
+    // Record component scores if we have them (from the ReputationExecutorSelector)
+    if let Some(components) = winning_bid.score_components.as_ref() {
+        for component in components {
+            metrics::record_bid_component_score(
+                &component.name, 
+                &winning_bid.bidder.0,
+                component.value
+            );
         }
     }
-    // ADDED SECTION END
+
+    let winning_bid_id = winning_bid.id.ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("Winning bid has no ID"))
+    })?;
+
+    // 9. Assign the job in the store
+    tracing::info!(
+        job_id = %job_id_str,
+        bid_id = winning_bid_id,
+        bidder = %winning_bid.bidder.0,
+        score = winning_score,
+        "Assigning job to winning bidder"
+    );
+    
+    store.assign_job(&job_id_cid, winning_bid_id, winning_bid.bidder.clone()).await?;
+
+    // 10. Notify the P2P mesh that this node is assigning the job (if we're in mesh mode)
+    // This is a local, synchronous message, not a P2P message yet
+    if let Some(p2p_state) = p2p_node_state.as_ref() {
+        let mut p2p_lock = p2p_state.lock().await;
+        p2p_lock.assign_job(job_id_cid, winning_bid.bidder.clone())?;
+    }
 
     Ok(AxumJson(AssignJobResponse {
         message: "Job assigned successfully. P2P notification to executor initiated.".to_string(),
@@ -605,6 +623,7 @@ async fn assign_best_bid_handler(
         assigned_bidder_did: winning_bid.bidder.0.clone(),
         winning_bid_id,
         winning_score,
+        reason: selection_reason,
     }))
 }
 
@@ -880,4 +899,176 @@ async fn begin_bidding_handler(
             Err(AppError::BadRequest(format!("Job {} is in status {:?} and cannot be moved to Bidding state.", job_id, current_status)))
         }
     }
+}
+
+/// Get all bids for a job with detailed explanation of scoring
+async fn get_bids_explained_handler(
+    Extension(store): Extension<Arc<dyn MeshJobStore>>,
+    Extension(reputation_url): Extension<Arc<String>>,
+    Path(job_id_str): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<AxumJson<BidsExplainResponse>, AppError> {
+    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| 
+        AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e))
+    )?;
+    
+    // Get job and bids
+    let (job_request, _) = store.get_job(&job_id).await?
+        .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
+    
+    let bids = store.list_bids(&job_id).await?;
+    if bids.is_empty() {
+        return Err(AppError::NotFound(format!("No bids found for job: {}", job_id)));
+    }
+    
+    // Create reputation client with caching
+    let client = reputation_cache::CachingReputationClient::with_defaults(reputation_url);
+    
+    // Default bid evaluation config (could be loaded from CCL policy or DB in future)
+    let config = BidEvaluatorConfig {
+        weight_price: 0.4,
+        weight_resources: 0.2,
+        weight_reputation: 0.3,
+        weight_timeliness: 0.1,
+    };
+    
+    // Generate explanations for each bid
+    let mut explanations = Vec::with_capacity(bids.len());
+    
+    for bid in &bids {
+        // Fetch profile (will use cache if available)
+        let profile = match client.fetch_profile(&bid.bidder.0).await {
+            Ok(profile) => profile,
+            Err(e) => {
+                tracing::warn!("Failed to fetch reputation profile for {}: {}", bid.bidder.0, e);
+                // Generate a default profile
+                ReputationProfile {
+                    node_id: bid.bidder.0.clone(),
+                    total_jobs: 0,
+                    successful_jobs: 0,
+                    failed_jobs: 0,
+                    jobs_on_time: 0,
+                    jobs_late: 0,
+                    average_execution_ms: None,
+                    average_bid_accuracy: None,
+                    dishonesty_events: 0,
+                    endorsements: Vec::new(),
+                    computed_score: 50.0, // Default score
+                }
+            }
+        };
+        
+        // Calculate normalized price (0-1 where 0 is lowest price)
+        let max_price = bids.iter().map(|b| b.price).max().unwrap_or(1);
+        let normalized_price = if max_price > 0 {
+            bid.price as f64 / max_price as f64
+        } else {
+            0.0
+        };
+        
+        // Calculate resource match (0-1 where 1 is perfect match)
+        let resource_match = calculate_resource_match(&bid.estimate, &job_request.requirements);
+        
+        // Calculate individual score components
+        let price_component = config.weight_price * (1.0 - normalized_price);
+        let resources_component = config.weight_resources * resource_match;
+        
+        // Reputation components
+        let reputation_score = profile.computed_score / 100.0;
+        let reputation_component = config.weight_reputation * reputation_score;
+        
+        // Timeliness component
+        let timeliness_score = if profile.successful_jobs > 0 {
+            profile.jobs_on_time as f64 / profile.successful_jobs as f64
+        } else {
+            0.5 // Default
+        };
+        let timeliness_component = config.weight_timeliness * timeliness_score;
+        
+        // Calculate total score
+        let total_score = price_component + resources_component + reputation_component + timeliness_component;
+        
+        // Create component breakdown
+        let components = vec![
+            ScoreComponent {
+                name: "price".to_string(),
+                value: price_component,
+                weight: config.weight_price,
+            },
+            ScoreComponent {
+                name: "resources".to_string(),
+                value: resources_component,
+                weight: config.weight_resources,
+            },
+            ScoreComponent {
+                name: "reputation".to_string(),
+                value: reputation_component,
+                weight: config.weight_reputation,
+            },
+            ScoreComponent {
+                name: "timeliness".to_string(),
+                value: timeliness_component,
+                weight: config.weight_timeliness,
+            },
+        ];
+        
+        // Create reputation summary
+        let reputation_summary = ReputationSummary {
+            score: profile.computed_score,
+            jobs_count: profile.total_jobs,
+            on_time_ratio: if profile.successful_jobs > 0 {
+                profile.jobs_on_time as f64 / profile.successful_jobs as f64
+            } else {
+                0.0
+            },
+        };
+        
+        // Add explanation for this bid
+        explanations.push(BidExplanation {
+            bid_id: bid.id,
+            node_did: bid.bidder.0.clone(),
+            total_score,
+            components,
+            reputation_summary,
+        });
+    }
+    
+    // Sort explanations by score (highest first)
+    explanations.sort_by(|a, b| b.total_score.partial_cmp(&a.total_score).unwrap_or(std::cmp::Ordering::Equal));
+    
+    Ok(AxumJson(BidsExplainResponse {
+        bids: bids.clone(),
+        explanations,
+        config,
+    }))
+}
+
+// Helper function to calculate resource match score
+fn calculate_resource_match(estimate: &ResourceEstimate, requirements: &ResourceRequirements) -> f64 {
+    // Calculate match as a value from 0 to 1 where 1 is a perfect match
+    // This is a simple implementation - could be enhanced with more sophisticated matching
+    
+    // CPU match - estimate should be >= requirement
+    let cpu_match = if estimate.cpu >= requirements.cpu {
+        1.0
+    } else {
+        estimate.cpu as f64 / requirements.cpu as f64
+    };
+    
+    // Memory match
+    let memory_match = if estimate.memory_mb >= requirements.memory_mb {
+        1.0
+    } else {
+        estimate.memory_mb as f64 / requirements.memory_mb as f64
+    };
+    
+    // Storage match
+    let storage_match = if estimate.storage_mb >= requirements.storage_mb {
+        1.0
+    } else {
+        estimate.storage_mb as f64 / requirements.storage_mb as f64
+    };
+    
+    // Average the match scores
+    (cpu_match + memory_match + storage_match) / 3.0
 } 

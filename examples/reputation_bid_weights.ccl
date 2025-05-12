@@ -1,0 +1,55 @@
+// ICN Contract Chain Language - Reputation-Based Bid Weights
+// This contract defines the weights used in the bid evaluation process 
+// for integrating reputation into job allocation.
+
+organization "Planetary Mesh Federation" {
+    governance {
+        policy_def ReputationBidWeights {
+            // Weight for price component (lower price is better)
+            price_weight: 0.4,
+            
+            // Weight for resource matching (how well executor resources match job requirements)
+            resources_weight: 0.2,
+            
+            // Weight for reputation score (higher reputation is better)
+            reputation_weight: 0.3,
+            
+            // Weight for timeliness (percentage of jobs completed on time)
+            timeliness_weight: 0.1,
+            
+            // Minimum reputation score required to be considered for critical jobs
+            min_reputation_for_critical_jobs: 70,
+            
+            // Whether to require reputation verification (vs. self-reported)
+            require_verified_reputation: true,
+            
+            // Maximum tolerance percentage for reputation score verification
+            reputation_score_verification_tolerance: 0.05
+        }
+        
+        // This transition rule determines when to activate stricter reputation requirements
+        on "federation_load_high" {
+            if federation.load > 0.8 {
+                // Under high load, prioritize reputation more heavily
+                update_policy ReputationBidWeights {
+                    price_weight: 0.3,
+                    resources_weight: 0.2,
+                    reputation_weight: 0.4,
+                    timeliness_weight: 0.1
+                }
+            }
+        }
+        
+        // Reset to default weights under normal load
+        on "federation_load_normal" {
+            if federation.load <= 0.8 {
+                update_policy ReputationBidWeights {
+                    price_weight: 0.4,
+                    resources_weight: 0.2,
+                    reputation_weight: 0.3,
+                    timeliness_weight: 0.1
+                }
+            }
+        }
+    }
+} 
