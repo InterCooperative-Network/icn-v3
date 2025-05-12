@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "multiformats": "^13.3.3"
+    "multiformats": "^13.3.3",
+    "recharts": "^2.15.3"
   }
 }
