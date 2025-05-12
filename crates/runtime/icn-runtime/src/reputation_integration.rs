@@ -4,6 +4,7 @@ use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 use icn_types::reputation::{ReputationRecord, ReputationUpdateEvent};
 use std::time::Duration;
 use cid::Cid;
+use cid::multihash::{Multihash, Code};
 use chrono::Utc;
 use icn_identity::Did;
 use tracing;
@@ -53,8 +54,10 @@ impl HttpReputationUpdater {
                     // Generate a placeholder CID if not available
                     let mut hasher = Sha2_256::default();
                     hasher.update(format!("{}:{}", receipt.id, receipt.timestamp).as_bytes());
-                    let hash = hasher.finalize();
-                    Cid::new_v1(0x55, hash)
+                    let hash_bytes = hasher.finalize();
+                    // Create Multihash from bytes (v0.10.1 compatible)
+                    let mh = Multihash::from_bytes(&hash_bytes).expect("Failed to create multihash");
+                    Cid::new_v1(0x70, mh) // 0x70 is the 'raw' codec for Cid v0.10.1
                 }),
                 execution_duration_ms: (receipt.metrics.fuel_used / 100) as u32, // Using fuel as proxy for duration
                 bid_accuracy: 1.0, // Placeholder
@@ -68,8 +71,10 @@ impl HttpReputationUpdater {
                     // Generate a placeholder CID if not available
                     let mut hasher = Sha2_256::default();
                     hasher.update(format!("{}:{}", receipt.id, receipt.timestamp).as_bytes());
-                    let hash = hasher.finalize();
-                    Cid::new_v1(0x55, hash)
+                    let hash_bytes = hasher.finalize();
+                    // Create Multihash from bytes (v0.10.1 compatible)
+                    let mh = Multihash::from_bytes(&hash_bytes).expect("Failed to create multihash");
+                    Cid::new_v1(0x70, mh) // 0x70 is the 'raw' codec for Cid v0.10.1
                 }),
                 reason: "Execution failed or zero resource consumption".into(),
                 anchor_cid,
@@ -164,6 +169,7 @@ mod tests {
     use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
     
     // A mock implementation for testing
+    #[derive(Clone)]
     struct MockReputationUpdater {
         submitted_records: Arc<Mutex<Vec<RuntimeExecutionReceipt>>>,
     }
@@ -192,7 +198,7 @@ mod tests {
     async fn test_reputation_update_from_receipt() {
         // Setup
         let mock_updater = MockReputationUpdater::new();
-        let updater = Arc::new(mock_updater);
+        let updater = Arc::new(mock_updater.clone());
         
         // Create a test receipt
         let receipt = RuntimeExecutionReceipt {

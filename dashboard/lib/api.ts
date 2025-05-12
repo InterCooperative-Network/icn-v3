@@ -586,7 +586,7 @@ export const getMockData = {
       },
     ];
   },
-};
+}; 
 
 /**
  * Fetch reputation activity data for a specific time range

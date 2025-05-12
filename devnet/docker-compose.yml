@@ -168,7 +168,7 @@ networks:
     driver: bridge
 
 volumes:
-  pgdata:
+  pgdata: 
   runtime-data:
   reputation-data:
   jobs-data:
