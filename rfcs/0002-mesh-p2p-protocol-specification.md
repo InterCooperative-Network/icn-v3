@@ -156,4 +156,92 @@ All messages are serialized using **CBOR (Concise Binary Object Representation)*
 *   **`JobInteractiveOutputV1`**:
     *   **Purpose:** Used in interactive jobs to send data from the executor back to the originator during active job execution.
 
-The design of these messages aims for clarity and efficiency, providing the necessary information for each stage of interaction within the Planetary Mesh while adhering to the versioning and compatibility strategies outlined in Section 3. 
+The design of these messages aims for clarity and efficiency, providing the necessary information for each stage of interaction within the Planetary Mesh while adhering to the versioning and compatibility strategies outlined in Section 3.
+
+## 5. Message Variant Specifications
+
+This section provides detailed specifications for each message variant within the `MeshProtocolMessage` enum. For each variant, we will define its purpose, the schema of its fields (using Rust struct-like definitions for clarity, with types corresponding to `icn-types` or standard Rust types where applicable), the recommended transport mechanism and topic (if any), and key security considerations.
+
+All message payloads are serialized using CBOR.
+
+### 5.1. `CapabilityAdvertisementV1`
+
+*   **Purpose:**
+    Allows a `MeshNode` (typically an executor node) to advertise its execution capabilities to the network. This enables job originators or discovery services to identify suitable nodes that can potentially execute their jobs based on resource availability, supported runtimes, geographical region, or other specific features. Advertisements are typically broadcast periodically and also when a node's capabilities change significantly.
+
+*   **Schema (Conceptual Rust Struct):**
+    ```rust
+    // Contained within MeshProtocolMessage::CapabilityAdvertisementV1
+    pub struct NodeCapability {
+        // DID of the node advertising its capabilities.
+        // Type: icn_types::identity::Did (String)
+        pub node_did: String,
+
+        // PeerId of the node, for direct network addressing.
+        // Type: libp2p_identity::PeerId (String representation or bytes)
+        pub peer_id: String, 
+
+        // Human-readable alias or name for the node (optional).
+        // Type: Option<String>
+        pub alias: Option<String>,
+
+        // Geographical region of the node (e.g., "us-east-1", "eu-central").
+        // Aligns with icn_types::jobs::policy::ExecutionPolicy::region_filter.
+        // Type: Option<String>
+        pub region: Option<String>,
+
+        // List of supported WASM runtime identifiers.
+        // (e.g., "wasmtime-v18.0", "wasmedge-0.13")
+        // This helps match jobs requiring specific runtime features or versions.
+        // Type: Vec<String>
+        pub supported_runtimes: Vec<String>,
+
+        // Available resource types and their quantities.
+        // Uses icn_types::mesh::ResourceType for keys.
+        // Quantities could be simple numerical values or more complex structures.
+        // Example: {"CPU": "8c", "RAM": "16GiB", "GPU_NVIDIA_A100": "1"}
+        // Type: std::collections::HashMap<String, String> 
+        // (Key: icn_types::mesh::ResourceType as String, Value: String representation of quantity/type)
+        pub available_resources: std::collections::HashMap<String, String>,
+
+        // List of specialized hardware features or services offered (optional).
+        // (e.g., "TEE-SGX-FLC", "IPFS-Pinning-Service", "CustomAI-Accelerator-XYZ")
+        // Type: Vec<String>
+        pub specialized_features: Vec<String>,
+
+        // Timestamp of when this capability set was generated or last updated (UTC, ISO 8601).
+        // Type: String 
+        pub timestamp: String, 
+
+        // Optional CID pointing to a more detailed, potentially verifiable, capability attestation
+        // document (e.g., a Verifiable Credential).
+        // Type: Option<String> (icn_types::cid::Cid representation)
+        pub attestation_cid: Option<String>,
+
+        // Cryptographic signature of the fields above (excluding the signature itself),
+        // created by the node_did's private key.
+        // This ensures authenticity and integrity of the advertisement.
+        // The exact signing mechanism (e.g., JWS, direct signature of CBOR bytes) needs
+        // to be consistent across the network. For now, assume a direct signature
+        // of the CBOR-encoded NodeCapability struct (excluding the signature field).
+        // Type: Vec<u8> (Bytes of the signature)
+        pub signature: Vec<u8>,
+    }
+    ```
+
+*   **Transport & Topic:**
+    *   **Mechanism:** Gossipsub.
+    *   **Topic:** A well-known topic, e.g., `/icn/mesh/capabilities/v1`. (The exact topic string will be defined in Section 6: Topic Structure).
+
+*   **Processing by Receiving Nodes:**
+    *   Receiving nodes should validate the `timestamp` to ensure freshness and discard stale advertisements.
+    *   The `signature` MUST be verified against the `node_did` and the rest of the payload. Invalid or unverifiable advertisements MUST be discarded and potentially penalized (e.g., Gossipsub peer scoring).
+    *   Nodes can cache valid capability advertisements, keyed by `node_did` or `peer_id`, replacing older entries with newer ones (based on `timestamp`).
+    *   This information is used to pre-filter nodes when a job originator is looking for executors or when an executor is deciding if it should express interest in broadly announced jobs.
+
+*   **Security Considerations:**
+    *   **Authenticity & Integrity:** The `signature` field is critical. It prevents spoofing of capabilities and ensures the advertisement hasn't been tampered with. The public key corresponding to `node_did` must be discoverable (e.g., via a DID resolver or Kad-DHT).
+    *   **Replay Attacks:** The `timestamp` helps mitigate replay attacks of old capability advertisements. Nodes should define a reasonable window for accepting advertisements.
+    *   **Denial of Service (DoS):** Malicious nodes could flood the capability topic with spurious advertisements. Gossipsub's peer scoring mechanisms, combined with signature verification costs and potentially rate limiting, help mitigate this.
+    *   **Stale Information:** Nodes should re-advertise periodically and when capabilities change to ensure the network has reasonably up-to-date information. Consumers of this information must be aware that it's eventually consistent.
+    *   **Misrepresentation:** A node might falsely advertise capabilities. While the signature confirms *who* sent it, it doesn't inherently prove the capabilities are real. This is where reputation systems (`icn-reputation`) and the outcomes of actual job executions (via `ExecutionReceipts`) become important for building trust. The optional `attestation_cid` can point to more robust, verifiable claims if needed. 
