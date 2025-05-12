@@ -129,29 +129,30 @@ fn evaluate_bid_against_policy(
     policy: &ExecutionPolicy,
     executor_reputation_score: f64,
 ) -> Option<ScoredBid> {
-    if let Some(max_price) = policy.max_price {
-        if bid.price > max_price {
+    if let Some(max_price_val) = policy.max_price {
+        if bid.price > max_price_val {
             tracing::debug!(
                 "Bid from {} for job {} rejected: price {} > max_price {}",
-                bid.executor_did, bid.job_id, bid.price, max_price
+                bid.executor_did, bid.job_id, bid.price, max_price_val
             );
             return None;
         }
     }
 
-    if let Some(min_rep) = policy.min_reputation_score {
-        if executor_reputation_score < min_rep {
+    if let Some(min_rep_val) = policy.min_reputation {
+        if executor_reputation_score < min_rep_val {
             tracing::debug!(
                 "Bid from {} for job {} rejected: reputation {} < min_reputation_score {}",
-                bid.executor_did, bid.job_id, executor_reputation_score, min_rep
+                bid.executor_did, bid.job_id, executor_reputation_score, min_rep_val
             );
             return None;
         }
     }
 
-    let max_price_for_scoring = policy.max_price.unwrap_or(bid.price * 2);
-    let price_component = if max_price_for_scoring > 0 {
-        (1.0 - (bid.price as f64 / max_price_for_scoring as f64)).max(0.0).min(1.0)
+    let max_price_for_scoring_f64 = policy.max_price.map(|mp| mp as f64).unwrap_or(bid.price as f64 * 2.0);
+    
+    let price_component = if max_price_for_scoring_f64 > 0.0 {
+        (1.0 - (bid.price as f64 / max_price_for_scoring_f64)).max(0.0).min(1.0)
     } else {
         1.0
     }
@@ -159,18 +160,26 @@ fn evaluate_bid_against_policy(
     let reputation_component = (executor_reputation_score / 100.0).max(0.0).min(1.0);
 
     let total_score =
-        policy.weight_price.unwrap_or(0.5) * price_component +
-        policy.weight_reputation.unwrap_or(0.5) * reputation_component;
+        policy.price_weight * price_component +
+        policy.rep_weight * reputation_component;
     
     tracing::debug!(
-        "Bid from {} for job {} scored: price_comp={}, rep_comp={}, total_score={}",
+        "Bid from {} for job {}: price_comp={}, rep_comp={}, total_score={}",
         bid.executor_did, bid.job_id, price_component, reputation_component, total_score
     );
 
-    Some(ScoredBid {
-        bid: bid.clone(),
-        score: total_score,
-    })
+    if total_score > 0.0 {
+        Some(ScoredBid {
+            bid: bid.clone(),
+            score: total_score,
+        })
+    } else {
+        tracing::debug!(
+            "Bid from {} for job {} scored {} (<=0.0), not considered selectable by policy evaluation.",
+            bid.executor_did, bid.job_id, total_score
+        );
+        None
+    }
 }
 
 impl MeshNode {
