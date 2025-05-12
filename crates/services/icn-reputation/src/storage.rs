@@ -22,6 +22,9 @@ pub trait ReputationStore: Send + Sync + 'static {
 
     /// Lists all reputation records submitted for a given node DID.
     async fn list_records(&self, node_id: &Did) -> Result<Vec<ReputationRecord>>;
+
+    /// Lists all reputation records from all subjects in the store.
+    async fn list_all_records(&self) -> Result<Vec<ReputationRecord>, anyhow::Error>;
 }
 
 pub struct InMemoryReputationStore {
@@ -102,5 +105,11 @@ impl ReputationStore for InMemoryReputationStore {
     async fn list_records(&self, node_id: &Did) -> Result<Vec<ReputationRecord>> {
         let records_guard = self.records.read().await;
         Ok(records_guard.get(node_id).cloned().unwrap_or_default())
+    }
+
+    async fn list_all_records(&self) -> Result<Vec<ReputationRecord>, anyhow::Error> {
+        let records_map_guard = self.records.read().await;
+        let all_records: Vec<ReputationRecord> = records_map_guard.values().flatten().cloned().collect();
+        Ok(all_records)
     }
 } 
