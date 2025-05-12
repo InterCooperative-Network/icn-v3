@@ -95,10 +95,10 @@ impl ConcreteHostEnvironment {
     }
 
     pub fn check_resource_authorization(&self, rt_type: ResourceType, amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
-    pub fn record_resource_usage(&self, rt_type: ResourceType, amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
+    pub async fn record_resource_usage(&self, _rt_type: ResourceType, _amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
     pub fn is_governance_context(&self) -> i32 { if self.is_governance { 1 } else { 0 } }
-    pub fn mint_token(&self, recipient_did_str: &str, amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
-    pub fn transfer_token(&self, sender_did_str: &str, recipient_did_str: &str, amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
+    pub async fn mint_token(&self, _recipient_did_str: &str, _amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
+    pub async fn transfer_token(&self, _sender_did_str: &str, _recipient_did_str: &str, _amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
 
     pub async fn anchor_receipt(&self, mut receipt: ExecutionReceipt) -> Result<(), AnchorError> { Ok(()) }
 
@@ -154,7 +154,7 @@ impl ConcreteHostEnvironment {
     }
 }
 
-// ABI Implementation using Wasmtime
+#[cfg(feature = "full_host_abi")]
 impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     // **I. Job & Workflow Information **
     fn host_job_get_id(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, AnyhowError> {
@@ -606,4 +606,37 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         }
         Ok(0)
     }
+}
+
+#[cfg(not(feature = "full_host_abi"))]
+impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
+    fn host_job_get_id(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_job_get_initial_input_cid(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_job_is_interactive(&self, _caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_workflow_get_current_stage_index(&self, _caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, AnyhowError> { Ok(-1) }
+
+    fn host_workflow_get_current_stage_id(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_workflow_get_current_stage_input_cid(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _key_ptr: u32, _key_len: u32, _cid_ptr: u32, _cid_len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_job_report_progress(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _pct: u8, _msg_ptr: u32, _msg_len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_workflow_complete_current_stage(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _cid_ptr: u32, _cid_len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_interactive_send_output(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _payload_ptr: u32, _payload_len: u32, _key_ptr: u32, _key_len: u32, _is_final: i32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_interactive_receive_input(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _buffer_ptr: u32, _buffer_len: u32, _timeout_ms: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_interactive_peek_input_len(&self, _caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_interactive_prompt_for_input(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_data_read_cid(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _cid_ptr: u32, _cid_len: u32, _offset: u64, _buffer_ptr: u32, _buffer_len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_data_write_buffer(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _data_ptr: u32, _data_len: u32, _cid_buf_ptr: u32, _cid_buf_len: u32) -> Result<i32, AnyhowError> { Ok(0) }
+
+    fn host_log_message(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _level: LogLevel, _ptr: u32, _len: u32) -> Result<i32, AnyhowError> { Ok(0) }
 } 

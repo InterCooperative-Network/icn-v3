@@ -3,6 +3,7 @@
 pub mod economics;
 pub mod policy;
 pub mod types;
+pub mod mana;
 
 pub use economics::Economics;
 pub use policy::ResourceAuthorizationPolicy;
@@ -10,6 +11,7 @@ pub use icn_types::resource::ResourceType;
 // Using a different name for the import to avoid conflict
 pub use economics::EconomicsError as ResourceAuthorizationError;
 pub use economics::LedgerKey;
+pub use mana::{ManaPool, ManaManager, ManaError};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

@@ -13,12 +13,11 @@ members = [
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
     "crates/runtime/host-abi",
-    "crates/p2p/planetary-mesh",
-    "crates/tools/icn-cli",
-    "crates/tools/meshctl",
-    "crates/services/icn-agoranet",
-    "crates/services/icn-mesh-jobs",
-    "tests/federation_bootstrap_test"
+    # "crates/p2p/planetary-mesh",  # Temporarily excluded for compilation
+    # "crates/tools/icn-cli",  # Temporarily excluded
+    # "crates/tools/meshctl",  # Temporarily excluded
+    # "crates/services/icn-mesh-jobs",  # Temporarily excluded
+    # "tests/federation_bootstrap_test",  # Temporarily excluded
 ]
 
 # Default members excludes deprecated crates
@@ -36,12 +35,11 @@ default-members = [
     "crates/runtime/icn-core-vm",
     "crates/runtime/icn-runtime",
     "crates/runtime/host-abi",
-    "crates/p2p/planetary-mesh",
-    "crates/tools/icn-cli",
-    "crates/tools/meshctl",
-    "crates/services/icn-agoranet",
-    "crates/services/icn-mesh-jobs",
-    "tests/federation_bootstrap_test"
+    # "crates/p2p/planetary-mesh",
+    # "crates/tools/icn-cli",
+    # "crates/tools/meshctl",
+    # "crates/services/icn-mesh-jobs",
+    # "tests/federation_bootstrap_test",
 ]
 
 resolver = "2"

@@ -2,10 +2,8 @@ use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_
 use crate::protocol::{MeshProtocolMessage, NodeCapability};
 use futures::StreamExt;
 use icn_identity::{Did, KeyPair as IcnKeyPair};
-use libp2p::gossipsub::IdentTopic as Topic;
 use libp2p::identity::{Keypair as Libp2pKeypair, ed25519::SecretKey as Libp2pSecretKey};
-use libp2p::swarm::{Swarm, SwarmEvent};
-use libp2p::{PeerId, Transport};
+use libp2p::{Transport};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::sync::{Arc, Mutex, RwLock};
@@ -92,9 +90,9 @@ pub struct MeshNode {
     pub test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
     // 2. Add to MeshNode struct:
     pub internal_action_tx: mpsc::Sender<NodeInternalAction>,
-    // For Kademlia receipt queries
-    #[allow(clippy::type_complexity)] // To allow complex type for HashMap value with oneshot sender
-    receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>,
+    // For Kademlia receipt queries (complex type, allow lint at struct level)
+    #[allow(clippy::type_complexity)]
+    receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>>,
     reputation_service_url: Option<String>, // Added for reputation service URL
     http_client: reqwest::Client, // Added http_client
     pub bids: Arc<RwLock<HashMap<IcnJobId, Vec<crate::protocol::Bid>>>>, // Added for storing bids
@@ -173,8 +171,8 @@ impl MeshNode {
             test_job_status_listener_tx,
             // Assign `internal_action_tx` to the struct
             internal_action_tx,
-            // For Kademlia receipt queries
-            #[allow(clippy::type_complexity)] // To allow complex type for HashMap value with oneshot sender
+            // For Kademlia receipt queries (complex type, allow lint at struct level)
+            #[allow(clippy::type_complexity)]
             receipt_queries: Arc::new(Mutex::new(HashMap::new())),
             reputation_service_url, // Store the URL
             http_client: reqwest::Client::new(), // Initialize the client
@@ -450,7 +448,7 @@ impl MeshNode {
                         receipt_cid: anchored_receipt_cid.clone(),
                         executor_did: self.local_node_did.clone(),
                     }).await {
-                        tracing::error!(\\\"[ExecutionTrigger] Failed to enqueue receipt announcement for job {}: {:?}\\\", job_id, e);
+                        tracing::error!("[ExecutionTrigger] Failed to enqueue receipt announcement for job {}: {:?}", job_id, e);
                     }
 
                 }
@@ -471,7 +469,7 @@ impl MeshNode {
                 receipt_cid: anchored_receipt_cid.clone(), // cid_of_executed_receipt is in scope here
                 executor_did: self.local_node_did.clone(),
             }).await {
-                tracing::error!(\\\"[ExecutionTrigger] Failed to enqueue receipt announcement (unanchored) for job {}: {:?}\\\", job_id, e);
+                tracing::error!("[ExecutionTrigger] Failed to enqueue receipt announcement (unanchored) for job {}: {:?}", job_id, e);
             }
         }
 
@@ -598,7 +596,7 @@ impl MeshNode {
                 tokio::spawn(async move {
                     // Note: trigger_execution_for_job now takes &self
                     if let Err(e) = self_clone.trigger_execution_for_job(&job_id_clone_for_trigger).await {
-                        tracing::error!("[ExecutionTrigger] Failed to trigger execution for job {}: {:?}\", job_id_clone_for_trigger, e);
+                        tracing::error!("[ExecutionTrigger] Failed to trigger execution for job {}: {:?}", job_id_clone_for_trigger, e);
                     }
                 });
 

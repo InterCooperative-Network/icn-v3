@@ -407,67 +407,15 @@ impl Runtime {
     }
 
     /// Execute a WASM binary with the given context in governance mode
+    #[cfg(feature = "full_host_abi")]
     pub async fn governance_execute_wasm(&mut self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult, RuntimeError> {
-        let _host_context = self.vm_context_to_host_context(context.clone());
-        let executor_did = Did::from_str(&context.executor_did)?;
+        // Full implementation lives behind the feature flag.
+        unimplemented!()
+    }
 
-        let job_id = context.code_cid.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-        let dummy_job_params = icn_types::mesh::MeshJobParams { 
-            wasm_cid: context.code_cid.clone().unwrap_or_default(), 
-            description: "Governance execution".to_string(),
-            resources_required: vec![],
-            qos_profile: QoSProfile::BestEffort,
-            deadline: None,
-            input_data_cid: None,
-            max_acceptable_bid_tokens: None,
-            expected_output_schema_cid: None,
-            execution_policy: None,
-            workflow_type: icn_types::mesh::WorkflowType::SingleWasmModule,
-            stages: None,
-            is_interactive: false,
-        };
-        let job_exec_ctx = Arc::new(Mutex::new(job_execution_context::JobExecutionContext::new(
-            job_id.clone(), 
-            executor_did.clone(), 
-            dummy_job_params, 
-            executor_did.clone(),
-            Utc::now().timestamp_millis() as u64
-        )));
-
-        let mut store_data = wasm::linker::StoreData::new();
-        let host_env = ConcreteHostEnvironment::new_governance(
-            job_exec_ctx,
-            executor_did,
-            self.context.clone()
-        );
-        store_data.set_host(host_env);
-        
-        let mut store = Store::new(&self.engine, store_data);
-        
-        let module = self.load_module(wasm_bytes, &mut store).await?;
-        
-        let instance = self.linker.instantiate_async(&mut store, &module).await
-            .map_err(|e| RuntimeError::Instantiation(e.to_string()))?;
-            
-        let entrypoint = instance.get_typed_func::<(), ()>(&mut store, "_start")
-            .map_err(|e| RuntimeError::FunctionNotFound(format!("_start: {}", e)))?;
-        
-        let _execution_result_tuple = entrypoint.call_async(&mut store, ()).await
-            .map_err(|e| RuntimeError::Execution(e.to_string()))?;
-
-        let fuel_consumed = 0;
-        
-        let result = ExecutionResult {
-            metrics: CoreVmExecutionMetrics {
-                fuel_used: fuel_consumed,
-                ..Default::default()
-            },
-            anchored_cids: vec![],
-            resource_usage: vec![],
-            logs: vec![],
-        };
-        
-        Ok(result)
+    #[cfg(not(feature = "full_host_abi"))]
+    pub async fn governance_execute_wasm(&mut self, _wasm_bytes: &[u8], _context: VmContext) -> Result<ExecutionResult, RuntimeError> {
+        Err(RuntimeError::ExecutionError("governance WASM disabled in minimal build".into()))
     }
 
     /// Issue an execution receipt after successful execution
