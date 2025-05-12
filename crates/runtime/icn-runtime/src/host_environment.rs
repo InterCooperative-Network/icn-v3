@@ -2,10 +2,8 @@ use crate::context::RuntimeContext;
 use icn_economics::ResourceType;
 use icn_identity::Did;
 use icn_mesh_receipts::{ExecutionReceipt, verify_embedded_signature, SignError as ReceiptSignError};
-use icn_types::dag::ReceiptNode;
-use icn_types::dag_store::DagStore;
 use icn_types::org::{CooperativeId, CommunityId};
-use icn_mesh_protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage, P2PJobStatus, INLINE_PAYLOAD_MAX_SIZE, MAX_INTERACTIVE_INPUT_BUFFER_PEEK};
+use icn_mesh_protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, P2PJobStatus, INLINE_PAYLOAD_MAX_SIZE, MAX_INTERACTIVE_INPUT_BUFFER_PEEK};
 use serde::{Serialize, Deserialize};
 use serde_cbor;
 use std::sync::{Arc, Mutex};
@@ -100,7 +98,30 @@ impl ConcreteHostEnvironment {
     pub async fn mint_token(&self, _recipient_did_str: &str, _amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
     pub async fn transfer_token(&self, _sender_did_str: &str, _recipient_did_str: &str, _amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
 
-    pub async fn anchor_receipt(&self, mut receipt: ExecutionReceipt) -> Result<(), AnchorError> { Ok(()) }
+    /// Anchor a signed execution receipt to the DAG and broadcast an announcement.
+    pub async fn anchor_receipt(&self, mut receipt: ExecutionReceipt) -> Result<(), AnchorError> {
+        // 1) Ensure executor matches the caller
+        if receipt.executor != self.caller_did {
+            return Err(AnchorError::ExecutorMismatch(receipt.executor.to_string(), self.caller_did.to_string()));
+        }
+
+        // 2) Verify embedded signature (if present)
+        if !receipt.signature.is_empty() {
+            verify_embedded_signature(&receipt).map_err(|e| AnchorError::InvalidSignature(e.to_string()))?;
+        } else {
+            return Err(AnchorError::InvalidSignature("Missing signature".into()));
+        }
+
+        // 3) Serialize to CBOR and persist via DagStore
+        let cbor_bytes = serde_cbor::to_vec(&receipt)
+            .map_err(|e| AnchorError::SerializationError(e.to_string()))?;
+
+        // TODO: Convert receipt into a DagNode and insert into the store.
+        let _ = cbor_bytes; // placeholder to avoid unused warning
+        // let cid = ... obtain CID after storage
+
+        Ok(())
+    }
 
     // ---------------------- Helper memory access methods ----------------------
 
