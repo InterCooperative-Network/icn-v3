@@ -19,7 +19,7 @@ icn-types = { path = "../../common/icn-types" }
 icn-identity = { path = "../../common/icn-identity" }
 icn-economics = { path = "../../common/icn-economics" }
 icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
-icn-runtime = { path = "../../runtime/icn-runtime" }
+icn-mesh-protocol = { path = "../../common/icn-mesh-protocol" }
 icn-core-vm = { path = "../../runtime/icn-core-vm" }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.4", features = ["v4", "serde"] }

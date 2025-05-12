@@ -13,10 +13,14 @@ use thiserror::Error;
 use host_abi::*;
 use crate::job_execution_context::{JobExecutionContext, JobPermissions};
 use icn_types::mesh::MeshJobParams;
-// use planetary_mesh::protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage}; // Temporarily commented out
+use planetary_mesh::protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage, P2PJobStatus};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use wasmer::{Memory, WasmerEnv, FunctionEnvMut, WasmPtr, Array};
+
+// Constants for interactive input/output
+const INLINE_PAYLOAD_MAX_SIZE: usize = 1024 * 1024; // 1MB
+const MAX_INTERACTIVE_INPUT_BUFFER_PEEK: usize = 1024 * 1024; // 1MB
 
 /// Errors that can occur during receipt anchoring
 #[derive(Debug, Error)]

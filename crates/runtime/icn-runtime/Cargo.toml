@@ -16,12 +16,14 @@ tracing = "0.1"
 icn-types = { path = "../../common/icn-types" }
 icn-identity = { path = "../../common/icn-identity" }
 icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
+icn-mesh-protocol = { path = "../../common/icn-mesh-protocol" }
 icn-core-vm = { path = "../icn-core-vm" }
 icn-economics = { path = "../../common/icn-economics" }
 host-abi = { path = "../host-abi" }
 tokio = { version = "1.33.0", features = ["full"] }
 async-trait = "0.1.74"
 wasmtime = "18.0.0"
+wasmer = "3.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.1.0"

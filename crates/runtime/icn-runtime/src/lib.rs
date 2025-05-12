@@ -36,6 +36,16 @@ pub mod job_execution_context;
 mod wasm;
 pub use wasm::register_host_functions;
 
+/// Module cache trait for caching compiled WASM modules
+#[async_trait]
+pub trait ModuleCache: Send + Sync {
+    /// Get a cached module by its CID
+    async fn get_module(&self, cid: &str) -> Option<Module>;
+    
+    /// Store a module in the cache
+    async fn store_module(&self, cid: &str, module: Module) -> Result<()>;
+}
+
 /// Error types specific to the runtime
 #[derive(Error, Debug)]
 pub enum RuntimeError {
@@ -205,10 +215,10 @@ pub struct Runtime {
     engine: Engine,
 
     /// Wasmtime linker
-    linker: Linker,
+    linker: Linker<wasm::linker::StoreData>,
 
     /// Wasmtime store
-    store: Store,
+    store: Store<wasm::linker::StoreData>,
 
     /// Module cache
     module_cache: Option<Arc<dyn ModuleCache>>,
