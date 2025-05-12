@@ -16,6 +16,7 @@ members = [
     "crates/tools/icn-cli",
     "crates/tools/meshctl",
     "crates/services/icn-agoranet",
+    "crates/services/icn-mesh-jobs",
     "tests/federation_bootstrap_test"
 ]
 
@@ -37,6 +38,7 @@ default-members = [
     "crates/tools/icn-cli",
     "crates/tools/meshctl",
     "crates/services/icn-agoranet",
+    "crates/services/icn-mesh-jobs",
     "tests/federation_bootstrap_test"
 ]
 
