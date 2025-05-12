@@ -81,4 +81,17 @@ impl ManaManager {
     pub fn pool_mut(&mut self, did: &Did) -> Option<&mut ManaPool> {
         self.pools.get_mut(did)
     }
+
+    /// Get current available mana balance for the DID after regeneration.
+    pub fn balance(&mut self, did: &Did) -> Option<u64> {
+        self.pools.get_mut(did).map(|p| p.available())
+    }
+
+    /// Spend the specified amount of mana from the DID's pool.
+    pub fn spend(&mut self, did: &Did, amount: u64) -> Result<(), ManaError> {
+        match self.pools.get_mut(did) {
+            Some(pool) => pool.consume(amount),
+            None => Err(ManaError::InsufficientMana { requested: amount, available: 0 }),
+        }
+    }
 } 

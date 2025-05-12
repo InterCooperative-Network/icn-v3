@@ -609,9 +609,32 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
 
     // ---------------- Mana stubs ----------------
 
-    fn host_account_get_mana(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _did_ptr: u32, _did_len: u32) -> Result<i64, AnyhowError> { Ok(0) }
+    fn host_account_get_mana(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, did_ptr: u32, did_len: u32) -> Result<i64, AnyhowError> {
+        let did_str = if did_len == 0 {
+            // default to caller DID
+            self.caller_did.to_string()
+        } else {
+            self.read_string_from_mem(&mut caller, did_ptr, did_len)?
+        };
 
-    fn host_account_spend_mana(&self, _caller: Caller<'_, ConcreteHostEnvironment>, _did_ptr: u32, _did_len: u32, _amount: u64) -> Result<i32, AnyhowError> { Ok(0) }
+        let mut mana_mgr = self.rt.mana_manager.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        let balance_opt = mana_mgr.balance(&did_str);
+        Ok(balance_opt.unwrap_or(0) as i64)
+    }
+
+    fn host_account_spend_mana(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, did_ptr: u32, did_len: u32, amount: u64) -> Result<i32, AnyhowError> {
+        let did_str = if did_len == 0 {
+            self.caller_did.to_string()
+        } else {
+            self.read_string_from_mem(&mut caller, did_ptr, did_len)?
+        };
+
+        let mut mana_mgr = self.rt.mana_manager.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        match mana_mgr.spend(&did_str, amount) {
+            Ok(_) => Ok(0),
+            Err(_) => Ok(HostAbiError::ResourceLimitExceeded as i32),
+        }
+    }
 }
 
 #[cfg(not(feature = "full_host_abi"))]
