@@ -5,20 +5,20 @@ use icn_mesh_receipts::{ExecutionReceipt, verify_embedded_signature, SignError a
 use icn_types::dag::ReceiptNode;
 use icn_types::dag_store::DagStore;
 use icn_types::org::{CooperativeId, CommunityId};
+use icn_mesh_protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage, P2PJobStatus, INLINE_PAYLOAD_MAX_SIZE, MAX_INTERACTIVE_INPUT_BUFFER_PEEK};
+use serde::{Serialize};
 use serde_cbor;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::str::FromStr;
 use anyhow::Result;
 use thiserror::Error;
 use host_abi::*;
 use crate::job_execution_context::{JobExecutionContext, JobPermissions};
 use icn_types::mesh::MeshJobParams;
-use icn_mesh_protocol::{JobInteractiveInputV1, JobInteractiveOutputV1, MeshProtocolMessage, P2PJobStatus, INLINE_PAYLOAD_MAX_SIZE, MAX_INTERACTIVE_INPUT_BUFFER_PEEK};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use wasmer::{Memory, WasmerEnv, FunctionEnvMut, WasmPtr, Array};
-use wasmtime;
-use wasmer::MemoryView;
+use wasmer::{Memory, WasmerEnv as WasmerEnvTrait, FunctionEnv, FunctionEnvMut, WasmPtr, Array, MemoryView};
+use wasmer_derive::WasmerEnv;
+use tracing;
 
 /// Errors that can occur during receipt anchoring
 #[derive(Debug, Error)]
@@ -45,44 +45,25 @@ pub enum AnchorError {
 /// Concrete implementation of the host environment for WASM execution
 #[derive(WasmerEnv, Clone)]
 pub struct ConcreteHostEnvironment {
-    /// Per‐job execution context (for WASM calls)
     #[wasmer(export)]
     pub ctx: Arc<Mutex<JobExecutionContext>>,
-    /// Global runtime context, including the pending_mesh_jobs queue
     #[wasmer(export)]
     pub rt: Arc<RuntimeContext>,
-    
-    /// DID of the caller
     pub caller_did: Did,
-    
-    /// Whether this execution is happening in a governance context
     pub is_governance: bool,
-    
-    /// Optional cooperative ID for this execution context
     pub coop_id: Option<CooperativeId>,
-    
-    /// Optional community ID for this execution context
     pub community_id: Option<CommunityId>,
-    
-    // /// In a real system, these would be Arcs to actual service implementations
-    // pub p2p_service: Arc<dyn P2pService>, // Temporarily commented out
-    // pub storage_service: Arc<dyn StorageService>, // Temporarily commented out, may be unrelated to planetary-mesh
 }
 
 impl ConcreteHostEnvironment {
-    /// Create a new host environment with the given context and caller
     pub fn new(
         ctx: Arc<Mutex<JobExecutionContext>>,
-        // p2p_service: Arc<dyn P2pService>, // Temporarily commented out
-        // storage_service: Arc<dyn StorageService>, // Temporarily commented out
         caller_did: Did,
         runtime_ctx: Arc<RuntimeContext>,
     ) -> Self {
         Self {
             ctx,
             rt: runtime_ctx,
-            // p2p_service,
-            // storage_service,
             caller_did,
             is_governance: false,
             coop_id: None,
@@ -90,25 +71,17 @@ impl ConcreteHostEnvironment {
         }
     }
     
-    /// Create a new host environment with governance context
     pub fn new_governance(ctx: Arc<Mutex<JobExecutionContext>>, caller_did: Did, runtime_ctx: Arc<RuntimeContext>) -> Self {
-        Self {
+         Self {
             ctx,
             rt: runtime_ctx,
             caller_did,
             is_governance: true,
             coop_id: None,
             community_id: None,
-            // p2p_service: Arc::new(|_target_did: Did, _message: MeshProtocolMessage| -> Result<(), String> { // Temporarily commented out
-            //     Err(String::from("Governance context does not support P2P communication"))
-            // }),
-            // storage_service: Arc::new(|_data: &[u8]| -> Result<String, String> { // Temporarily commented out
-            //     Err(String::from("Governance context does not support storage"))
-            // }),
         }
     }
     
-    /// Create a new host environment with organization context
     pub fn with_organization(
         mut self,
         coop_id: Option<CooperativeId>,
@@ -119,6 +92,80 @@ impl ConcreteHostEnvironment {
         self
     }
 
+    pub fn check_resource_authorization(&self, rt_type: ResourceType, amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
+    pub fn record_resource_usage(&self, rt_type: ResourceType, amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
+    pub fn is_governance_context(&self) -> i32 { if self.is_governance { 1 } else { 0 } }
+    pub fn mint_token(&self, recipient_did_str: &str, amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
+    pub fn transfer_token(&self, sender_did_str: &str, recipient_did_str: &str, amount: u64) -> i32 { HostAbiError::NotSupported as i32 }
+
+    pub async fn anchor_receipt(&self, mut receipt: ExecutionReceipt) -> Result<(), AnchorError> { Ok(()) }
+}
+
+// ABI Implementation using Wasmer
+impl MeshHostAbi for ConcreteHostEnvironment {
+    // Helper to get memory view
+    fn get_memory_view<'a>(&self, env: &'a FunctionEnvMut<Self>) -> Result<MemoryView<'a, u8>, HostAbiError> {
+        env.data().rt.memory.as_ref()
+            .ok_or(HostAbiError::MemoryAccessError)?
+            .view(env)
+    }
+
+    fn host_job_get_id(&self, env: &mut FunctionEnvMut<Self>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> i32 {
+        let ctx = match env.data().ctx.lock() { Ok(l) => l, Err(_) => return HostAbiError::UnknownError as i32 };
+        let job_id_bytes = ctx.job_id.as_bytes();
+        if job_id_buf_len < job_id_bytes.len() as u32 { return HostAbiError::BufferTooSmall as i32; }
+        
+        match self.get_memory_view(env) {
+            Ok(memory_view) => {
+                let wasm_ptr = WasmPtr::<u8, Array>::new(job_id_buf_ptr);
+                match wasm_ptr.slice(&memory_view, job_id_bytes.len() as u32) {
+                    Ok(mut dest_slice) => {
+                        match dest_slice.write_slice(job_id_bytes) {
+                            Ok(_) => job_id_bytes.len() as i32,
+                            Err(_) => HostAbiError::MemoryAccessError as i32,
+                        }
+                    }
+                    Err(_) => HostAbiError::MemoryAccessError as i32, // Error getting slice
+                }
+            }
+            Err(e) => e as i32
+        }
+    }
+
+    fn host_job_get_initial_input_cid(&self, env: &mut FunctionEnvMut<Self>, cid_buf_ptr: u32, cid_buf_len: u32) -> i32 {
+        let ctx = match env.data().ctx.lock() { Ok(l) => l, Err(_) => return HostAbiError::UnknownError as i32 };
+        if let Some(input_cid) = &ctx.job_params.input_data_cid {
+            let input_cid_bytes = input_cid.as_bytes();
+            if cid_buf_len < input_cid_bytes.len() as u32 { return HostAbiError::BufferTooSmall as i32; }
+            match self.get_memory_view(env) {
+                 Ok(memory_view) => {
+                    let wasm_ptr = WasmPtr::<u8, Array>::new(cid_buf_ptr);
+                    match wasm_ptr.slice(&memory_view, input_cid_bytes.len() as u32) {
+                        Ok(mut dest_slice) => {
+                            match dest_slice.write_slice(input_cid_bytes) {
+                                Ok(_) => input_cid_bytes.len() as i32,
+                                Err(_) => HostAbiError::MemoryAccessError as i32,
+                            }
+                        }
+                        Err(_) => HostAbiError::MemoryAccessError as i32,
+                    }
+                }
+                Err(e) => e as i32
+            }
+        } else { 0 }
+    }
+
+    fn host_job_is_interactive(&self, env: &mut FunctionEnvMut<Self>) -> i32 {
+        let ctx = match env.data().ctx.lock() { Ok(l) => l, Err(_) => return HostAbiError::UnknownError as i32 };
+        if ctx.job_params.is_interactive { 1 } else { 0 }
+    }
+
+    fn host_workflow_get_current_stage_index(&self, env: &mut FunctionEnvMut<Self>) -> i32 {
+        let ctx = match env.data().ctx.lock() { Ok(l) => l, Err(_) => return HostAbiError::UnknownError as i32 };
+        ctx.current_stage_index.map_or(-1, |idx| idx as i32)
+    }
+
+    fn host_workflow_get_current_stage_id(&self, env: &mut FunctionEnvMut<Self>, stage_id_buf_ptr: u32, stage_id_buf_len: u32) -> i32 {
     /// Check resource authorization
     pub fn check_resource_authorization(&self, rt_type: ResourceType, amt: u64) -> i32 {
         if let Some(economics) = &self.rt.economics {

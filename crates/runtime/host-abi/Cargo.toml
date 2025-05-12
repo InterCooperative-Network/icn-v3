@@ -5,6 +5,17 @@ edition = "2021"
 authors = ["ICN Team"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/intercooperative/icn-v3"
-description = "Host ABI definitions for the ICN runtime"
+description = "WASM Host ABI definitions for ICN (using Wasmtime)"
 
-[dependencies] 
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+wasmtime = "18.0.4"
+
+[build-dependencies]
+cbindgen = "0.26.0"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = [] 
