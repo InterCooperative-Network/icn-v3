@@ -191,91 +191,141 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), any
             job_id_buffer_ptr: i32,
             job_id_buffer_len: i32
         | -> Result<i32, Trap> {
-                
-            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                Some(mem) => mem,
-                None => return Ok(-3), // Error: Memory not found
-            };
-
-            let job_params: MeshJobParams = {
-                let data = memory.data(&caller);
-                let start = job_params_cbor_ptr as usize;
-                let end = start + job_params_cbor_len as usize;
-                if end > data.len() {
-                    return Ok(-21); // Error: Payload out of bounds
-                }
-                let payload_bytes = &data[start..end];
-                match serde_cbor::from_slice(payload_bytes) {
-                    Ok(params) => params,
-                    Err(_) => return Ok(-22), // Error: Payload deserialization failed
-                }
-            };
-
-            // Economic Pre-Check for max_acceptable_bid_tokens
-            if let Some(required_tokens) = job_params.max_acceptable_bid_tokens {
-                if required_tokens > 0 { // Only check if some tokens are actually required
-                    let host_env = caller.data().host(); // Get a ref to ConcreteHostEnvironment
-                    // ResourceType::Token corresponds to u32 value 2 (as per tests/conventions)
-                    // We are calling the host environment's check_resource_authorization directly here,
-                    // not the WASM ABI `host_check_resource_authorization`.
-                    let auth_result = host_env.check_resource_authorization(ResourceType::Token, required_tokens);
-                    
-                    if auth_result != 0 { // 0 means authorized, non-zero means not authorized
-                        return Ok(-41); // Error: Insufficient funds for job bid or other auth failure
-                    }
-                    // TODO: Implement token hold/escrow mechanism upon successful job submission if required_tokens > 0
-                }
-            }
-
-            let originator_did = caller.data().host().caller_did.clone();
-
-            let job_id_str = format!("job_{}", Uuid::new_v4());
-
-            let submission_timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| Trap::new("System time error"))?
-                .as_secs();
-
-            let mesh_job = MeshJob {
-                job_id: job_id_str.clone(),
-                params: job_params,
-                originator_did,
-                submission_timestamp,
-                originator_org_scope: None, // Will be set by MeshNode if needed
-            };
-            
-            // Access the global pending_mesh_jobs queue via the `rt` field
-            caller.data().host_mut().rt.pending_mesh_jobs.lock().unwrap().push_back(mesh_job);
-            
-            // Write JobId string to guest-provided buffer
-            let job_id_bytes = job_id_str.as_bytes();
-            let job_id_actual_len = job_id_bytes.len();
-
-            if job_id_buffer_len == 0 {
-                return Ok(-31); // Error: Output buffer length is zero
-            }
-            // As per ABI: Return 0 if job_id_buffer_len is too small. Let's define minimal as at least 1 char.
-            // A more robust check might be if it can fit "job_" + even a short UUID part.
-            // For now, if buffer_len is less than actual_len, we might truncate or return error.
-            // Let's try to write what fits. If nothing fits (e.g. buffer_len < minimal_id_len), return 0.
-            // A typical JobId like "job_uuid" is long. Let's say min 10 chars for a very basic ID.
-            const MIN_JOB_ID_WRITE_LEN: usize = 1; 
-            if job_id_buffer_len < MIN_JOB_ID_WRITE_LEN as i32 {
-                 return Ok(0); // Buffer too small to write anything meaningful
-            }
-
-            let len_to_write = std::cmp::min(job_id_actual_len, job_id_buffer_len as usize);
-
-            if len_to_write == 0 { // Should be caught by MIN_JOB_ID_WRITE_LEN check if that's > 0
-                return Ok(0); // Cannot write anything
-            }
-
-            match memory.write(&mut caller, job_id_buffer_ptr as usize, &job_id_bytes[..len_to_write]) {
-                Ok(_) => Ok(len_to_write as i32), // Success: return actual bytes written
-                Err(_) => Ok(-32), // Error: Failed to write JobId to WASM memory buffer
-            }
+            // Call the actual trait method implementation
+            let host = caller.data().host(); // Get immutable borrow first
+            let result = host.host_submit_mesh_job(
+                caller, // Pass the caller
+                job_params_cbor_ptr as u32,
+                job_params_cbor_len as u32,
+                job_id_buffer_ptr as u32,
+                job_id_buffer_len as u32,
+            );
+            // Wasmtime automatically converts the anyhow::Error into a Trap
+            result.map_err(|e| Trap::new(e.to_string())) // Explicitly convert Anyhow Error to Trap
         },
     )?;
 
+    // == MeshHostAbi Wrappers ==
+    // Wrap functions from the MeshHostAbi trait
+    let map_err = |e: anyhow::Error| Trap::new(e.to_string());
+
+    linker.func_wrap(
+        "icn_host", "host_job_get_id",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_job_get_id(caller, p0, p1).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_job_get_initial_input_cid",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_job_get_initial_input_cid(caller, p0, p1).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_job_is_interactive",
+        |caller: Caller<'_, StoreData>|
+         -> Result<i32, Trap> {
+            caller.data().host().host_job_is_interactive(caller).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_workflow_get_current_stage_index",
+        |caller: Caller<'_, StoreData>|
+         -> Result<i32, Trap> {
+            caller.data().host().host_workflow_get_current_stage_index(caller).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_workflow_get_current_stage_id",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_workflow_get_current_stage_id(caller, p0, p1).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_workflow_get_current_stage_input_cid",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32, p2: u32, p3: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_workflow_get_current_stage_input_cid(caller, p0, p1, p2, p3).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_job_report_progress",
+        |mut caller: Caller<'_, StoreData>, p0: u8, p1: u32, p2: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_job_report_progress(caller, p0, p1, p2).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_workflow_complete_current_stage",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_workflow_complete_current_stage(caller, p0, p1).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_interactive_send_output",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32, p2: u32, p3: u32, p4: i32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_interactive_send_output(caller, p0, p1, p2, p3, p4).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_interactive_receive_input",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32, p2: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_interactive_receive_input(caller, p0, p1, p2).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_interactive_peek_input_len",
+        |caller: Caller<'_, StoreData>|
+         -> Result<i32, Trap> {
+            caller.data().host().host_interactive_peek_input_len(caller).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_interactive_prompt_for_input",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_interactive_prompt_for_input(caller, p0, p1).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_data_read_cid",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32, p2: u64, p3: u32, p4: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_data_read_cid(caller, p0, p1, p2, p3, p4).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_data_write_buffer",
+        |mut caller: Caller<'_, StoreData>, p0: u32, p1: u32, p2: u32, p3: u32|
+         -> Result<i32, Trap> {
+            caller.data().host().host_data_write_buffer(caller, p0, p1, p2, p3).map_err(map_err)
+        }
+    )?;
+    linker.func_wrap(
+        "icn_host", "host_log_message",
+        |mut caller: Caller<'_, StoreData>, level_val: u32, p1: u32, p2: u32|
+         -> Result<i32, Trap> {
+             // Need to convert level_val (u32) to LogLevel
+             // This is tricky as LogLevel is not Copy. Assuming a TryFrom implementation exists or can be added.
+             // For now, let's use a placeholder match. 
+             // This part might need adjustment based on LogLevel definition and conversion capabilities.
+            let level = match level_val {
+                 0 => host_abi::LogLevel::Error,
+                 1 => host_abi::LogLevel::Warn,
+                 2 => host_abi::LogLevel::Info,
+                 3 => host_abi::LogLevel::Debug,
+                 4 => host_abi::LogLevel::Trace,
+                 _ => return Err(Trap::new(format!("Invalid log level: {}", level_val))),
+            };
+            caller.data().host().host_log_message(caller, level, p1, p2).map_err(map_err)
+        }
+    )?;
+    
     Ok(())
 } 

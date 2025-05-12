@@ -19,6 +19,10 @@ use std::time::{Duration, Instant};
 use wasmtime::{Caller, Trap, Memory as WasmtimeMemory, Extern};
 use tracing;
 use std::convert::TryFrom;
+use anyhow::{anyhow, Result as AnyhowError};
+use cid::Cid;
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use tokio::sync::mpsc::{Sender, Receiver};
 
 /// Errors that can occur during receipt anchoring
 #[derive(Debug, Error)]
@@ -101,92 +105,117 @@ impl ConcreteHostEnvironment {
 
 // ABI Implementation using Wasmtime
 impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
-    fn host_job_get_id(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, Trap> {
-        let job_id_bytes = {
-            let host_env = caller.data();
-            let ctx = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-            ctx.job_id.as_bytes().to_vec()
-        };
-
-        if job_id_buf_len < job_id_bytes.len() as u32 {
-            return Err(Trap::new(HostAbiError::BufferTooSmall.to_string()));
+    // Helper to get memory safely
+    fn get_memory(&self, caller: &mut Caller<'_, ConcreteHostEnvironment>) -> Result<WasmtimeMemory, anyhow::Error> {
+        match caller.get_export("memory") {
+            Some(Extern::Memory(mem)) => Ok(mem),
+            _ => Err(anyhow!(HostAbiError::MemoryAccessError)),
         }
+    }
+
+    // Helper to read string from memory
+    fn read_string_from_mem(&self, caller: &mut Caller<'_, ConcreteHostEnvironment>, ptr: u32, len: u32) -> Result<String, anyhow::Error> {
+        let mem = self.get_memory(caller)?;
+        let mut buffer = vec![0u8; len as usize];
+        mem.read(caller, ptr as usize, &mut buffer)
+            .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+        String::from_utf8(buffer)
+            .map_err(|_| anyhow!(HostAbiError::DataEncodingError)) // Use DataEncodingError for UTF8
+    }
+
+    // Helper to write string to memory
+    fn write_string_to_mem(&self, caller: &mut Caller<'_, ConcreteHostEnvironment>, s: &str, ptr: u32, len: u32) -> Result<i32, anyhow::Error> {
+        let bytes = s.as_bytes();
+        if bytes.len() > len as usize {
+            return Err(anyhow!(HostAbiError::BufferTooSmall));
+        }
+        let mem = self.get_memory(caller)?;
+        mem.write(caller, ptr as usize, bytes)
+            .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+        Ok(bytes.len() as i32)
+    }
+
+    // Helper to read bytes from memory
+    fn read_bytes_from_mem(&self, caller: &mut Caller<'_, ConcreteHostEnvironment>, ptr: u32, len: u32) -> Result<Vec<u8>, anyhow::Error> {
+        let mem = self.get_memory(caller)?;
+        let mut buffer = vec![0u8; len as usize];
+        mem.read(caller, ptr as usize, &mut buffer)
+            .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+        Ok(buffer)
+    }
+
+    // Helper to write bytes to memory
+    fn write_bytes_to_mem(&self, caller: &mut Caller<'_, ConcreteHostEnvironment>, bytes: &[u8], ptr: u32, len: u32) -> Result<i32, anyhow::Error> {
+        if bytes.len() > len as usize {
+            return Err(anyhow!(HostAbiError::BufferTooSmall));
+        }
+        let mem = self.get_memory(caller)?;
+        mem.write(caller, ptr as usize, bytes)
+            .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+        Ok(bytes.len() as i32)
+    }
+
+    // **I. Job & Workflow Information **
+    fn host_job_get_id(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx = host_env.ctx.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        let job_id_str = ctx.job_id.to_string();
+        self.write_string_to_mem(&mut caller, &job_id_str, job_id_buf_ptr, job_id_buf_len)
+    }
+
+    fn host_job_get_initial_input_cid(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, cid_buf_ptr: u32, cid_buf_len: u32) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx = host_env.ctx.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        if let Some(cid) = &ctx.job_params.input_data_cid {
+            let cid_str = cid.to_string();
+            self.write_string_to_mem(&mut caller, &cid_str, cid_buf_ptr, cid_buf_len)
+        } else {
+            Ok(0) // No input CID specified
+        }
+    }
+
+    fn host_job_is_interactive(&self, caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx = host_env.ctx.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        Ok(ctx.job_params.is_interactive as i32)
+    }
+
+    fn host_workflow_get_current_stage_index(&self, caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx = host_env.ctx.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        if let Some(index) = ctx.current_stage_index {
+            Ok(index as i32)
+        } else {
+            Ok(-1) // Not a multi-stage workflow or index not set
+        }
+    }
+
+    fn host_workflow_get_current_stage_id(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        stage_id_buf_ptr: u32,
+        stage_id_buf_len: u32,
+    ) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx = host_env.ctx.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
         
-        let memory = match caller.get_export("memory") {
-            Some(Extern::Memory(mem)) => mem,
-            _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-        };
-
-        match memory.write(&mut caller, job_id_buf_ptr as usize, &job_id_bytes) {
-            Ok(_) => Ok(job_id_bytes.len() as i32),
-            Err(_) => Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-        }
-    }
-
-    fn host_job_get_initial_input_cid(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, cid_buf_ptr: u32, cid_buf_len: u32) -> Result<i32, Trap> {
-        let input_cid_bytes_opt = {
-            let host_env = caller.data();
-            let ctx = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-            ctx.job_params.input_data_cid.as_ref().map(|s| s.clone().into_bytes())
-        };
-
-        if let Some(input_cid_bytes) = input_cid_bytes_opt {
-            if cid_buf_len < input_cid_bytes.len() as u32 {
-                return Err(Trap::new(HostAbiError::BufferTooSmall.to_string()));
+        if let Some(index) = ctx.current_stage_index {
+            if let Some(workflow) = &ctx.job_params.stages {
+                if let Some(stage) = workflow.get(index) {
+                    if let Some(id) = &stage.stage_id {
+                        return self.write_string_to_mem(&mut caller, id, stage_id_buf_ptr, stage_id_buf_len);
+                    }
+                }
             }
-            
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(mem)) => mem,
-                _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            };
-
-            match memory.write(&mut caller, cid_buf_ptr as usize, &input_cid_bytes) {
-                Ok(_) => Ok(input_cid_bytes.len() as i32),
-                Err(_) => Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            }
-        } else {
-            Ok(0) // Return 0 if no input CID
         }
+        Ok(0) // No stage ID found or not applicable
     }
 
-    fn host_job_is_interactive(&self, caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, Trap> {
-        let host_env = caller.data();
-        let ctx = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-        if ctx.job_params.is_interactive { Ok(1) } else { Ok(0) }
-    }
-
-    fn host_workflow_get_current_stage_index(&self, caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, Trap> {
-        let host_env = caller.data();
-        let ctx = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-        Ok(ctx.current_stage_index.map_or(-1, |idx| idx as i32))
-    }
-
-    fn host_workflow_get_current_stage_id(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, stage_id_buf_ptr: u32, stage_id_buf_len: u32) -> Result<i32, Trap> {
-        let stage_id_bytes_opt = {
-            let host_env = caller.data();
-            let ctx = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-            ctx.current_stage_index
-                .and_then(|idx| ctx.job_params.stages.as_ref()?.get(idx as usize))
-                .map(|stage| stage.stage_id.as_bytes().to_vec())
-        };
-
-        if let Some(stage_id_bytes) = stage_id_bytes_opt {
-             if stage_id_buf_len < stage_id_bytes.len() as u32 {
-                return Err(Trap::new(HostAbiError::BufferTooSmall.to_string()));
-             }
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(mem)) => mem,
-                _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            };
-            match memory.write(&mut caller, stage_id_buf_ptr as usize, &stage_id_bytes) {
-                Ok(_) => Ok(stage_id_bytes.len() as i32),
-                Err(_) => Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            }
-        } else {
-            Ok(0) // No current stage index, no stages, or stage not found
-        }
-    }
-    
     fn host_workflow_get_current_stage_input_cid(
         &self,
         mut caller: Caller<'_, ConcreteHostEnvironment>,
@@ -194,294 +223,400 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         input_key_len: u32,
         cid_buf_ptr: u32,
         cid_buf_len: u32,
-    ) -> Result<i32, Trap> {
-         tracing::debug!("host_workflow_get_current_stage_input_cid called (Not Implemented)");
-         // TODO: Implement logic to read input_key, check current stage input_source,
-         // find previous stage output or job input, resolve CID, write to buffer.
-         Err(Trap::new(HostAbiError::NotSupported.to_string()))
+    ) -> Result<i32, AnyhowError> {
+         let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+         let ctx_mutex = Arc::clone(&host_env.ctx); // Clone Arc for locking
+         let mut ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+         let runtime_ctx_clone = Arc::clone(&host_env.runtime_ctx);
+         
+         let input_key_opt = if input_key_len > 0 {
+             Some(self.read_string_from_mem(&mut caller, input_key_ptr, input_key_len)?)
+         } else {
+             None
+         };
+
+         let resolved_cid_res = ctx_guard.resolve_current_stage_input(runtime_ctx_clone.dag_store(), input_key_opt.as_deref());
+
+         match resolved_cid_res {
+             Ok(Some(cid)) => {
+                let cid_str = cid.to_string();
+                self.write_string_to_mem(&mut caller, &cid_str, cid_buf_ptr, cid_buf_len)
+             }
+             Ok(None) => Ok(0), // Resolved to no input or stage/workflow not applicable
+             Err(e) => Err(anyhow!(e)), // Convert JobContextError to anyhow::Error
+         }
     }
 
-    fn host_job_report_progress(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, percentage: u8, status_message_ptr: u32, status_message_len: u32) -> Result<i32, Trap> {
-        let (host_env_caller_did, mut ctx) = {
-             let host_env = caller.data();
-             let ctx_guard = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-             (host_env.caller_did.clone(), host_env.ctx.clone())
-        };
-        let mut ctx_guard = ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-
-        let status_text = if status_message_len > 0 {
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(mem)) => mem,
-                _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            };
-            let mut buffer = vec![0u8; status_message_len as usize];
-            memory.read(&caller, status_message_ptr as usize, &mut buffer)
-                .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
-            String::from_utf8(buffer).map_err(|_| Trap::new(HostAbiError::InvalidUTF8String.to_string()))?
-        } else {
-            String::new()
-        };
-        
-        tracing::debug!("[ABI] host_job_report_progress: {}%, message: '{}'", percentage, status_text);
-        
-        if let P2PJobStatus::Running { progress_percent, status_message, .. } = &mut ctx_guard.current_status {
-            *progress_percent = Some(percentage);
-            *status_message = Some(status_text);
-        } else {
-            ctx_guard.current_status = P2PJobStatus::Running {
-                node_id: host_env_caller_did,
-                current_stage_index: ctx_guard.current_stage_index,
-                current_stage_id: ctx_guard.current_stage_id.clone(),
-                progress_percent: Some(percentage),
-                status_message: Some(status_text),
-            };
-        }
-        Ok(HostAbiError::Success as i32)
-    }
-
-    fn host_workflow_complete_current_stage(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, output_cid_ptr: u32, output_cid_len: u32) -> Result<i32, Trap> {
-        let mut ctx_guard = {
-            let host_env = caller.data();
-            host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?
-        };
-
-        let output_cid_str = if output_cid_len > 0 {
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(mem)) => mem,
-                _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            };
-            let mut buffer = vec![0u8; output_cid_len as usize];
-            memory.read(&caller, output_cid_ptr as usize, &mut buffer)
-                .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
-            String::from_utf8(buffer).map_err(|_| Trap::new(HostAbiError::InvalidUTF8String.to_string()))?
-        } else {
-            String::new() 
-        };
-
-        tracing::debug!("[ABI] host_workflow_complete_current_stage called. Output CID: '{}'", output_cid_str);
-        Err(Trap::new(HostAbiError::NotSupported.to_string()))
-    }
-
-    fn host_interactive_send_output(
-        &self, 
+    // **II. Status & Progress Reporting **
+    fn host_job_report_progress(
+        &self,
         mut caller: Caller<'_, ConcreteHostEnvironment>,
-        payload_ptr: u32, 
-        payload_len: u32, 
-        output_key_ptr: u32, 
-        output_key_len: u32, 
-        is_final_chunk: i32
-    ) -> Result<i32, Trap> {
-        let (can_send, is_interactive, job_id, originator_did, caller_did, mut ctx_mutex) = {
-            let host_env = caller.data();
-            let ctx_guard = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-            (
-                ctx_guard.permissions.can_send_interactive_output,
-                ctx_guard.job_params.is_interactive,
-                ctx_guard.job_id.clone(),
-                ctx_guard.originator_did.clone(),
-                host_env.caller_did.clone(),
-                host_env.ctx.clone()
-            )
+        percentage: u8,
+        status_message_ptr: u32,
+        status_message_len: u32,
+    ) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx_mutex = Arc::clone(&host_env.ctx);
+        let mut ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+
+        if percentage > 100 {
+            return Err(anyhow!(HostAbiError::InvalidArguments));
+        }
+
+        let status_text = self.read_string_from_mem(&mut caller, status_message_ptr, status_message_len)?;
+
+        // Update internal state
+        ctx_guard.progress_percent = Some(percentage);
+        ctx_guard.status_message = Some(status_text.clone());
+
+        // Try to send P2P update (best effort, might fail if channel closed)
+        if let Some(sender) = &ctx_guard.status_sender {
+            let update = P2PJobStatus::Running { percentage, status_message: status_text };
+            let msg = MeshProtocolMessage::JobStatusUpdateV1 {
+                job_id: ctx_guard.job_id.clone(),
+                status: update,
+            };
+            // Use try_send for non-blocking, ignore QueueFull or ChannelClosed errors
+            let _ = sender.try_send(msg).map_err(|e| {
+                if e.is_full() {
+                     HostAbiError::QueueFull
+                } else {
+                     HostAbiError::ChannelClosed
+                }
+            });
+        }
+
+        Ok(0) // Success
+    }
+
+    fn host_workflow_complete_current_stage(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        output_cid_ptr: u32,
+        output_cid_len: u32,
+    ) -> Result<i32, AnyhowError> {
+        let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx_mutex = Arc::clone(&host_env.ctx);
+        let mut ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+
+        let output_cid_opt = if output_cid_len > 0 {
+            let cid_str = self.read_string_from_mem(&mut caller, output_cid_ptr, output_cid_len)?;
+            Some(Cid::from_str(&cid_str).map_err(|_| anyhow!(HostAbiError::InvalidCIDFormat))?)
+        } else {
+            None
         };
 
-        if !can_send { return Err(Trap::new(HostAbiError::NotPermitted.to_string())); }
-        if !is_interactive { return Err(Trap::new(HostAbiError::InvalidState.to_string())); }
+        let res = ctx_guard.complete_current_stage(output_cid_opt);
+        match res {
+            Ok(_) => Ok(0),
+            Err(e) => Err(anyhow!(e)), // Convert JobContextError
+        }
+    }
 
-        let memory = match caller.get_export("memory") {
-            Some(Extern::Memory(mem)) => mem,
-            _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-        };
+    // **III. Interactivity **
+    fn host_interactive_send_output(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        payload_ptr: u32,
+        payload_len: u32,
+        output_key_ptr: u32,
+        output_key_len: u32,
+        is_final_chunk: i32,
+    ) -> Result<i32, AnyhowError> {
+        let host_env_data = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx_mutex = Arc::clone(&host_env_data.ctx);
+        let ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
 
-        let mut payload_data_buffer = vec![0u8; payload_len as usize];
-        memory.read(&caller, payload_ptr as usize, &mut payload_data_buffer)
-            .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
+        if !ctx_guard.job_params.is_interactive {
+            return Err(anyhow!(HostAbiError::NotPermitted));
+        }
+        if !ctx_guard.permissions.can_send_output {
+            return Err(anyhow!(HostAbiError::NotPermitted));
+        }
 
         let output_key = if output_key_len > 0 {
-            let mut key_buffer = vec![0u8; output_key_len as usize];
-            memory.read(&caller, output_key_ptr as usize, &mut key_buffer)
-                .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
-            String::from_utf8(key_buffer).map_err(|_| Trap::new(HostAbiError::InvalidUTF8String.to_string()))?
+            Some(self.read_string_from_mem(&mut caller, output_key_ptr, output_key_len)?)
         } else {
-            "default".to_string()
-        };
-        
-        let sequence_num = {
-            let mut ctx_guard = ctx_mutex.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-            ctx_guard.interactive_output_sequence_num += 1;
-            ctx_guard.interactive_output_sequence_num
+            None
         };
 
-        let message = JobInteractiveOutputV1 {
-            sequence_num,
-            data: payload_data_buffer,
+        let payload = self.read_bytes_from_mem(&mut caller, payload_ptr, payload_len)?;
+
+        let output_msg = JobInteractiveOutputV1 {
+            job_id: ctx_guard.job_id.clone(),
             output_key,
-            is_final_chunk: is_final_chunk == 1,
+            payload, // This will be handled (inline/CID) by the sender logic
+            is_final_chunk: is_final_chunk != 0,
         };
 
-        tracing::debug!("[ABI] host_interactive_send_output: Enqueuing message (seq: {}) for job {}. (P2P send not implemented in sync ABI)", message.sequence_num, job_id);
-        Ok(HostAbiError::Success as i32)
+        let proto_msg = MeshProtocolMessage::JobInteractiveOutputV1(output_msg);
+
+        if let Some(sender) = &ctx_guard.status_sender {
+            // Send might block if channel full, or fail if closed
+            sender.try_send(proto_msg).map_err(|e| {
+                anyhow!(if e.is_full() { HostAbiError::QueueFull } else { HostAbiError::ChannelClosed })
+            })?;
+            Ok(0)
+        } else {
+            Err(anyhow!(HostAbiError::ChannelClosed)) // Sender not available
+        }
     }
 
     fn host_interactive_receive_input(
-        &self, 
+        &self,
         mut caller: Caller<'_, ConcreteHostEnvironment>,
-        buffer_ptr: u32, 
-        buffer_len: u32, 
-        timeout_ms: u32
-    ) -> Result<i32, Trap> {
-        let host_env_data = caller.data().clone();
-        let start_time = Instant::now();
+        buffer_ptr: u32,
+        buffer_len: u32,
+        timeout_ms: u32,
+    ) -> Result<i32, AnyhowError> {
+        let host_env_data = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx_mutex = Arc::clone(&host_env_data.ctx);
+        let runtime = host_env_data.runtime_handle.clone(); // Clone runtime handle
 
-        loop {
-            let mut ctx_guard = host_env_data.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
+        runtime.block_on(async {
+            let mut ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
 
-            if !ctx_guard.job_params.is_interactive {
-                return Err(Trap::new(HostAbiError::InvalidState.to_string()));
+            if !ctx_guard.job_params.is_interactive || !ctx_guard.permissions.can_receive_input {
+                 return Err(anyhow!(HostAbiError::NotPermitted));
             }
-            if !matches!(ctx_guard.current_status, P2PJobStatus::Running {..} | P2PJobStatus::PendingUserInput {..}) {
-                return Err(Trap::new(HostAbiError::InvalidState.to_string()));
+
+            if ctx_guard.input_receiver.is_none() {
+                 return Err(anyhow!(HostAbiError::ChannelClosed));
             }
+            let receiver = ctx_guard.input_receiver.as_mut().unwrap(); // Safe due to check above
 
-            if let Some(input_msg) = ctx_guard.interactive_input_queue.pop_front() {
-                let data_bytes = input_msg.data;
-                let data_len = data_bytes.len() as u32;
-
-                if buffer_len < data_len {
-                    ctx_guard.interactive_input_queue.push_front(input_msg);
-                    return Err(Trap::new(HostAbiError::BufferTooSmall.to_string()));
-                }
-
-                let memory = match caller.get_export("memory") {
-                    Some(Extern::Memory(mem)) => mem,
-                    _ => {
-                        ctx_guard.interactive_input_queue.push_front(input_msg);
-                        return Err(Trap::new(HostAbiError::MemoryAccessError.to_string()));
-                    }
-                };
-                
-                memory.write(&mut caller, buffer_ptr as usize, &data_bytes)
-                    .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
-
-                if matches!(ctx_guard.current_status, P2PJobStatus::PendingUserInput {..}) {
-                     ctx_guard.current_status = P2PJobStatus::Running {
-                        node_id: host_env_data.caller_did.clone(),
-                        current_stage_index: ctx_guard.current_stage_index,
-                        current_stage_id: ctx_guard.current_stage_id.clone(),
-                        progress_percent: Some(ctx_guard.job_params.stages.as_ref().map_or(50, |s| if s.is_empty() {50} else { (ctx_guard.current_stage_index.unwrap_or(0) * 100 / s.len().max(1) as u32) as u8 } ) ),
-                        status_message: Some("Input received, resuming operation.".to_string()),
-                    };
-                }
-                return Ok(data_len as i32);
-            }
-            
-            drop(ctx_guard);
-
-            if timeout_ms == 0 { return Ok(0); }
-
-            if start_time.elapsed() >= Duration::from_millis(timeout_ms as u64) {
-                return Err(Trap::new(HostAbiError::Timeout.to_string())); 
-            }
-            
-            return Ok(0);
-        }
-    }
-
-    fn host_interactive_peek_input_len(&self, caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, Trap> {
-        let host_env = caller.data();
-        let ctx = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-
-        if let Some(input_msg) = ctx.interactive_input_queue.front() {
-            let data_len = input_msg.data.len() as i32;
-            if data_len > MAX_INTERACTIVE_INPUT_BUFFER_PEEK as i32 {
-                 Ok(MAX_INTERACTIVE_INPUT_BUFFER_PEEK as i32)
+            let recv_result = if timeout_ms == 0 {
+                // Non-blocking
+                receiver.try_recv().map_err(|e| match e {
+                    tokio::sync::mpsc::error::TryRecvError::Empty => HostAbiError::Timeout, // Use Timeout for empty non-blocking
+                    tokio::sync::mpsc::error::TryRecvError::Disconnected => HostAbiError::ChannelClosed,
+                })
+            } else if timeout_ms == u32::MAX {
+                // Blocking indefinitely
+                receiver.recv().await.ok_or(HostAbiError::ChannelClosed)
             } else {
-                Ok(data_len)
+                // Blocking with timeout
+                 tokio::time::timeout(Duration::from_millis(timeout_ms as u64), receiver.recv())
+                    .await
+                    .map_err(|_| HostAbiError::Timeout)? // Timeout occurred
+                    .ok_or(HostAbiError::ChannelClosed) // Channel closed while waiting
+            };
+
+            match recv_result {
+                Ok(input_msg) => {
+                    // Determine if payload is inline or CID
+                    let (input_type, data_bytes) = if input_msg.payload.len() <= INLINE_PAYLOAD_MAX_SIZE {
+                        (ReceivedInputType::InlineData, input_msg.payload)
+                    } else {
+                        // Payload too large, need to store and get CID
+                         let dag_store = host_env_data.runtime_ctx.dag_store();
+                         let cid = dag_store.write_dag_node_async(&input_msg.payload).await
+                                .map_err(|e| anyhow!(HostAbiError::StorageError).context(e))?; // Convert DagStoreError
+                         (ReceivedInputType::Cid, cid.to_string().into_bytes())
+                    };
+
+                    let info = ReceivedInputInfo {
+                        input_type,
+                        data_len: data_bytes.len() as u32,
+                    };
+
+                    let info_bytes = unsafe {
+                        let ptr = &info as *const ReceivedInputInfo as *const u8;
+                        std::slice::from_raw_parts(ptr, std::mem::size_of::<ReceivedInputInfo>())
+                    };
+
+                    let total_len = info_bytes.len() + data_bytes.len();
+                    if total_len > buffer_len as usize {
+                         // TODO: Requeue the message? For now, return BufferTooSmall
+                         return Err(anyhow!(HostAbiError::BufferTooSmall));
+                    }
+
+                    // Write info struct then data/CID bytes
+                    let mem = self.get_memory(&mut caller)?;
+                    mem.write(&mut caller, buffer_ptr as usize, info_bytes)
+                        .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+                    mem.write(&mut caller, (buffer_ptr as usize) + info_bytes.len(), &data_bytes)
+                        .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+
+                    Ok(total_len as i32)
+                }
+                Err(HostAbiError::Timeout) => Ok(0), // Timeout or non-blocking empty is not an error, returns 0
+                Err(e) => Err(anyhow!(e)), // Other errors (ChannelClosed etc.)
             }
-        } else {
-            Ok(0)
-        }
+        })
     }
 
-    fn host_interactive_prompt_for_input(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, prompt_cid_ptr: u32, prompt_cid_len: u32) -> Result<i32, Trap> {
-        let (is_interactive, job_id, caller_did, mut ctx_mutex) = {
-             let host_env = caller.data();
-             let ctx_guard = host_env.ctx.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-             (
-                ctx_guard.job_params.is_interactive,
-                ctx_guard.job_id.clone(),
-                host_env.caller_did.clone(),
-                host_env.ctx.clone(),
-             )
-        };
+    fn host_interactive_peek_input_len(&self, caller: Caller<'_, ConcreteHostEnvironment>) -> Result<i32, AnyhowError> {
+        let host_env_data = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+        let ctx_mutex = Arc::clone(&host_env_data.ctx);
+        let runtime = host_env_data.runtime_handle.clone();
 
-        if !is_interactive {
-            return Err(Trap::new(HostAbiError::NotPermitted.to_string()));
-        }
+        runtime.block_on(async {
+            let mut ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
 
-        let prompt_message = if prompt_cid_len > 0 {
-            let memory = match caller.get_export("memory") {
-                Some(Extern::Memory(mem)) => mem,
-                _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-            };
-            let mut buffer = vec![0u8; prompt_cid_len as usize];
-            memory.read(&caller, prompt_cid_ptr as usize, &mut buffer)
-                .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
-            String::from_utf8(buffer).map_err(|_| Trap::new(HostAbiError::InvalidUTF8String.to_string()))?
-        } else {
-            "Awaiting input".to_string()
-        };
-        
-        {
-            let mut ctx_guard = ctx_mutex.lock().map_err(|_| Trap::new(HostAbiError::UnknownError.to_string()))?;
-            ctx_guard.current_status = P2PJobStatus::PendingUserInput {
-                node_id: caller_did.clone(),
-                current_stage_index: ctx_guard.current_stage_index,
-                current_stage_id: ctx_guard.current_stage_id.clone(), 
-                status_message: Some(prompt_message.clone()),
-            };
-        }
-        
-        tracing::debug!("[ABI] host_interactive_prompt_for_input: Job {} now PendingUserInput. Prompt: '{}'", job_id, prompt_message);
-        Ok(HostAbiError::Success as i32)
+            if !ctx_guard.job_params.is_interactive || !ctx_guard.permissions.can_receive_input {
+                return Err(anyhow!(HostAbiError::NotPermitted));
+            }
+
+            if let Some(receiver) = &mut ctx_guard.input_receiver {
+                 if let Some(input_msg) = receiver.try_peek() { // Use try_peek
+                    let data_len = if input_msg.payload.len() <= INLINE_PAYLOAD_MAX_SIZE {
+                        input_msg.payload.len()
+                    } else {
+                         // Need CID length - estimate or calculate precisely if needed
+                         // For simplicity, estimate based on standard CIDv1 Base32 length (around 59 chars)
+                         60 // Approximate length for CID string
+                    };
+                    let total_len = std::mem::size_of::<ReceivedInputInfo>() + data_len;
+                    Ok(total_len as i32)
+                 } else {
+                     Ok(0) // No message available
+                 }
+            } else {
+                 Err(anyhow!(HostAbiError::ChannelClosed))
+            }
+        })
     }
 
-    fn host_data_read_cid(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, cid_ptr: u32, cid_len: u32, offset: u64, buffer_ptr: u32, buffer_len: u32) -> Result<i32, Trap> {
-        tracing::warn!("host_data_read_cid: Not implemented in sync ABI due to async storage requirement.");
-        Err(Trap::new(HostAbiError::NotSupported.to_string()))
+    fn host_interactive_prompt_for_input(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        prompt_cid_ptr: u32,
+        prompt_cid_len: u32,
+    ) -> Result<i32, AnyhowError> {
+         let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+         let ctx_mutex = Arc::clone(&host_env.ctx);
+         let mut ctx_guard = ctx_mutex.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+
+         if !ctx_guard.job_params.is_interactive {
+             return Err(anyhow!(HostAbiError::NotPermitted));
+         }
+
+         let prompt_cid_opt = if prompt_cid_len > 0 {
+             let cid_str = self.read_string_from_mem(&mut caller, prompt_cid_ptr, prompt_cid_len)?;
+             Some(Cid::from_str(&cid_str).map_err(|_| anyhow!(HostAbiError::InvalidCIDFormat))?)
+         } else {
+             None
+         };
+
+         // Update job state
+         ctx_guard.is_awaiting_input = true;
+         // Maybe store prompt_cid_opt in context if needed later
+
+         // Send status update
+         if let Some(sender) = &ctx_guard.status_sender {
+             let update = P2PJobStatus::PendingUserInput { prompt_cid: prompt_cid_opt };
+             let msg = MeshProtocolMessage::JobStatusUpdateV1 {
+                 job_id: ctx_guard.job_id.clone(),
+                 status: update,
+             };
+             let _ = sender.try_send(msg).map_err(|e| {
+                 if e.is_full() { HostAbiError::QueueFull } else { HostAbiError::ChannelClosed }
+             });
+         }
+
+         Ok(0)
     }
 
-    fn host_data_write_buffer(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, data_ptr: u32, data_len: u32, cid_buf_ptr: u32, cid_buf_len: u32) -> Result<i32, Trap> {
-        tracing::warn!("host_data_write_buffer: Not implemented in sync ABI due to async storage requirement.");
-        Err(Trap::new(HostAbiError::NotSupported.to_string()))
+    // **IV. Data Handling & Storage **
+    fn host_data_read_cid(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        cid_ptr: u32,
+        cid_len: u32,
+        offset: u64,
+        buffer_ptr: u32,
+        buffer_len: u32,
+    ) -> Result<i32, AnyhowError> {
+         let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+         let dag_store = host_env.runtime_ctx.dag_store();
+         let cid_str = self.read_string_from_mem(&mut caller, cid_ptr, cid_len)?;
+         let cid = Cid::from_str(&cid_str).map_err(|_| anyhow!(HostAbiError::InvalidCIDFormat))?;
+
+         // TODO: Check permissions if necessary (e.g., based on job context)
+
+         let data_res = host_env.runtime_handle.block_on(async {
+             dag_store.read_dag_node_async(&cid).await
+         });
+
+         match data_res {
+             Ok(Some(data)) => {
+                 let read_start = offset as usize;
+                 if read_start >= data.len() {
+                     return Ok(0); // Offset is beyond the data length
+                 }
+                 let read_end = (read_start + buffer_len as usize).min(data.len());
+                 let bytes_to_read = read_end - read_start;
+                 if bytes_to_read > 0 {
+                     let slice_to_read = &data[read_start..read_end];
+                     let mem = self.get_memory(&mut caller)?;
+                     mem.write(&mut caller, buffer_ptr as usize, slice_to_read)
+                         .map_err(|_| anyhow!(HostAbiError::MemoryAccessError))?;
+                     Ok(bytes_to_read as i32)
+                 } else {
+                     Ok(0)
+                 }
+             }
+             Ok(None) => Err(anyhow!(HostAbiError::NotFound)),
+             Err(e) => Err(anyhow!(HostAbiError::StorageError).context(e)), // Wrap DagStoreError
+         }
     }
 
-    fn host_log_message(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, level: LogLevel, message_ptr: u32, message_len: u32) -> Result<i32, Trap> {
-        let job_id_str = {
-            caller.data().ctx.lock().map(|ctx| ctx.job_id.to_string()).unwrap_or_else(|_| "<unknown_job>".to_string())
-        };
-        
-        if message_len == 0 {
-            tracing::debug!(job_id = %job_id_str, wasm_module_log = "[Empty log message received]");
-            return Ok(HostAbiError::Success as i32); 
-        }
+    fn host_data_write_buffer(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        data_ptr: u32,
+        data_len: u32,
+        cid_buf_ptr: u32,
+        cid_buf_len: u32,
+    ) -> Result<i32, AnyhowError> {
+         let host_env = caller.data().host_env.as_ref()
+            .ok_or_else(|| anyhow!(HostAbiError::InvalidState))?;
+         let dag_store = host_env.runtime_ctx.dag_store();
+         let data_to_write = self.read_bytes_from_mem(&mut caller, data_ptr, data_len)?;
 
-        let memory = match caller.get_export("memory") {
-            Some(Extern::Memory(mem)) => mem,
-            _ => return Err(Trap::new(HostAbiError::MemoryAccessError.to_string())),
-        };
-        let mut msg_bytes = vec![0u8; message_len as usize];
-        memory.read(&caller, message_ptr as usize, &mut msg_bytes)
-            .map_err(|_| Trap::new(HostAbiError::MemoryAccessError.to_string()))?;
-        
-        let message = String::from_utf8_lossy(&msg_bytes);
+         // TODO: Check permissions if necessary
+         // TODO: Check resource limits (data size)
 
+         let cid_res = host_env.runtime_handle.block_on(async {
+             dag_store.write_dag_node_async(&data_to_write).await
+         });
+
+         match cid_res {
+             Ok(cid) => {
+                 let cid_str = cid.to_string();
+                 self.write_string_to_mem(&mut caller, &cid_str, cid_buf_ptr, cid_buf_len)
+             }
+             Err(e) => Err(anyhow!(HostAbiError::StorageError).context(e)), // Wrap DagStoreError
+         }
+    }
+
+    // **V. Logging **
+    fn host_log_message(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        level: LogLevel,
+        message_ptr: u32,
+        message_len: u32,
+    ) -> Result<i32, AnyhowError> {
+        let message = self.read_string_from_mem(&mut caller, message_ptr, message_len)?;
+        
+        // Use tracing crate macros
         match level {
-            LogLevel::Error => tracing::error!(job_id = %job_id_str, wasm_module_log = %message),
-            LogLevel::Warn => tracing::warn!(job_id = %job_id_str, wasm_module_log = %message),
-            LogLevel::Info => tracing::info!(job_id = %job_id_str, wasm_module_log = %message),
-            LogLevel::Debug => tracing::debug!(job_id = %job_id_str, wasm_module_log = %message),
-            LogLevel::Trace => tracing::trace!(job_id = %job_id_str, wasm_module_log = %message),
+            LogLevel::Error => tracing::error!(target: "wasm_guest", "{}", message),
+            LogLevel::Warn => tracing::warn!(target: "wasm_guest", "{}", message),
+            LogLevel::Info => tracing::info!(target: "wasm_guest", "{}", message),
+            LogLevel::Debug => tracing::debug!(target: "wasm_guest", "{}", message),
+            LogLevel::Trace => tracing::trace!(target: "wasm_guest", "{}", message),
         }
-        Ok(HostAbiError::Success as i32)
+        Ok(0)
     }
 } 
