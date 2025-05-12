@@ -1,5 +1,6 @@
 use crate::context::RuntimeContext;
 use icn_economics::ResourceType;
+use icn_economics::mana::ScopeKey;
 use icn_identity::Did;
 use icn_mesh_receipts::{ExecutionReceipt, verify_embedded_signature, SignError as ReceiptSignError};
 use icn_types::org::{CooperativeId, CommunityId};
@@ -22,6 +23,7 @@ use cid::Cid;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use tokio::sync::mpsc::{Sender, Receiver};
 use icn_types::dag::{DagEventType, DagNodeBuilder};
+use icn_types::dag_store::DagStore;
 
 /// Errors that can occur during receipt anchoring
 #[derive(Debug, Error)]
@@ -93,6 +95,20 @@ impl ConcreteHostEnvironment {
         self
     }
 
+    /// Determine the accounting scope key for mana operations.
+    fn scope_key(&self) -> ScopeKey {
+        if let Some(coop) = &self.coop_id {
+            ScopeKey::Cooperative(coop.to_string())
+        } else if let Some(comm) = &self.community_id {
+            ScopeKey::Community(comm.to_string())
+        } else if let Some(fid) = &self.rt.federation_id {
+            // Fallback to federation scope if runtime context specifies it explicitly
+            ScopeKey::Federation(fid.to_string())
+        } else {
+            ScopeKey::Individual(self.caller_did.to_string())
+        }
+    }
+
     pub fn check_resource_authorization(&self, rt_type: ResourceType, amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
     pub async fn record_resource_usage(&self, _rt_type: ResourceType, _amt: u64) -> i32 { HostAbiError::NotSupported as i32 }
     pub fn is_governance_context(&self) -> i32 { if self.is_governance { 1 } else { 0 } }
@@ -114,7 +130,7 @@ impl ConcreteHostEnvironment {
         }
 
         // 3) Serialize to CBOR and persist via DagStore
-        let cbor_bytes = serde_cbor::to_vec(&receipt)
+        let _cbor_bytes = serde_cbor::to_vec(&receipt)
             .map_err(|e| AnchorError::SerializationError(e.to_string()))?;
 
         // --- Build DagNode from receipt ---
@@ -663,27 +679,29 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     // ---------------- Mana stubs ----------------
 
     fn host_account_get_mana(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, did_ptr: u32, did_len: u32) -> Result<i64, AnyhowError> {
-        let did_str = if did_len == 0 {
-            // default to caller DID
-            self.caller_did.to_string()
+        // If explicit DID is provided we use individual scope for that DID; otherwise default scope_key()
+        let scope_key = if did_len == 0 {
+            self.scope_key()
         } else {
-            self.read_string_from_mem(&mut caller, did_ptr, did_len)?
+            let did = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+            ScopeKey::Individual(did)
         };
 
         let mut mana_mgr = self.rt.mana_manager.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        let balance_opt = mana_mgr.balance(&did_str);
+        let balance_opt = mana_mgr.balance(&scope_key);
         Ok(balance_opt.unwrap_or(0) as i64)
     }
 
     fn host_account_spend_mana(&self, mut caller: Caller<'_, ConcreteHostEnvironment>, did_ptr: u32, did_len: u32, amount: u64) -> Result<i32, AnyhowError> {
-        let did_str = if did_len == 0 {
-            self.caller_did.to_string()
+        let scope_key = if did_len == 0 {
+            self.scope_key()
         } else {
-            self.read_string_from_mem(&mut caller, did_ptr, did_len)?
+            let did = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+            ScopeKey::Individual(did)
         };
 
         let mut mana_mgr = self.rt.mana_manager.lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        match mana_mgr.spend(&did_str, amount) {
+        match mana_mgr.spend(&scope_key, amount) {
             Ok(_) => Ok(0),
             Err(_) => Ok(HostAbiError::ResourceLimitExceeded as i32),
         }

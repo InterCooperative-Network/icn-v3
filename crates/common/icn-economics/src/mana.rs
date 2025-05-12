@@ -3,6 +3,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type Did = String;
 
+/// Key used for indexing mana pools based on organizational scope.
+/// Allows accounting at federation, coop, community, or individual level.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ScopeKey {
+    Federation(String),
+    Cooperative(String),
+    Community(String),
+    Individual(String),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ManaError {
     #[error("Insufficient mana: requested {requested}, available {available}")]
@@ -67,29 +77,29 @@ fn now_secs() -> u64 {
 /// Manages mana pools for multiple DIDs/orgs.
 #[derive(Default)]
 pub struct ManaManager {
-    pools: HashMap<Did, ManaPool>,
+    pools: HashMap<ScopeKey, ManaPool>,
 }
 
 impl ManaManager {
     pub fn new() -> Self { Self { pools: HashMap::new() } }
 
-    pub fn ensure_pool(&mut self, did: &Did, max: u64, regen_per_sec: u64) {
-        self.pools.entry(did.clone()).or_insert_with(|| ManaPool::new(max, regen_per_sec));
+    pub fn ensure_pool(&mut self, key: &ScopeKey, max: u64, regen_per_sec: u64) {
+        self.pools.entry(key.clone()).or_insert_with(|| ManaPool::new(max, regen_per_sec));
     }
 
     /// Get mutable reference to a mana pool if it exists.
-    pub fn pool_mut(&mut self, did: &Did) -> Option<&mut ManaPool> {
-        self.pools.get_mut(did)
+    pub fn pool_mut(&mut self, key: &ScopeKey) -> Option<&mut ManaPool> {
+        self.pools.get_mut(key)
     }
 
-    /// Get current available mana balance for the DID after regeneration.
-    pub fn balance(&mut self, did: &Did) -> Option<u64> {
-        self.pools.get_mut(did).map(|p| p.available())
+    /// Get current available mana balance for the key after regeneration.
+    pub fn balance(&mut self, key: &ScopeKey) -> Option<u64> {
+        self.pools.get_mut(key).map(|p| p.available())
     }
 
-    /// Spend the specified amount of mana from the DID's pool.
-    pub fn spend(&mut self, did: &Did, amount: u64) -> Result<(), ManaError> {
-        match self.pools.get_mut(did) {
+    /// Spend the specified amount of mana from the key's pool.
+    pub fn spend(&mut self, key: &ScopeKey, amount: u64) -> Result<(), ManaError> {
+        match self.pools.get_mut(key) {
             Some(pool) => pool.consume(amount),
             None => Err(ManaError::InsufficientMana { requested: amount, available: 0 }),
         }

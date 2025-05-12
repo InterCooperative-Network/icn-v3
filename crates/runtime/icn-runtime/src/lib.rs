@@ -19,6 +19,7 @@ use icn_identity::KeyPair as IcnKeyPair;
 use icn_types::mesh::{MeshJob, JobStatus as IcnJobStatus, MeshJobParams, QoSProfile, WorkflowType};
 use icn_mesh_receipts::{sign_receipt_in_place};
 use icn_mesh_protocol::P2PJobStatus;
+use icn_economics::mana::ScopeKey;
 
 // Import the context module
 mod context;
@@ -783,19 +784,34 @@ pub async fn execute_mesh_job(
     let executor_did_str = local_keypair.did.to_string();
 
     {
-        let mut mana_mgr = runtime_context.mana_manager.lock().unwrap();
-        // Ensure pool exists with default parameters (max 10_000 mana, regen 1/sec)
-        mana_mgr.ensure_pool(&executor_did_str, 10_000, 1);
-        if let Some(pool) = mana_mgr.pool_mut(&executor_did_str) {
-            // Rough cost estimate: sum of declared resource amounts or fallback to 50
-            let declared_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
-            let cost = if declared_cost > 0 { declared_cost } else { 50 };
-            if let Err(e) = pool.consume(cost) {
-                tracing::warn!("[RuntimeExecute] Insufficient mana for executor {}: {}", executor_did_str, e);
-                return Err(anyhow::anyhow!(e));
+        let scope_key = if let Some(org) = &mesh_job.originator_org_scope {
+            if let Some(coop) = &org.coop_id {
+                ScopeKey::Cooperative(coop.to_string())
+            } else if let Some(comm) = &org.community_id {
+                ScopeKey::Community(comm.to_string())
+            } else {
+                ScopeKey::Individual(executor_did_str.clone())
             }
-            tracing::info!("[RuntimeExecute] Consumed {} mana for executor {} (remaining: {})", cost, executor_did_str, pool.available());
+        } else {
+            ScopeKey::Individual(executor_did_str.clone())
+        };
+
+        let mut mana_mgr = runtime_context.mana_manager.lock().unwrap();
+        mana_mgr.ensure_pool(&scope_key, 10_000, 1);
+
+        let balance_before = mana_mgr.balance(&scope_key).unwrap_or(0);
+
+        // Rough cost estimate: sum of declared resource amounts or fallback to 50
+        let declared_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
+        let cost = if declared_cost > 0 { declared_cost } else { 50 };
+
+        if let Err(e) = mana_mgr.spend(&scope_key, cost) {
+            tracing::warn!("[RuntimeExecute] Insufficient mana for {:?}: {}", scope_key, e);
+            return Err(anyhow::anyhow!(e));
         }
+
+        let balance_after = mana_mgr.balance(&scope_key).unwrap_or(0);
+        tracing::info!("[RuntimeExecute] Consumed {} mana for {:?} ({} -> {})", cost, scope_key, balance_before, balance_after);
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
