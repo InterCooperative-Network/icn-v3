@@ -98,6 +98,7 @@ pub enum MeshProtocolMessage {
     // AcceptBidV1 { job_id: JobId, winning_executor_did: Did },
     // RejectBidV1 { job_id: JobId, executor_did: Did, reason: Option<String> },
     // ResultAnnouncementV1 { job_id: JobId, executor_did: Did, result_cid: String, receipt_cid: String },
+    ReputationRecordAvailableV1(ReputationRecordAvailableV1),
 }
 
 /// Represents a bid made by an executor for a job.
@@ -141,6 +142,15 @@ pub struct NodeCapability {
     // pub last_updated_timestamp: u64, // When this capability info was last updated
     // pub network_bandwidth_mbps: Option<u32>,
     // pub supported_job_types: Vec<String>, // If jobs can be categorized beyond WASM execution
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReputationRecordAvailableV1 {
+    pub record_cid: String, // Assuming CID is serialized as String for protocol messages
+    pub subject_did: Did,
+    pub issuer_did: Did,
+    pub job_id: JobId, // Using the JobId type alias from this file
+    pub execution_receipt_cid: String, // Assuming CID is serialized as String
 }
 
 impl MeshProtocolMessage {

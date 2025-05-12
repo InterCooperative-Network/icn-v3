@@ -348,6 +348,48 @@ impl MeshNode {
         if let Err(e) = self.internal_action_tx.send(InternalNodeAction::ReputationSubmittedForTest(test_submission)).await {
             tracing::warn!("Failed to send ReputationSubmittedForTest internal action for job_id: {}: {:?}", job_id, e);
         }
+
+        // --- Announce ReputationRecordAvailableV1 to the mesh ---
+        if let Some(anchored_record_cid) = observed_anchor_cid_for_test {
+            let announcement = ReputationRecordAvailableV1 {
+                record_cid: anchored_record_cid.to_string(), // Convert Cid to String for the protocol message
+                subject_did: receipt.executor.clone(),
+                issuer_did: self.local_keypair.did.clone(), 
+                job_id: job_id.clone(), // Assuming IcnJobId can be cloned and is compatible with protocol.JobId (String)
+                execution_receipt_cid: receipt.cid.to_string(), // Convert Cid to String
+            };
+
+            let message = MeshProtocolMessage::ReputationRecordAvailableV1(announcement);
+            let topic_name = "reputation-records-v1";
+            let topic = Topic::new(topic_name.to_string());
+
+            match serde_cbor::to_vec(&message) {
+                Ok(cbor_payload) => {
+                    if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, cbor_payload) {
+                        tracing::error!(
+                            job_id = %job_id,
+                            cid = %anchored_record_cid,
+                            "Failed to publish ReputationRecordAvailableV1 to mesh: {:?}", e
+                        );
+                    } else {
+                        tracing::info!(
+                            job_id = %job_id,
+                            cid = %anchored_record_cid,
+                            subject = %receipt.executor,
+                            "Announced ReputationRecordAvailableV1 to the mesh on topic {}.", topic_name
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        job_id = %job_id,
+                        cid = %anchored_record_cid,
+                        "Failed to serialize ReputationRecordAvailableV1 for publishing: {:?}", e
+                    );
+                }
+            }
+        }
+        // --- End of announcement ---
         
         Ok(())
     }
