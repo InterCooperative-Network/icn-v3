@@ -8,6 +8,9 @@ use cid::Cid;
 use icn_identity::Did;
 use icn_types::jobs::policy::ExecutionPolicy;
 use std::cmp::Ordering;
+use cid::{Cid, multihash::{Code, MultihashDigest}};
+use libipld_cbor::DagCborCodec; // For Codec::Raw
+use libipld_core::ipld::IpldCodec;
 
 #[derive(Debug)]
 pub enum NodeCommand {
@@ -49,7 +52,7 @@ pub struct TestObservedReputationSubmission {
     pub job_id: IcnJobId,
     pub executor_did: Did,
     pub outcome: StandardJobStatus,
-    pub anchor_cid: Cid,
+    pub anchor_cid: Option<Cid>,
     pub timestamp: i64,
 }
 
@@ -230,7 +233,7 @@ impl MeshNode {
         
         let event_type = match receipt.status {
             StandardJobStatus::Completed | StandardJobStatus::Succeeded => ReputationUpdateEvent::JobCompletedSuccessfully {
-                cid: receipt.cid,
+                cid: receipt.cid, 
                 job_id: job_id.clone(),
                 worker_did: receipt.executor.clone(),
             },
@@ -238,7 +241,7 @@ impl MeshNode {
                 cid: receipt.cid,
                 job_id: job_id.clone(),
                 worker_did: receipt.executor.clone(),
-                reason: "Execution reported as failed".to_string(),
+                reason: "Execution reported as failed".to_string(), 
             },
             _ => {
                 tracing::warn!("Reputation update skipped for job {} due to unhandled status: {:?}", job_id, receipt.status);
@@ -248,13 +251,13 @@ impl MeshNode {
 
         let reputation_record = ReputationRecord {
             version: "1.0".to_string(),
-            issuer: self.local_keypair.did.clone(),
-            subject: receipt.executor.clone(),
+            issuer: self.local_keypair.did.clone(), 
+            subject: receipt.executor.clone(),    
             issued_at: Utc::now(),
             event: event_type,
-            anchor: Some(receipt.cid),
-            expires_at: None,
-            signature: None,
+            anchor: Some(receipt.cid), 
+            expires_at: None,          
+            signature: None,           
         };
 
         let payload_to_sign = match icn_types::reputation::get_reputation_record_signing_payload(&reputation_record) {
@@ -270,10 +273,53 @@ impl MeshNode {
             ..reputation_record
         };
 
+        // --- Start of new anchoring logic ---
+        // 1. Serialize the signed ReputationRecord to CBOR
+        let reputation_record_cbor = match serde_cbor::to_vec(&final_reputation_record) {
+            Ok(cbor) => cbor,
+            Err(e) => {
+                tracing::error!("Failed to serialize final reputation record to CBOR for job {}: {:?}", job_id, e);
+                return Err(e.into()); // Propagate error or handle differently
+            }
+        };
+
+        // 2. Compute its CID
+        // Using SHA2-256 (Code::Sha2_256) and Raw CBOR codec (IpldCodec::DagCbor.into() gives 0x71)
+        let hash = Code::Sha2_256.digest(&reputation_record_cbor);
+        let record_cid = Cid::new_v1(IpldCodec::DagCbor.into(), hash);
+        tracing::info!("Calculated CID for reputation record of job {}: {}", job_id, record_cid);
+
+        let mut observed_anchor_cid_for_test: Option<Cid> = None;
+
+        // 3. Store it in the local DAG (dag_store)
+        if let Some(runtime_ctx) = &self.local_runtime_context {
+            // Assuming runtime_ctx.dag_store() returns Arc<RwLock<DagStore>>
+            // And DagStore has a method like add_dag_node or put
+            match runtime_ctx.dag_store().write().unwrap().add_dag_node(record_cid, reputation_record_cbor.clone()) {
+                Ok(_) => {
+                    tracing::info!(
+                        "Successfully anchored reputation record with CID {} for job {} in local DAG store.",
+                        record_cid, job_id
+                    );
+                    observed_anchor_cid_for_test = Some(record_cid);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to anchor reputation record CID {} for job {} in DAG store: {:?}",
+                        record_cid, job_id, e
+                    );
+                }
+            }
+        } else {
+            tracing::warn!("No local runtime context available. Skipping DAG anchoring for reputation record of job {}.", job_id);
+        }
+        // --- End of new anchoring logic ---
+
+        // HTTP submission (existing logic)
         if let Some(url) = &self.reputation_service_url {
             let client = self.http_client.clone();
             let url_str = url.clone();
-            let record_to_send = final_reputation_record.clone();
+            let record_to_send = final_reputation_record.clone(); 
             
             match client.post(&url_str).json(&record_to_send).send().await {
                 Ok(response) => {
@@ -294,9 +340,9 @@ impl MeshNode {
         let test_submission = TestObservedReputationSubmission {
             job_id: job_id.clone(),
             executor_did: receipt.executor.clone(),
-            outcome: receipt.status.clone(),
-            anchor_cid: receipt.cid,
-            timestamp: receipt.timestamp,
+            outcome: receipt.status.clone(), 
+            anchor_cid: observed_anchor_cid_for_test,
+            timestamp: Utc::now().timestamp(),
         };
 
         if let Err(e) = self.internal_action_tx.send(InternalNodeAction::ReputationSubmittedForTest(test_submission)).await {
