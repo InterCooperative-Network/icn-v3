@@ -16,7 +16,7 @@ use icn_identity::Did;
 use sqlx::Acquire;
 use icn_types::mesh::JobStatus;
 
-use crate::storage::MeshJobStore;
+use crate::storage::{MeshJobStore, generate_job_cid};
 use crate::types::{Bid, JobRequest, JobRequirements};
 use crate::error::AppError;
 
@@ -46,8 +46,9 @@ impl SqliteStore {
 
 #[async_trait]
 impl MeshJobStore for SqliteStore {
-    async fn insert_job(&self, job_request: JobRequest) -> Result<String, AppError> {
-        let job_id_str = job_request.id;
+    async fn insert_job(&self, job_request: JobRequest) -> Result<Cid> {
+        let job_cid = generate_job_cid(&job_request)?;
+        let job_id_str = job_cid.to_string();
         let owner_did_str = job_request.owner_did.to_string();
         let cid_str = job_request.cid.to_string();
         let requirements_json = serde_json::to_string(&job_request.requirements)
@@ -69,10 +70,10 @@ impl MeshJobStore for SqliteStore {
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert job into database: {}. Job ID: {}", e, job_id_str)))?;
         
-        Ok(job_id_str)
+        Ok(job_cid)
     }
 
-    async fn get_job(&self, job_id: &str) -> Result<Option<(JobRequest, JobStatus)>, AppError> {
+    async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>, AppError> {
         #[derive(sqlx::FromRow)]
         struct JobRow {
             owner_did: String,
@@ -83,6 +84,7 @@ impl MeshJobStore for SqliteStore {
             status_reason: Option<String>,
         }
 
+        let job_id_str = job_id.to_string();
         let job_row_opt = sqlx::query_as!(
             JobRow,
             r#"
@@ -90,7 +92,7 @@ impl MeshJobStore for SqliteStore {
             FROM jobs
             WHERE job_id = $1
             "#,
-            job_id
+            job_id_str
         )
         .fetch_optional(&*self.pool)
         .await
@@ -106,7 +108,7 @@ impl MeshJobStore for SqliteStore {
                     .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse CID for job {}: {}", job_id, e)))?;
 
                 let job_request = JobRequest {
-                    id: job_id.to_string(),
+                    id: job_id_str,
                     owner_did,
                     cid,
                     requirements,
@@ -125,7 +127,7 @@ impl MeshJobStore for SqliteStore {
         }
     }
 
-    async fn list_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<String>, AppError> {
+    async fn list_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<Cid>> {
         #[derive(sqlx::FromRow)]
         struct JobIdRow {
             job_id: String,
@@ -158,10 +160,15 @@ impl MeshJobStore for SqliteStore {
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to list jobs from database: {}", e)))?;
 
-        Ok(rows.into_iter().map(|row| row.job_id).collect())
+        let cids = rows.into_iter()
+            .map(|row| Cid::try_from(row.job_id.as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse job CIDs: {}", e)))?;
+
+        Ok(cids)
     }
 
-    async fn update_job_status(&self, job_id: &str, new_status: JobStatus) -> Result<(), AppError> {
+    async fn update_job_status(&self, job_id: &Cid, new_status: JobStatus) -> Result<()> {
         let status_type = match new_status {
             JobStatus::InProgress => "InProgress",
             JobStatus::Completed => "Completed",
@@ -169,6 +176,7 @@ impl MeshJobStore for SqliteStore {
             JobStatus::Cancelled => "Cancelled",
         };
 
+        let job_id_str = job_id.to_string();
         let result = sqlx::query!(
             r#"
             UPDATE jobs
@@ -176,7 +184,7 @@ impl MeshJobStore for SqliteStore {
             WHERE job_id = $2
             "#,
             status_type,
-            job_id
+            job_id_str
         )
         .execute(&*self.pool)
         .await
@@ -189,7 +197,8 @@ impl MeshJobStore for SqliteStore {
         }
     }
 
-    async fn insert_bid(&self, job_id: &str, bid: Bid) -> Result<(), AppError> {
+    async fn insert_bid(&self, job_id: &Cid, bid: Bid) -> Result<()> {
+        let job_id_str = job_id.to_string();
         let bidder_did_str = bid.bidder_did.to_string();
         let resources_json = serde_json::to_string(&bid.resources)
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize resources: {}", e)))?;
@@ -199,7 +208,7 @@ impl MeshJobStore for SqliteStore {
             INSERT INTO bids (job_id, bidder_did, price, resources_json)
             VALUES ($1, $2, $3, $4)
             "#,
-            job_id,
+            job_id_str,
             bidder_did_str,
             bid.price as i64,
             resources_json
@@ -209,14 +218,15 @@ impl MeshJobStore for SqliteStore {
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert bid into database: {}", e)))?;
 
         // Broadcast the bid to any subscribers
-        if let Some(sender) = self.bid_broadcasters.read().unwrap().get(job_id) {
+        if let Some(sender) = self.bid_broadcasters.read().unwrap().get(&job_id_str) {
             let _ = sender.send(bid.clone());
         }
 
         Ok(())
     }
 
-    async fn list_bids(&self, job_id: &str) -> Result<Vec<Bid>, AppError> {
+    async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>> {
+        let job_id_str = job_id.to_string();
         let bid_rows = sqlx::query_as!(
             DbBidRow,
             r#"
@@ -224,7 +234,7 @@ impl MeshJobStore for SqliteStore {
             FROM bids
             WHERE job_id = $1
             "#,
-            job_id
+            job_id_str
         )
         .fetch_all(&*self.pool)
         .await
@@ -248,41 +258,24 @@ impl MeshJobStore for SqliteStore {
         Ok(bids)
     }
 
-    async fn subscribe_to_bids(&self, job_id: &str) -> Result<Option<broadcast::Receiver<Bid>>, AppError> {
+    async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>> {
+        let job_id_str = job_id.to_string();
         let mut broadcasters = self.bid_broadcasters.write().unwrap();
-        let sender = broadcasters.entry(job_id.to_string()).or_insert_with(|| {
+        let sender = broadcasters.entry(job_id_str).or_insert_with(|| {
             let (tx, _) = broadcast::channel(32);
             tx
         });
         Ok(Some(sender.subscribe()))
     }
 
-    async fn assign_job(&self, job_id: &str, winning_bid_id: i64) -> Result<(), AppError> {
+    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<()> {
+        let job_id_str = job_id.to_string();
+        let bidder_did_str = bidder_did.to_string();
+
         let mut tx = self.pool.begin().await.map_err(|e| {
             tracing::error!("Failed to begin database transaction: {:?}", e);
             AppError::Internal(anyhow::Error::new(e).context("Failed to begin database transaction"))
         })?;
-
-        // Get the winning bid to get the bidder's DID
-        let winning_bid = sqlx::query_as!(
-            DbBidRow,
-            r#"
-            SELECT id, job_id, bidder_did, price, resources_json
-            FROM bids
-            WHERE id = $1 AND job_id = $2
-            "#,
-            winning_bid_id,
-            job_id
-        )
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to fetch winning bid: {:?}", e);
-            AppError::Internal(anyhow::Error::new(e).context("Failed to fetch winning bid"))
-        })?
-        .ok_or_else(|| AppError::NotFound(format!("Winning bid {} not found for job {}", winning_bid_id, job_id)))?;
-
-        let bidder_did = Did::new_ed25519(winning_bid.bidder_did);
 
         // Update job status to InProgress
         let update_job_result = sqlx::query!(
@@ -290,13 +283,11 @@ impl MeshJobStore for SqliteStore {
             UPDATE jobs
             SET status_type = 'InProgress',
                 status_did = $1,
-                winning_bid_id = $2,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE job_id = $3 AND status_type = 'Pending'
+            WHERE job_id = $2 AND status_type = 'Pending'
             "#,
-            bidder_did.to_string(),
-            winning_bid_id,
-            job_id
+            bidder_did_str,
+            job_id_str
         )
         .execute(&mut *tx)
         .await
@@ -313,27 +304,6 @@ impl MeshJobStore for SqliteStore {
             )));
         }
 
-        // Update bid statuses
-        sqlx::query!(
-            r#"
-            UPDATE bids
-            SET status = CASE 
-                WHEN id = $1 THEN 'Won'
-                ELSE 'Lost'
-            END,
-            updated_at = CURRENT_TIMESTAMP
-            WHERE job_id = $2
-            "#,
-            winning_bid_id,
-            job_id
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to update bid statuses: {:?}", e);
-            AppError::Internal(anyhow::Error::new(e).context("Failed to update bid statuses"))
-        })?;
-
         tx.commit().await.map_err(|e| {
             tracing::error!("Failed to commit transaction: {:?}", e);
             AppError::Internal(anyhow::Error::new(e).context("Failed to commit transaction"))
@@ -342,7 +312,7 @@ impl MeshJobStore for SqliteStore {
         Ok(())
     }
 
-    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(JobRequest, JobStatus)>, AppError> {
+    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>> {
         let worker_did_str = worker_did.to_string();
 
         #[derive(sqlx::FromRow)]
@@ -378,6 +348,8 @@ impl MeshJobStore for SqliteStore {
             let owner_did = Did::new_ed25519(row.owner_did);
             let cid = Cid::try_from(row.cid.as_str())
                 .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse CID for job {}: {}", row.job_id, e)))?;
+            let job_cid = Cid::try_from(row.job_id.as_str())
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse job CID: {}", e)))?;
 
             let job_request = JobRequest {
                 id: row.job_id,
@@ -387,7 +359,7 @@ impl MeshJobStore for SqliteStore {
             };
 
             let job_status = JobStatus::InProgress;
-            worker_jobs.push((job_request, job_status));
+            worker_jobs.push((job_cid, job_request, job_status));
         }
         Ok(worker_jobs)
     }

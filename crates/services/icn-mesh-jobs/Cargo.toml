@@ -13,6 +13,7 @@ icn-types = { path = "../../common/icn-types" }
 icn-identity = { path = "../../common/icn-identity" }
 tracing = "0.1"
 anyhow = "1.0"
+thiserror = "1.0"
 
 # Added for reputation client
 reqwest = { version = "0.11", features = ["json"] }

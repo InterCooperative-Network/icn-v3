@@ -6,43 +6,9 @@ use reqwest::Client;
 use std::time::Duration;
 use std::sync::Arc;
 use crate::models::BidEvaluatorConfig;
-
-/// Reputation profile with detailed metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReputationProfile {
-    /// The DID of the node
-    pub node_id: String,
-    
-    /// Total jobs executed
-    pub total_jobs: u64,
-    
-    /// Successfully completed jobs
-    pub successful_jobs: u64,
-    
-    /// Failed jobs
-    pub failed_jobs: u64,
-    
-    /// Jobs completed on time
-    pub jobs_on_time: u64,
-    
-    /// Jobs completed late
-    pub jobs_late: u64,
-    
-    /// Average execution time in milliseconds
-    pub average_execution_ms: Option<u32>,
-    
-    /// Average bid accuracy (0-1)
-    pub average_bid_accuracy: Option<f32>,
-    
-    /// Count of dishonesty events
-    pub dishonesty_events: u32,
-    
-    /// List of DIDs that have endorsed this node
-    pub endorsements: Vec<String>,
-    
-    /// Computed reputation score (0-100)
-    pub computed_score: f64,
-}
+use tracing;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
 
 /// Constants for configuration
 const DEFAULT_REPUTATION_API_TIMEOUT_SECS: u64 = 5;
@@ -146,7 +112,7 @@ pub async fn get_reputation_profile(did: &Did, reputation_url: &str) -> Result<O
 #[async_trait::async_trait]
 pub trait ReputationClient: Send + Sync {
     /// Fetch a reputation profile for a DID
-    async fn fetch_profile(&self, did: &str) -> Result<ReputationProfile>;
+    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>>;
     
     /// Calculate a bid score using reputation data
     fn calculate_bid_score(
@@ -156,63 +122,70 @@ pub trait ReputationClient: Send + Sync {
         normalized_price: f64,
         resource_match: f64,
     ) -> f64;
+
+    /// Submit a reputation record
+    async fn submit_record(&self, record: ReputationRecord) -> Result<()>;
 }
 
 /// Default implementation of the reputation client
 pub struct DefaultReputationClient {
     client: Client,
-    reputation_url: Arc<String>,
+    base_url: String,
 }
 
 impl DefaultReputationClient {
-    pub fn new(reputation_url: Arc<String>) -> Self {
+    pub fn new(base_url: String) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_REPUTATION_API_TIMEOUT_SECS))
             .build()
             .expect("Failed to create HTTP client");
         
-        Self { client, reputation_url }
+        Self { client, base_url }
     }
 }
 
 #[async_trait::async_trait]
 impl ReputationClient for DefaultReputationClient {
-    async fn fetch_profile(&self, did: &str) -> Result<ReputationProfile> {
-        let url = format!("{}/profiles/{}/history/latest", self.reputation_url.trim_end_matches('/'), did);
-        
-        let response = self.client.get(&url)
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to fetch reputation profile: {}", e))?;
-            
-        if !response.status().is_success() {
-            if response.status().as_u16() == 404 {
-                // Create a default profile for new or unknown nodes
-                return Ok(ReputationProfile {
-                    node_id: did.to_string(),
-                    total_jobs: 0,
-                    successful_jobs: 0,
-                    failed_jobs: 0,
-                    jobs_on_time: 0,
-                    jobs_late: 0,
-                    average_execution_ms: None,
-                    average_bid_accuracy: None,
-                    dishonesty_events: 0,
-                    endorsements: Vec::new(),
-                    computed_score: 50.0, // Default neutral score
-                });
-            }
-            
-            return Err(anyhow!(
-                "Failed to fetch reputation profile. Status: {}", 
-                response.status()
-            ));
+    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>> {
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{}/reputation/profiles/{}", base, did.to_string());
+
+        tracing::debug!("Querying reputation score for {} at URL: {}", did.to_string(), url);
+
+        let resp = self.client.get(&url).send().await?;
+
+        if resp.status().is_success() {
+            let profile: ReputationProfile = resp.json().await?;
+            tracing::debug!(
+                "Successfully retrieved reputation profile for {}: score = {}",
+                did.to_string(),
+                profile.computed_score
+            );
+            Ok(Some(profile))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            tracing::debug!(
+                "Reputation profile not found for {}: {}. Response: {:?}",
+                did.to_string(),
+                resp.status(),
+                resp.text().await.unwrap_or_else(|_| "<failed to read response>".to_string())
+            );
+            Ok(None)
+        } else {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read response>".to_string());
+            tracing::error!(
+                "Failed to fetch reputation profile for {} failed with status {}: {}",
+                did.to_string(),
+                status,
+                error_body
+            );
+            Err(anyhow::anyhow!(
+                "Failed to fetch reputation profile for {}: HTTP {} - {}",
+                did.to_string(),
+                status,
+                error_body
+            ))
         }
-        
-        let profile = response.json::<ReputationProfile>().await
-            .map_err(|e| anyhow!("Failed to parse reputation profile: {}", e))?;
-            
-        Ok(profile)
     }
     
     fn calculate_bid_score(
@@ -240,5 +213,104 @@ impl ReputationClient for DefaultReputationClient {
         
         // Sum all components for total score
         price_component + resource_component + reputation_component + timeliness_component
+    }
+
+    async fn submit_record(&self, record: ReputationRecord) -> Result<()> {
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{}/reputation/records", base);
+
+        tracing::debug!(
+            "Submitting reputation record for subject {} to URL: {}",
+            record.subject.to_string(),
+            url
+        );
+
+        let resp = self.client.post(&url).json(&record).send().await?;
+
+        if resp.status().is_success() {
+            tracing::debug!(
+                "Successfully submitted reputation record for subject {}",
+                record.subject.to_string()
+            );
+            Ok(())
+        } else {
+            let status = resp.status();
+            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read response>".to_string());
+            tracing::error!(
+                "Failed to submit reputation record for subject {}: HTTP {} - {}",
+                record.subject.to_string(),
+                status,
+                error_body
+            );
+            Err(anyhow::anyhow!(
+                "Failed to submit reputation record for subject {}: HTTP {} - {}",
+                record.subject.to_string(),
+                status,
+                error_body
+            ))
+        }
+    }
+}
+
+pub struct CachingReputationClient {
+    client: Arc<dyn ReputationClient>,
+    cache: Arc<RwLock<HashMap<String, (ReputationProfile, std::time::Instant)>>>,
+    cache_ttl: Duration,
+}
+
+impl CachingReputationClient {
+    pub fn new(client: Arc<dyn ReputationClient>, cache_ttl: Duration) -> Self {
+        Self {
+            client,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_ttl,
+        }
+    }
+
+    async fn get_cached_profile(&self, did: &Did) -> Option<ReputationProfile> {
+        let cache = self.cache.read().await;
+        if let Some((profile, timestamp)) = cache.get(&did.to_string()) {
+            if timestamp.elapsed() < self.cache_ttl {
+                return Some(profile.clone());
+            }
+        }
+        None
+    }
+
+    async fn cache_profile(&self, did: &Did, profile: ReputationProfile) {
+        let mut cache = self.cache.write().await;
+        cache.insert(did.to_string(), (profile, std::time::Instant::now()));
+    }
+}
+
+#[async_trait::async_trait]
+impl ReputationClient for CachingReputationClient {
+    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>> {
+        // Try to get from cache first
+        if let Some(cached) = self.get_cached_profile(did).await {
+            return Ok(Some(cached));
+        }
+
+        // If not in cache, fetch from client
+        if let Some(profile) = self.client.fetch_profile(did).await? {
+            self.cache_profile(did, profile.clone()).await;
+            Ok(Some(profile))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn calculate_bid_score(
+        &self,
+        config: &BidEvaluatorConfig,
+        profile: &ReputationProfile,
+        normalized_price: f64,
+        resource_match: f64,
+    ) -> f64 {
+        self.client.calculate_bid_score(config, profile, normalized_price, resource_match)
+    }
+
+    async fn submit_record(&self, record: ReputationRecord) -> Result<()> {
+        self.client.submit_record(record).await
     }
 } 

@@ -1,4 +1,7 @@
+use anyhow::Result;
 use crate::types::{Bid, JobRequest};
+use crate::models::BidEvaluatorConfig;
+use crate::reputation_client::ReputationClient;
 
 // Constants for scoring
 const DEFAULT_REPUTATION_SCORE_NORMALIZED: f64 = 0.5; // Default normalized reputation (0-1 scale)
@@ -55,4 +58,49 @@ pub fn calculate_bid_selection_score(
     );
 
     score
+}
+
+pub fn validate_bid(bid: &Bid, job_req: &JobRequest) -> Result<()> {
+    // Check if bid meets minimum resource requirements
+    if bid.resources.cpu_cores < job_req.requirements.cpu_cores ||
+       bid.resources.memory_mb < job_req.requirements.memory_mb ||
+       bid.resources.storage_gb < job_req.requirements.storage_gb {
+        return Err(anyhow::anyhow!("Bid does not meet minimum resource requirements"));
+    }
+
+    // Check if bid price is within acceptable range
+    if bid.price > job_req.requirements.max_price {
+        return Err(anyhow::anyhow!("Bid price exceeds maximum allowed price"));
+    }
+
+    Ok(())
+}
+
+pub fn calculate_bid_score(
+    config: &BidEvaluatorConfig,
+    bid: &Bid,
+    reputation_score: f64,
+) -> f64 {
+    // Normalize the price component (lower is better)
+    let normalized_price = 1.0 - (bid.price as f64 / bid.resources.max_price as f64);
+
+    // Calculate resource utilization score
+    let resource_score = calculate_resource_score(&bid.resources);
+
+    // Combine components with weights
+    let price_component = normalized_price * config.price_weight;
+    let resource_component = resource_score * config.resource_match_weight;
+    let reputation_component = reputation_score * config.reputation_weight;
+
+    price_component + resource_component + reputation_component
+}
+
+fn calculate_resource_score(resources: &JobRequirements) -> f64 {
+    // Calculate how well the resources match the requirements
+    let cpu_utilization = resources.cpu_cores as f64 / resources.max_cpu_cores as f64;
+    let memory_utilization = resources.memory_mb as f64 / resources.max_memory_mb as f64;
+    let storage_utilization = resources.storage_gb as f64 / resources.max_storage_gb as f64;
+
+    // Average the utilization scores
+    (cpu_utilization + memory_utilization + storage_utilization) / 3.0
 } 

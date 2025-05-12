@@ -8,6 +8,7 @@ use crate::bid_logic;
 use crate::models::BidEvaluatorConfig;
 use crate::reputation_client::{ReputationClient, ReputationProfile};
 use crate::metrics;
+use tracing;
 
 /// Defines the selection strategy to use for assigning jobs to executors
 #[derive(Debug, Clone, PartialEq)]
@@ -283,5 +284,92 @@ impl GovernedExecutorSelector {
     /// Create a new governed selector with the given policy.
     pub fn new(policy: ExecutionPolicy) -> Self {
         Self { policy }
+    }
+}
+
+pub struct JobAssignmentService {
+    reputation_client: Arc<dyn ReputationClient>,
+    config: BidEvaluatorConfig,
+}
+
+impl JobAssignmentService {
+    pub fn new(reputation_client: Arc<dyn ReputationClient>, config: BidEvaluatorConfig) -> Self {
+        Self {
+            reputation_client,
+            config,
+        }
+    }
+
+    pub async fn evaluate_bids(&self, request: &JobRequest, bids: &[Bid]) -> Result<Vec<(Bid, f64)>> {
+        let mut scored_bids = Vec::new();
+
+        for bid in bids {
+            let resource_match = self.calculate_resource_match(&bid.resources, &request.requirements);
+            let normalized_price = self.normalize_price(bid.price, request.requirements.max_price);
+
+            let profile = match self.reputation_client.fetch_profile(&bid.bidder_did).await {
+                Ok(Some(profile)) => profile,
+                Ok(None) => {
+                    tracing::warn!("No reputation profile found for {}", bid.bidder_did.to_string());
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch reputation for {}: {}", bid.bidder_did.to_string(), e);
+                    continue;
+                }
+            };
+
+            let score = self.calculate_bid_score(
+                &self.config,
+                &profile,
+                normalized_price,
+                resource_match,
+            );
+
+            scored_bids.push((bid.clone(), score));
+        }
+
+        // Sort by score in descending order
+        scored_bids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(scored_bids)
+    }
+
+    fn calculate_resource_match(&self, estimate: &JobRequirements, requirements: &JobRequirements) -> f64 {
+        let cpu_match = (estimate.cpu_cores as f64 / requirements.cpu_cores as f64).min(1.0);
+        let memory_match = (estimate.memory_mb as f64 / requirements.memory_mb as f64).min(1.0);
+        let storage_match = (estimate.storage_gb as f64 / requirements.storage_gb as f64).min(1.0);
+
+        (cpu_match + memory_match + storage_match) / 3.0
+    }
+
+    fn normalize_price(&self, bid_price: u64, max_price: u64) -> f64 {
+        if max_price == 0 {
+            return 0.0;
+        }
+        1.0 - (bid_price as f64 / max_price as f64)
+    }
+
+    fn calculate_bid_score(
+        &self,
+        config: &BidEvaluatorConfig,
+        profile: &ReputationProfile,
+        normalized_price: f64,
+        resource_match: f64,
+    ) -> f64 {
+        let reputation_component = profile.computed_score * config.reputation_weight;
+        let price_component = normalized_price * config.price_weight;
+        let resource_component = resource_match * config.resource_match_weight;
+
+        // Log the scoring components for debugging
+        tracing::debug!(
+            "Bid score components for {}: reputation={}, price={}, resources={}",
+            profile.node_id,
+            reputation_component,
+            price_component,
+            resource_component
+        );
+
+        reputation_component + price_component + resource_component
     }
 } 
