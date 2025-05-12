@@ -12,6 +12,7 @@ pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submi
 
 // Using core::ffi::c_void for potential opaque handles in the future, though not strictly used by current function signatures.
 use core::ffi::c_void;
+use serde::Serialize;
 
 // --- Error Codes ---
 /// Defines error codes returned by Host ABI functions.
@@ -32,6 +33,8 @@ pub enum HostAbiError {
     InvalidState = -10,         // e.g., Calling an interactive function on a non-interactive job.
     NetworkError = -11,         // An error occurred during a P2P network operation.
     StorageError = -12,         // An error occurred during a host storage operation.
+    MemoryAccessError = -13,    // Added for memory read/write issues
+    SerializationError = -14, // Added for CBOR/JSON errors
 }
 
 // --- Helper Enums & Structs for ABI Communication ---
@@ -39,7 +42,7 @@ pub enum HostAbiError {
 /// Specifies the type of data contained in a `ReceivedInputInfo` structure,
 /// indicating whether interactive input is provided inline or as a CID.
 #[repr(u32)] // Ensures stable representation across the ABI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ReceivedInputType {
     InlineData = 0, // The data is provided directly after ReceivedInputInfo.
     Cid = 1,        // The data provided after ReceivedInputInfo is a CID string pointing to the actual input.
@@ -50,7 +53,7 @@ pub enum ReceivedInputType {
 /// The actual payload data (if inline) or the CID string (if by CID)
 /// immediately follows this struct in the same buffer.
 #[repr(C)] // Ensures C-compatible memory layout for predictable ABI interaction.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct ReceivedInputInfo {
     /// Type of the received input (InlineData or Cid).
     pub input_type: ReceivedInputType, // Effectively u32 due to #[repr(u32)] on ReceivedInputType.
@@ -84,18 +87,20 @@ pub trait MeshHostAbi {
     /// The Job ID is written as a UTF-8 string into the buffer specified by `job_id_buf_ptr`.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `job_id_buf_ptr` (u32): Pointer to the buffer in WASM memory to write the Job ID.
     /// * `job_id_buf_len` (u32): Length of the provided buffer.
     /// # Returns
     /// * `i32`: Number of bytes written for the Job ID string if successful.
     ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
     ///            Other negative `HostAbiError` codes on other failures.
-    fn host_job_get_id(&self, job_id_buf_ptr: u32, job_id_buf_len: u32) -> i32;
+    fn host_job_get_id(&self, env: &mut wasmer::FunctionEnvMut<Self>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Gets the CID of the initial input data specified when the job was submitted (from `MeshJobParams.input_data_cid`).
     /// The CID is written as a UTF-8 string into `cid_buf_ptr`.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `cid_buf_ptr` (u32): Pointer to the buffer in WASM memory for the CID string.
     /// * `cid_buf_len` (u32): Length of the buffer.
     /// # Returns
@@ -103,28 +108,33 @@ pub trait MeshHostAbi {
     ///            Returns 0 if `input_data_cid` was `None` for the job.
     ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
     ///            Other negative `HostAbiError` codes on other failures.
-    fn host_job_get_initial_input_cid(&self, cid_buf_ptr: u32, cid_buf_len: u32) -> i32;
+    fn host_job_get_initial_input_cid(&self, env: &mut wasmer::FunctionEnvMut<Self>, cid_buf_ptr: u32, cid_buf_len: u32) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Checks if the current job has been marked as interactive (from `MeshJobParams.is_interactive`).
     ///
+    /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// # Returns
     /// * `i32`: 1 if the job is interactive.
     ///            0 if the job is not interactive.
     ///            Negative `HostAbiError` codes on failure (e.g., job context not found).
-    fn host_job_is_interactive(&self) -> i32;
+    fn host_job_is_interactive(&self, env: &mut wasmer::FunctionEnvMut<Self>) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Gets the current stage index (0-based) if the job is part of a multi-stage workflow.
     ///
+    /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// # Returns
     /// * `i32`: The current stage index if the job is in a workflow.
     ///            Returns -1 if the job is a `SingleWasmModule` type (not a multi-stage workflow).
     ///            Other negative `HostAbiError` codes on failures.
-    fn host_workflow_get_current_stage_index(&self) -> i32;
+    fn host_workflow_get_current_stage_index(&self, env: &mut wasmer::FunctionEnvMut<Self>) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Gets the user-defined ID of the current stage, if available and if the job is in a multi-stage workflow.
     /// The stage ID is written as a UTF-8 string into `stage_id_buf_ptr`.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `stage_id_buf_ptr` (u32): Pointer to the buffer in WASM memory for the stage ID.
     /// * `stage_id_buf_len` (u32): Length of the buffer.
     /// # Returns
@@ -134,9 +144,10 @@ pub trait MeshHostAbi {
     ///            Other negative `HostAbiError` codes on other failures.
     fn host_workflow_get_current_stage_id(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         stage_id_buf_ptr: u32,
         stage_id_buf_len: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Gets the resolved input CID for the current stage of a workflow.
     /// This function interprets the `StageInputSource` for the current stage.
@@ -145,6 +156,7 @@ pub trait MeshHostAbi {
     /// The resolved CID is written as a UTF-8 string into `cid_buf_ptr`.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `input_key_ptr` (u32): Pointer to a UTF-8 string in WASM memory representing the input key. Can be 0 if no key is applicable for the stage's input source.
     /// * `input_key_len` (u32): Length of the input key string. Can be 0 if no key.
     /// * `cid_buf_ptr` (u32): Pointer to the buffer in WASM memory for the resolved CID string.
@@ -157,11 +169,12 @@ pub trait MeshHostAbi {
     ///            Other negative `HostAbiError` codes on other failures.
     fn host_workflow_get_current_stage_input_cid(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         input_key_ptr: u32,
         input_key_len: u32,
         cid_buf_ptr: u32,
         cid_buf_len: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     // **II. Status & Progress Reporting **
 
@@ -170,6 +183,7 @@ pub trait MeshHostAbi {
     /// and trigger a `JobStatusUpdateV1` P2P message.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `percentage` (u8): Progress percentage (0-100).
     /// * `status_message_ptr` (u32): Pointer to a UTF-8 encoded status message string in WASM memory.
     /// * `status_message_len` (u32): Length of the status message string.
@@ -178,16 +192,18 @@ pub trait MeshHostAbi {
     ///            Negative `HostAbiError` codes on failure (e.g., `InvalidArguments` for bad message string).
     fn host_job_report_progress(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         percentage: u8,
         status_message_ptr: u32,
         status_message_len: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Signals that the current stage of a multi-stage workflow has completed successfully.
     /// The host will typically update the job's status (e.g., to `AwaitingNextStage` or `Completed`)
     /// and may trigger a `JobStatusUpdateV1` P2P message.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `output_cid_ptr` (u32): Optional pointer to a UTF-8 string in WASM memory representing the primary output CID for this stage. Can be 0 if no primary output CID.
     /// * `output_cid_len` (u32): Length of the output CID string. Can be 0 if no primary output CID.
     /// # Returns
@@ -200,9 +216,10 @@ pub trait MeshHostAbi {
     /// and pass that single CID as the `output_cid_ptr` here.
     fn host_workflow_complete_current_stage(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         output_cid_ptr: u32,
         output_cid_len: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     // **III. Interactivity **
 
@@ -211,6 +228,7 @@ pub trait MeshHostAbi {
     /// The host determines if the payload is sent inline or as a CID based on its size.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `payload_ptr` (u32): Pointer to the raw payload data in WASM memory.
     /// * `payload_len` (u32): Length of the payload data.
     /// * `output_key_ptr` (u32): Optional pointer to a UTF-8 string in WASM memory, serving as a key or identifier for this output. Can be 0 if not applicable.
@@ -223,12 +241,13 @@ pub trait MeshHostAbi {
     ///            Other negative `HostAbiError` codes on failure.
     fn host_interactive_send_output(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         payload_ptr: u32,
         payload_len: u32,
         output_key_ptr: u32,
         output_key_len: u32,
         is_final_chunk: i32, // 1 for true, 0 for false
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Attempts to receive interactive input data sent to the WASM job.
     /// The host checks an internal queue populated by incoming `JobInteractiveInputV1` P2P messages.
@@ -236,6 +255,7 @@ pub trait MeshHostAbi {
     /// is written into the WASM buffer specified by `buffer_ptr`.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `buffer_ptr` (u32): Pointer to the buffer in WASM memory to write the `ReceivedInputInfo` and subsequent data/CID.
     /// * `buffer_len` (u32): Length of the provided WASM buffer.
     /// * `timeout_ms` (u32): Maximum time to wait for input in milliseconds.
@@ -249,26 +269,30 @@ pub trait MeshHostAbi {
     ///            Other negative `HostAbiError` codes on failure.
     fn host_interactive_receive_input(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         buffer_ptr: u32,
         buffer_len: u32,
         timeout_ms: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Gets the total size (in bytes) required to store the next available interactive input message
     /// (i.e., `sizeof(ReceivedInputInfo)` + length of its associated data/CID payload).
     /// This allows the WASM module to allocate an appropriately sized buffer before calling `host_interactive_receive_input`.
     ///
+    /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// # Returns
     /// * `i32`: Required size in bytes if input is available.
     ///            Returns 0 if no input is currently available in the queue.
     ///            Negative `HostAbiError` codes on failure.
-    fn host_interactive_peek_input_len(&self) -> i32;
+    fn host_interactive_peek_input_len(&self, env: &mut wasmer::FunctionEnvMut<Self>) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Signals to the host that the job is now expecting user input and may pause or yield execution.
     /// The host typically uses this to transition the job's status to `JobStatus::PendingUserInput`
     /// and inform the job originator/client.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `prompt_cid_ptr` (u32): Optional pointer to a UTF-8 string in WASM memory, representing a CID for data that describes the needed input (e.g., a schema, a detailed prompt). Can be 0 if not applicable.
     /// * `prompt_cid_len` (u32): Length of the prompt CID string. Can be 0 if not applicable.
     /// # Returns
@@ -277,9 +301,10 @@ pub trait MeshHostAbi {
     ///            Other negative `HostAbiError` codes on failure.
     fn host_interactive_prompt_for_input(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         prompt_cid_ptr: u32,
         prompt_cid_len: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     // **IV. Data Handling & Storage (Interacting with Host's IPFS-like Storage) **
 
@@ -288,6 +313,7 @@ pub trait MeshHostAbi {
     /// The job must have permission to read the specified CID.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `cid_ptr` (u32): Pointer to the UTF-8 string in WASM memory representing the CID to read.
     /// * `cid_len` (u32): Length of the CID string.
     /// * `offset` (u64): Byte offset within the data (identified by CID) from which to start reading.
@@ -301,18 +327,20 @@ pub trait MeshHostAbi {
     ///            Other negative `HostAbiError` codes on other failures.
     fn host_data_read_cid(
         &self,
+        env: &mut wasmer::FunctionEnvMut<Self>,
         cid_ptr: u32,
         cid_len: u32,
         offset: u64,
         buffer_ptr: u32,
         buffer_len: u32,
-    ) -> i32;
+    ) -> i32 where Self: Sized + wasmer::WasmerEnv;
 
     /// Writes data from a WASM buffer to the host's storage layer, resulting in a new CID.
     /// The newly created CID (UTF-8 string) is written into the WASM buffer specified by `cid_buf_ptr`.
     /// The job must have permission to write data.
     ///
     /// # Arguments
+    /// * `env` (FunctionEnvMut): Reference to the WASM function environment.
     /// * `data_ptr` (u32): Pointer to the raw data in WASM memory to be written.
     /// * `data_len` (u32): Length of the data to write.
     /// * `cid_buf_ptr` (u32): Pointer to the buffer in WASM memory where the resulting CID string will be written.

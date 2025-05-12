@@ -4,7 +4,7 @@
 
 use icn_types::mesh::MeshJobParams;
 use icn_identity::Did;
-use planetary_mesh::protocol::{JobInteractiveInputV1, P2PJobStatus};
+use icn_mesh_protocol::{JobInteractiveInputV1, P2PJobStatus};
 use host_abi::LogLevel;
 
 use std::collections::VecDeque;
