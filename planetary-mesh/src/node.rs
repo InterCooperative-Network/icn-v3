@@ -19,7 +19,6 @@ use icn_identity::IcnPublicKey;
 pub enum NodeCommand {
     AnnounceJob(MeshJob),
     SubmitBid(Bid),
-    SetMockReputations(HashMap<Did, f64>),
 }
 
 pub struct MeshNode {
@@ -40,7 +39,6 @@ pub struct MeshNode {
     pub known_receipt_cids: Arc<RwLock<HashMap<Cid, KnownReceiptInfo>>>,
     pub(crate) command_rx: Receiver<NodeCommand>,
     pub test_observed_reputation_submissions: Arc<RwLock<Vec<TestObservedReputationSubmission>>>,
-    pub mock_reputation_store: Arc<RwLock<HashMap<Did, f64>>>,
     pub verified_reputation_records: Arc<RwLock<HashMap<Cid, ReputationRecord>>>,
 }
 
@@ -226,11 +224,45 @@ impl MeshNode {
                 known_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
                 command_rx,
                 test_observed_reputation_submissions: Arc::new(RwLock::new(Vec::new())),
-                mock_reputation_store: Arc::new(RwLock::new(HashMap::new())),
                 verified_reputation_records: Arc::new(RwLock::new(HashMap::new())),
             },
             internal_action_rx,
         ))
+    }
+
+    // Helper function to calculate reputation score from verified records
+    fn calculate_reputation_score_for_did(
+        verified_records_map: &HashMap<Cid, ReputationRecord>,
+        target_did: &Did
+    ) -> f64 {
+        let mut successful_jobs = 0;
+        let mut failed_jobs = 0;
+
+        for record in verified_records_map.values() {
+            if record.subject == *target_did {
+                match &record.event {
+                    ReputationUpdateEvent::JobCompletedSuccessfully { .. } => {
+                        successful_jobs += 1;
+                    }
+                    ReputationUpdateEvent::JobFailed { .. } => {
+                        failed_jobs += 1;
+                    }
+                    // Add other event types if they influence reputation
+                }
+            }
+        }
+
+        let base_score = 50.0;
+        let success_bonus = 10.0; 
+        let failure_penalty = 15.0; 
+        
+        let mut score = base_score + (successful_jobs as f64 * success_bonus) - (failed_jobs as f64 * failure_penalty);
+        score = score.max(0.0).min(100.0);
+
+        if successful_jobs == 0 && failed_jobs == 0 {
+            return 50.0; 
+        }
+        score
     }
 
     async fn publish_bid_message(&mut self, bid: Bid) -> Result<(), anyhow::Error> {
@@ -263,15 +295,6 @@ impl MeshNode {
                             if let Err(e) = self.publish_bid_message(bid).await {
                                 tracing::error!("Error submitting bid from command: {:?}", e);
                             }
-                        }
-                        NodeCommand::SetMockReputations(reputations) => {
-                            tracing::info!("Received SetMockReputations command. Updating mock reputations.");
-                            let mut store = self.mock_reputation_store.write().unwrap();
-                            store.clear();
-                            for (did, score) in reputations {
-                                store.insert(did, score);
-                            }
-                            tracing::debug!("Mock reputation store updated: {:?}", store);
                         }
                     }
                 },
@@ -603,7 +626,7 @@ impl MeshNode {
 
         let originated_jobs_map = self.announced_originated_jobs.read().unwrap().clone();
         let current_bids_map = self.bids.read().unwrap().clone();
-        let current_mock_reputations = self.mock_reputation_store.read().unwrap().clone();
+        let verified_reputation_records_map = self.verified_reputation_records.read().unwrap(); // Get a read lock once
 
         for (job_id, (_job_manifest, original_mesh_job)) in originated_jobs_map.iter() {
             if self.assigned_by_originator.read().unwrap().contains(job_id) {
@@ -617,29 +640,41 @@ impl MeshNode {
 
                 let winning_bid_opt: Option<Bid> = 
                     if let Some(policy) = &original_mesh_job.params.execution_policy {
-                        tracing::info!("Job {} has an execution policy. Evaluating bids against policy.", job_id);
+                        tracing::info!("Job {} has an execution policy. Evaluating bids against policy using verified reputation.", job_id);
                         
                         let scored_bids: Vec<ScoredBid> = bids_for_job.iter().filter_map(|bid| {
-                            let mock_rep = current_mock_reputations.get(&bid.executor_did).copied().unwrap_or(50.0);
-                            evaluate_bid_against_policy(bid, policy, mock_rep)
+                            // Calculate reputation score using verified records
+                            let actual_reputation_score = Self::calculate_reputation_score_for_did(
+                                &verified_reputation_records_map, 
+                                &bid.executor_did
+                            );
+                            tracing::debug!(
+                                "Calculated reputation for DID {}: {} (based on {} successes, {} failures from verified records)", 
+                                bid.executor_did, 
+                                actual_reputation_score,
+                                verified_reputation_records_map.values().filter(|r| r.subject == bid.executor_did && matches!(r.event, ReputationUpdateEvent::JobCompletedSuccessfully {..})).count(),
+                                verified_reputation_records_map.values().filter(|r| r.subject == bid.executor_did && matches!(r.event, ReputationUpdateEvent::JobFailed {..})).count()
+                            );
+                            evaluate_bid_against_policy(bid, policy, actual_reputation_score)
                         }).collect();
 
                         if scored_bids.is_empty() {
-                            tracing::warn!("No bids for job {} met policy criteria or scored positively.", job_id);
+                            tracing::warn!("No bids for job {} met policy criteria or scored positively with verified reputation.", job_id);
                             None
                         } else {
                             scored_bids.iter()
                                 .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
                                 .map(|scored_bid| {
                                     tracing::info!(
-                                        "Policy-based selection for job {}: Winning bid from {} with score {}",
-                                        job_id, scored_bid.bid.executor_did, scored_bid.score
+                                        "Policy-based selection for job {}: Winning bid from {} with score {} (Rep: {})",
+                                        job_id, scored_bid.bid.executor_did, scored_bid.score,
+                                        Self::calculate_reputation_score_for_did(&verified_reputation_records_map, &scored_bid.bid.executor_did)
                                     );
                                     scored_bid.bid.clone()
                                 })
                         }
                     } else {
-                        tracing::info!("Job {} has no execution policy or policy evaluation yielded no winner. Selecting by lowest price.", job_id);
+                        tracing::info!("Job {} has no execution policy. Selecting by lowest price.", job_id);
                         bids_for_job.iter().min_by_key(|b| b.price).cloned()
                     };
 
