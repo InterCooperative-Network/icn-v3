@@ -91,9 +91,10 @@ pub enum MeshProtocolMessage {
     },
     JobBidV1 {
         job_id: JobId,
-        bidder: Did,
+        executor_did: Did,
         price: u64,
         comment: Option<String>,
+        region: Option<String>,
     },
     // AcceptBidV1 { job_id: JobId, winning_executor_did: Did },
     // RejectBidV1 { job_id: JobId, executor_did: Did, reason: Option<String> },
@@ -106,10 +107,11 @@ pub enum MeshProtocolMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bid {
     pub job_id: JobId,
-    pub bidder: Did,
+    pub executor_did: Did,
     pub price: u64,
     pub timestamp: i64,
     pub comment: Option<String>,
+    pub region: Option<String>,
 }
 
 /// Describes the capabilities of an executor node on the mesh network.

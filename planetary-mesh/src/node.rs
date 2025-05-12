@@ -277,7 +277,13 @@ impl MeshNode {
     async fn publish_bid_message(&mut self, bid: Bid) -> Result<(), anyhow::Error> {
         tracing::info!("Publishing bid for job_id: {} from executor: {}", bid.job_id, bid.executor_did);
         let topic = Topic::new(format!("job-bids/{}", bid.job_id));
-        let message = MeshProtocolMessage::JobBidV1(bid);
+        let message = MeshProtocolMessage::JobBidV1 {
+            job_id: bid.job_id.clone(),
+            executor_did: bid.executor_did.clone(),
+            price: bid.price,
+            comment: bid.comment.clone(),
+            region: bid.region.clone(),
+        };
         let cbor_payload = serde_cbor::to_vec(&message)?;
         
         self.swarm.behaviour_mut().gossipsub.publish(topic, cbor_payload)?;
@@ -652,6 +658,21 @@ impl MeshNode {
                         tracing::info!("Job {} has an execution policy. Evaluating bids against policy using verified reputation.", job_id);
                         
                         let scored_bids: Vec<ScoredBid> = bids_for_job.iter().filter_map(|bid| {
+                            // Apply region_filter from policy if it exists
+                            if let Some(ref required_region) = policy.region_filter {
+                                // Access bid.region directly from crate::protocol::Bid
+                                if bid.region.as_ref().map(|r| r.as_str()) != Some(required_region.as_str()) {
+                                    tracing::debug!(
+                                        bidder = %bid.executor_did, 
+                                        job_id = %job_id, // job_id should be in scope here
+                                        "Bidder filtered out by region policy in planetary-mesh. Required: {:?}, Bidder has: {:?}", 
+                                        required_region, 
+                                        bid.region
+                                    );
+                                    return None; // Skip this bid due to region mismatch
+                                }
+                            }
+
                             // Calculate reputation score using verified records
                             let actual_reputation_score = Self::calculate_reputation_score_for_did(
                                 &verified_reputation_records_map, 
@@ -710,6 +731,71 @@ impl MeshNode {
                 Err(e) => {
                     tracing::error!("Failed to assign job {} to executor {}: {:?}", job_id, winning_bid.executor_did, e);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_swarm_event(&mut self, event: SwarmEvent<MeshBehaviour>) -> Result<(), anyhow::Error> {
+        match event {
+            SwarmEvent::Behaviour(behaviour_event) => {
+                match behaviour_event {
+                    BehaviourEvent::Gossipsub(gossipsub_event) => {
+                        match gossipsub_event {
+                            GossipsubEvent::Message(message) => {
+                                let deserialized_message = serde_cbor::from_slice::<MeshProtocolMessage>(&message.data);
+                                match deserialized_message {
+                                    Ok(protocol_message) => {
+                                        match protocol_message {
+                                            MeshProtocolMessage::JobBidV1 { job_id, executor_did, price, comment, region } => {
+                                                tracing::info!(
+                                                    "[MeshNode] Received JobBidV1 for JobID: {} from Executor DID: {} with Price: {}. Region: {:?}. Comment: {:?}. Topic: {}",
+                                                    job_id, executor_did, price, region, comment, message.topic
+                                                );
+
+                                                let current_timestamp = Utc::now().timestamp();
+                                                let new_bid = crate::protocol::Bid {
+                                                    job_id: job_id.clone(), 
+                                                    executor_did: executor_did.clone(), 
+                                                    price,
+                                                    timestamp: current_timestamp,
+                                                    comment: comment.clone(),
+                                                    region: region.clone(), // Store the received region
+                                                };
+
+                                                match self.bids.write() {
+                                                    Ok(mut bids_map) => {
+                                                        bids_map.entry(job_id.clone()).or_default().push(new_bid);
+                                                        tracing::info!("[MeshNode] Stored bid for JobID: {}. Total bids for job: {}", 
+                                                                     job_id, bids_map.get(&job_id).map_or(0, |b_vec| b_vec.len()));
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!("[MeshNode] Failed to get write lock for bids map while storing bid for job {}: {:?}", job_id, e);
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                // Handle other message types
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to deserialize MeshProtocolMessage: {:?}. Data: {:?}", e, message.data);
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Handle other gossipsub events
+                            }
+                        }
+                    }
+                    _ => {
+                        // Handle other behaviour events
+                    }
+                }
+            }
+            _ => {
+                // Handle other swarm events
             }
         }
         Ok(())

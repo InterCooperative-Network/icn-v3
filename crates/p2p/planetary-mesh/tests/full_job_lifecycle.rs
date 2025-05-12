@@ -913,8 +913,8 @@ mod test_utils {
 }
 
 #[tokio::test]
-#[ignore] // Run manually with: cargo test -- --ignored
-async fn test_policy_filters_min_reputation_and_max_price_canonical() {
+#[ignore] // Run manually with: cargo test -- --ignored test_policy_filters_region_filter_enforced
+async fn test_policy_filters_region_filter_enforced() {
     use icn_identity::KeyPair as IcnKeyPair;
     use icn_types::{
         mesh::{MeshJob, MeshJobParams, WorkflowType, ResourceType, QoSProfile},
@@ -926,51 +926,55 @@ async fn test_policy_filters_min_reputation_and_max_price_canonical() {
     use std::sync::Arc;
     use tokio::time::{sleep, Duration};
 
-    // Test utils might need to be in scope if not already
-    // use crate::node::test_utils; 
+    // Ensure test_utils are in scope if this test file needs them explicitly
+    // use crate::node::test_utils;
 
     let originator_kp = IcnKeyPair::generate();
-    let executor1_kp = IcnKeyPair::generate();
-    let executor2_kp = IcnKeyPair::generate();
+    let executor_eu_kp = IcnKeyPair::generate(); // Will bid with matching region
+    let executor_us_kp = IcnKeyPair::generate(); // Will bid with different region
+    let executor_no_region_kp = IcnKeyPair::generate(); // Will bid with no region
 
     let originator_did = originator_kp.did.clone();
-    let executor1_did = executor1_kp.did.clone();
-    let executor2_did = executor2_kp.did.clone();
+    let executor_eu_did = executor_eu_kp.did.clone();
+    let executor_us_did = executor_us_kp.did.clone();
+    let executor_no_region_did = executor_no_region_kp.did.clone();
+
+    println!("Region Test: Originator DID: {}", originator_did);
+    println!("Region Test: Executor EU DID: {}", executor_eu_did);
+    println!("Region Test: Executor US DID: {}", executor_us_did);
+    println!("Region Test: Executor NoRegion DID: {}", executor_no_region_did);
 
     let (originator_node, originator_rx, originator_tx) =
-        setup_node(originator_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
-            .await
-            .expect("Failed to setup originator node");
-    let (executor1_node, executor1_rx, executor1_tx) =
-        setup_node(executor1_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
-            .await
-            .expect("Failed to setup executor1 node");
-    let (executor2_node, executor2_rx, executor2_tx) =
-        setup_node(executor2_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None)
-            .await
-            .expect("Failed to setup executor2 node");
+        setup_node(originator_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None).await.expect("Originator setup failed");
+    let (executor_eu_node, executor_eu_rx, executor_eu_tx) =
+        setup_node(executor_eu_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None).await.expect("Executor EU setup failed");
+    let (executor_us_node, executor_us_rx, executor_us_tx) =
+        setup_node(executor_us_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None).await.expect("Executor US setup failed");
+    let (executor_no_region_node, executor_no_region_rx, executor_no_region_tx) =
+        setup_node(executor_no_region_kp, Some("/ip4/127.0.0.1/tcp/0".to_string()), None).await.expect("Executor NoRegion setup failed");
 
     let originator_handle = tokio::spawn(async move { originator_node.run_event_loop(originator_rx).await });
-    let executor1_handle = tokio::spawn(async move { executor1_node.run_event_loop(executor1_rx).await });
-    let executor2_handle = tokio::spawn(async move { executor2_node.run_event_loop(executor2_rx).await });
+    let executor_eu_handle = tokio::spawn(async move { executor_eu_node.run_event_loop(executor_eu_rx).await });
+    let executor_us_handle = tokio::spawn(async move { executor_us_node.run_event_loop(executor_us_rx).await });
+    let executor_no_region_handle = tokio::spawn(async move { executor_no_region_node.run_event_loop(executor_no_region_rx).await });
 
-    sleep(Duration::from_secs(5)).await; // Allow nodes to connect and discover
+    sleep(Duration::from_secs(7)).await; // Allow nodes to connect
 
     let policy = ExecutionPolicy {
-        min_reputation: Some(80.0),
-        max_price: Some(100),
-        price_weight: 0.5,
+        min_reputation: None, // Not testing reputation here
+        max_price: None,      // Not testing price here
+        price_weight: 0.5,    // Weights don't matter if only one passes filter
         rep_weight: 0.5,
-        region_filter: None, // region_filter is not tested here due to current Bid protocol limitations
+        region_filter: Some("eu-central".to_string()), // Specific region required
     };
 
-    let job_id = format!("test-canonical-policy-{}", Utc::now().timestamp_millis());
+    let job_id = format!("test-region-filter-policy-{}", Utc::now().timestamp_millis());
     let mesh_job_params = MeshJobParams {
-        wasm_cid: "bafyfakecidpolicytest".to_string(),
-        description: "Canonical policy test: reject low-rep or overpriced bids".to_string(),
+        wasm_cid: "bafyfakecidregiontest".to_string(),
+        description: "Region filter policy test".to_string(),
         execution_policy: Some(policy.clone()),
-        resources_required: Vec::new(), // Assuming ResourceType is in scope or Vec::new() is fine
-        max_acceptable_bid_tokens: None, 
+        resources_required: Vec::new(),
+        max_acceptable_bid_tokens: None,
         qos_profile: QoSProfile::BestEffort,
         deadline: None,
         input_data_cid: None,
@@ -979,8 +983,7 @@ async fn test_policy_filters_min_reputation_and_max_price_canonical() {
         is_interactive: false,
         expected_output_schema_cid: None,
     };
-
-    let mesh_job = MeshJob { // Ensure this matches icn_types::mesh::MeshJob if it's different from local test MeshJob
+    let mesh_job = MeshJob {
         job_id: job_id.clone(),
         params: mesh_job_params,
         originator_did: originator_did.clone(),
@@ -988,57 +991,67 @@ async fn test_policy_filters_min_reputation_and_max_price_canonical() {
         submission_timestamp: Utc::now().timestamp(),
     };
 
-    // Mock reputations on the originator node (which does the selection in these tests)
-    // The `calculate_reputation_score_for_did` in `planetary-mesh/src/node.rs` uses `verified_reputation_records`.
-    // The test_utils::command_node_to_set_mock_reputations likely sets some state that `calculate_reputation_score_for_did` can use,
-    // or the test setup needs to ensure `verified_reputation_records` are populated accordingly.
-    // For this test, we assume `command_node_to_set_mock_reputations` makes the originator's `calculate_reputation_score_for_did` return these values.
+    // Set mock reputations high for everyone so it's not a factor
     let mock_scores = HashMap::from([
-        (executor1_did.clone(), 75.0), // Executor 1: Rep 75 (Below policy min_reputation of 80)
-        (executor2_did.clone(), 90.0), // Executor 2: Rep 90 (Above min_reputation)
+        (executor_eu_did.clone(), 90.0),
+        (executor_us_did.clone(), 90.0),
+        (executor_no_region_did.clone(), 90.0),
     ]);
-    test_utils::command_node_to_set_mock_reputations(&originator_tx, mock_scores)
-        .await
-        .expect("Failed to set mock rep");
+    test_utils::command_node_to_set_mock_reputations(&originator_tx, mock_scores).await.expect("Set mock rep failed");
 
-    test_utils::command_originator_to_announce_job(&originator_tx, mesh_job)
-        .await
-        .expect("Failed to announce job");
+    test_utils::command_originator_to_announce_job(&originator_tx, mesh_job).await.expect("Announce job failed");
 
-    // Executor 1 bids (Rep 75, Price 50). Should be rejected by min_reputation.
-    let bid1 = planetary_mesh::protocol::Bid {
+    // Bid from EU executor (matching region)
+    let bid_eu = planetary_mesh::protocol::Bid {
         job_id: job_id.clone(),
-        executor_did: executor1_did.clone(), // Corrected from bidder to executor_did if protocol::Bid uses that
-        price: 50, // Meets max_price of 100
+        executor_did: executor_eu_did.clone(),
+        price: 50,
         timestamp: Utc::now().timestamp(),
-        // comment: None, // if your protocol::Bid has this and it's not optional in constructor
+        comment: Some("EU based bid".into()),
+        region: Some("eu-central".to_string()),
     };
-    test_utils::command_executor_to_submit_bid(&executor1_tx, bid1)
-        .await
-        .expect("Executor 1 bid submit fail");
+    test_utils::command_executor_to_submit_bid(&executor_eu_tx, bid_eu).await.expect("EU bid submit failed");
 
-    // Executor 2 bids (Rep 90, Price 150). Should be rejected by max_price.
-    let bid2 = planetary_mesh::protocol::Bid {
+    // Bid from US executor (non-matching region)
+    let bid_us = planetary_mesh::protocol::Bid {
         job_id: job_id.clone(),
-        executor_did: executor2_did.clone(), // Corrected from bidder to executor_did
-        price: 150, // Exceeds max_price of 100
+        executor_did: executor_us_did.clone(),
+        price: 40, // Cheaper, but wrong region
         timestamp: Utc::now().timestamp(),
-        // comment: None, 
+        comment: Some("US based bid".into()),
+        region: Some("us-west".to_string()),
     };
-    test_utils::command_executor_to_submit_bid(&executor2_tx, bid2)
-        .await
-        .expect("Executor 2 bid submit fail");
+    test_utils::command_executor_to_submit_bid(&executor_us_tx, bid_us).await.expect("US bid submit failed");
 
-    // Allow time for bids to propagate and selection logic to run on originator.
-    // The selection logic runs periodically in `select_executor_for_originated_jobs`.
-    sleep(Duration::from_secs(15)).await; // Increased sleep to be safer for selection interval
+    // Bid from NoRegion executor (None region)
+    let bid_no_region = planetary_mesh::protocol::Bid {
+        job_id: job_id.clone(),
+        executor_did: executor_no_region_did.clone(),
+        price: 45,
+        timestamp: Utc::now().timestamp(),
+        comment: Some("No region specified bid".into()),
+        region: None,
+    };
+    test_utils::command_executor_to_submit_bid(&executor_no_region_tx, bid_no_region).await.expect("NoRegion bid submit failed");
+
+    sleep(Duration::from_secs(15)).await; // Allow time for selection
 
     let assigned_jobs_map = planetary_mesh::node::test_utils::get_assigned_jobs_arc(&originator_node);
-    let job_is_assigned = assigned_jobs_map.read().unwrap().contains_key(&job_id);
-
-    assert!(!job_is_assigned, "Job {} should NOT be assigned as all bids should be filtered by policy (low rep or high price). Assigned map: {:?}", job_id, assigned_jobs_map.read().unwrap());
+    let assigned_bid_details = assigned_jobs_map.read().unwrap().get(&job_id).cloned();
+    
+    assert!(assigned_bid_details.is_some(), "Job {} was not assigned to anyone! Expected EU executor.", job_id);
+    if let Some((_job_manifest, winning_bid)) = assigned_bid_details {
+        assert_eq!(winning_bid.executor_did, executor_eu_did, 
+            "Job {} assigned to wrong executor. Expected EU ({}), got {}. Winning bid: {:?}", 
+            job_id, executor_eu_did, winning_bid.executor_did, winning_bid);
+        assert_eq!(winning_bid.region.as_deref(), Some("eu-central"), "Winning bid region mismatch");
+    } else {
+        // Already asserted by is_some(), but for clarity
+        panic!("Expected job {} to be assigned, but it was not.", job_id);
+    }
 
     originator_handle.abort();
-    executor1_handle.abort();
-    executor2_handle.abort();
+    executor_eu_handle.abort();
+    executor_us_handle.abort();
+    executor_no_region_handle.abort();
 }
