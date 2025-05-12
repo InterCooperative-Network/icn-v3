@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cid::Cid;
 use icn_identity::Did;
-use icn_types::jobs::{Bid, JobRequest};
+use crate::types::{Bid, JobRequest};
 use std::sync::Arc;
 use crate::bid_logic;
 use crate::models::BidEvaluatorConfig;

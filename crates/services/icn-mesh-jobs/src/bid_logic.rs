@@ -1,4 +1,4 @@
-use icn_types::jobs::{Bid, JobRequest}; // Assuming JobRequest is needed for requirements
+use crate::types::{Bid, JobRequest};
 
 // Constants for scoring
 const DEFAULT_REPUTATION_SCORE_NORMALIZED: f64 = 0.5; // Default normalized reputation (0-1 scale)
@@ -24,12 +24,12 @@ pub fn calculate_bid_selection_score(
 ) -> f64 {
     // 1. Basic check if bid meets resource requirements
     // This is a simple check; more complex matching could exist.
-    if bid.estimate.cpu < job_req.requirements.cpu ||
-       bid.estimate.memory_mb < job_req.requirements.memory_mb ||
-       bid.estimate.storage_mb < job_req.requirements.storage_mb {
+    if bid.resources.cpu < job_req.requirements.cpu ||
+       bid.resources.memory_mb < job_req.requirements.memory_mb ||
+       bid.resources.storage_mb < job_req.requirements.storage_mb {
         tracing::debug!(
             "Bidder {} for job {} disqualified due to unmet resource requirements. Estimate: {:?}, Required: {:?}",
-            bid.bidder.0, bid.job_id, bid.estimate, job_req.requirements
+            bid.bidder_did, bid.job_id, bid.resources, job_req.requirements
         );
         return -1.0; // Disqualify bid that doesn't meet core requirements
     }
@@ -51,7 +51,7 @@ pub fn calculate_bid_selection_score(
     
     tracing::debug!(
         "Bidder {} for job {}: norm_rep={}, norm_price_factor={}, rep_w={}, price_w={}, final_score={}",
-        bid.bidder.0, bid.job_id, normalized_reputation, normalized_price_factor, rep_weight, price_weight, score
+        bid.bidder_did, bid.job_id, normalized_reputation, normalized_price_factor, rep_weight, price_weight, score
     );
 
     score

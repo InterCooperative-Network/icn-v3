@@ -2,7 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cid::Cid;
 use icn_identity::Did;
-use icn_types::jobs::{JobRequest, JobStatus, Bid, ResourceRequirements, ResourceEstimate}; // Added ResourceRequirements, ResourceEstimate for default
+use crate::types::{Bid, JobRequest};
+use icn_types::mesh::JobStatus;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;

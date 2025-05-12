@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use icn_types::jobs::Bid;
+use crate::types::Bid;
 
 /// Component of a bid score for explanation purposes
 #[derive(Debug, Clone, Serialize, Deserialize)]

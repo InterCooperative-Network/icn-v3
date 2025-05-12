@@ -31,7 +31,7 @@ use crate::storage::MeshJobStore;
 // The user provided: use crate::AppError; I will keep this, assuming it's correctly pathed from the crate root.
 use crate::AppError;
 
-use crate::{JobRequest, Bid};
+use crate::types::{Bid, JobRequest, JobRequirements};
 use icn_types::mesh::JobStatus;
 
 // Helper to generate CID for a JobRequest
@@ -41,7 +41,7 @@ use icn_types::mesh::JobStatus;
 pub struct SqliteStore {
     pub pool: Arc<SqlitePool>,
     /// In-memory broadcasters for real-time bid subscriptions (non-persistent)
-    pub bid_broadcasters: RwLock<HashMap<Cid, broadcast::Sender<Bid>>>,
+    pub bid_broadcasters: RwLock<HashMap<String, broadcast::Sender<Bid>>>,
 }
 
 impl SqliteStore {
@@ -56,62 +56,47 @@ impl SqliteStore {
 // Helper struct for fetching bid rows
 #[derive(sqlx::FromRow, Debug)]
 struct DbBidRow {
-    id: i64, // Already fetching the ID
-    job_id: String, // Stored as TEXT, will be parsed to Cid
-    bidder_did: String, // Stored as TEXT, will be parsed to Did
-    price: i64, // Stored as INTEGER, will be converted to u64 (TokenAmount)
-    estimate_json: String, // Stored as TEXT, will be deserialized to ResourceEstimate
-    reputation_score: Option<f64>, // Stored as REAL
-    // status: String, // If/when you add status to bids table
+    id: i64,
+    job_id: String,
+    bidder_did: String,
+    price: i64,
+    resources_json: String,
 }
 
 #[async_trait]
 impl MeshJobStore for SqliteStore {
-    async fn insert_job(&self, job_request: JobRequest) -> Result<Cid, AppError> {
-        // job_request.id is now the authoritative CID, pre-generated.
-        let job_cid_str = job_request.id.to_string();
+    async fn insert_job(&self, job_request: JobRequest) -> Result<String, AppError> {
+        let job_id_str = job_request.id;
+        let owner_did_str = job_request.owner_did.to_string();
+        let cid_str = job_request.cid.to_string();
+        let requirements_json = serde_json::to_string(&job_request.requirements)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize requirements: {}", e)))?;
+        let status_type = "Pending";
         
-        let params_json = serde_json::to_string(&job_request.params)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize job_request.params: {}", e)))?;
-        
-        let originator_did_str = job_request.originator_did.0.clone(); // Assuming Did is a tuple struct Did(String)
-
-        // Initial status for a new job is Pending
-        let status_type = "Pending"; // From JobStatus::Pending
-
-        // Deadline is now Option<u64> directly from params
-        let deadline_timestamp = job_request.params.deadline;
-
-        // wasm_cid and description are now inside params_json.
-        // If needed for direct query/indexing, they could be extracted from job_request.params here.
-        // For now, we assume they are accessed via deserializing params_json.
-
         sqlx::query!(
             r#"
-            INSERT INTO jobs (job_id, originator_did, params_json, status_type, deadline)
+            INSERT INTO jobs (job_id, owner_did, cid, requirements_json, status_type)
             VALUES ($1, $2, $3, $4, $5)
             "#,
-            job_cid_str,
-            originator_did_str,
-            params_json,
-            status_type,
-            deadline_timestamp // This is Option<u64>, compatible with INTEGER NULL
+            job_id_str,
+            owner_did_str,
+            cid_str,
+            requirements_json,
+            status_type
         )
         .execute(&*self.pool)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert job into database: {}. Job ID: {}, Originator: {}, Params: {}, Deadline: {:?}", e, job_cid_str, originator_did_str, params_json, deadline_timestamp)))?;
-
-        Ok(job_request.id)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert job into database: {}. Job ID: {}", e, job_id_str)))?;
+        
+        Ok(job_id_str)
     }
 
-    async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>, AppError> {
-        let job_id_str = job_id.to_string();
-
-        // Define a struct that matches the expected row structure from the database
+    async fn get_job(&self, job_id: &str) -> Result<Option<(JobRequest, JobStatus)>, AppError> {
+        #[derive(sqlx::FromRow)]
         struct JobRow {
-            // job_id is taken from the function argument job_id: &Cid
-            originator_did: String,
-            params_json: String,
+            owner_did: String,
+            cid: String,
+            requirements_json: String,
             status_type: String,
             status_did: Option<String>,
             status_reason: Option<String>,
@@ -120,11 +105,11 @@ impl MeshJobStore for SqliteStore {
         let job_row_opt = sqlx::query_as!(
             JobRow,
             r#"
-            SELECT originator_did, params_json, status_type, status_did, status_reason
+            SELECT owner_did, cid, requirements_json, status_type, status_did, status_reason
             FROM jobs
             WHERE job_id = $1
             "#,
-            job_id_str
+            job_id
         )
         .fetch_optional(&*self.pool)
         .await
@@ -132,34 +117,40 @@ impl MeshJobStore for SqliteStore {
 
         match job_row_opt {
             Some(row) => {
-                let params: MeshJobParams = serde_json::from_str(&row.params_json)
-                    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize MeshJobParams for job {}: {}", job_id_str, e)))?;
+                let requirements = serde_json::from_str(&row.requirements_json)
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize requirements for job {}: {}", job_id, e)))?;
                 
-                let originator_did = Did::new_ed25519(row.originator_did);
+                let owner_did = Did::new_ed25519(row.owner_did);
+                let cid = Cid::try_from(row.cid.as_str())
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse CID for job {}: {}", job_id, e)))?;
 
                 let job_request = JobRequest {
-                    id: *job_id, // Use the input job_id CID
-                    params,
-                    originator_did,
+                    id: job_id.to_string(),
+                    owner_did,
+                    cid,
+                    requirements,
                 };
 
                 let job_status = match row.status_type.as_str() {
                     "Pending" => JobStatus::Pending,
                     "Bidding" => JobStatus::Bidding,
                     "Assigned" => {
-                        let bidder_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status in job {}", job_id_str)))?;
+                        let bidder_did_str = row.status_did.ok_or_else(|| 
+                            AppError::Internal(anyhow::anyhow!("Missing bidder_did for Assigned status in job {}", job_id)))?;
                         JobStatus::Assigned { bidder: Did::new_ed25519(bidder_did_str) }
                     }
                     "Running" => {
-                        let runner_did_str = row.status_did.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status in job {}", job_id_str)))?;
+                        let runner_did_str = row.status_did.ok_or_else(|| 
+                            AppError::Internal(anyhow::anyhow!("Missing runner_did for Running status in job {}", job_id)))?;
                         JobStatus::Running { runner: Did::new_ed25519(runner_did_str) }
                     }
                     "Completed" => JobStatus::Completed,
                     "Failed" => {
-                        let reason = row.status_reason.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Missing reason for Failed status in job {}", job_id_str)))?;
+                        let reason = row.status_reason.ok_or_else(|| 
+                            AppError::Internal(anyhow::anyhow!("Missing reason for Failed status in job {}", job_id)))?;
                         JobStatus::Failed { reason }
                     }
-                    _ => return Err(AppError::Internal(anyhow::anyhow!("Unknown job status type '{}' for job {}", row.status_type, job_id_str))),
+                    _ => return Err(AppError::Internal(anyhow::anyhow!("Unknown job status type '{}' for job {}", row.status_type, job_id))),
                 };
                 Ok(Some((job_request, job_status)))
             }
@@ -267,159 +258,70 @@ impl MeshJobStore for SqliteStore {
         }
     }
 
-    async fn insert_bid(&self, job_id_param: &Cid, bid: Bid) -> Result<(), AppError> {
-        // 1. Fetch Job and Validate Status
-        let (_job_request, current_status) = self.get_job(job_id_param).await?
-            .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id_param)))?;
+    async fn insert_bid(&self, bid: Bid) -> Result<(), AppError> {
+        let job_id_str = bid.job_id;
+        let bidder_did_str = bid.bidder_did.to_string();
+        let resources_json = serde_json::to_string(&bid.resources)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize resources: {}", e)))?;
 
-        match current_status {
-            JobStatus::Pending | JobStatus::Bidding => { /* Allowed */ }
-            _ => {
-                return Err(AppError::BadRequest(format!(
-                    "Job {} is in status {:?} and cannot accept bids",
-                    job_id_param,
-                    current_status
-                )));
-            }
-        }
-
-        // 2. Validate Bid's Job ID
-        if &bid.job_id != job_id_param {
-            return Err(AppError::BadRequest(
-                "Job ID in bid payload does not match job_id in path".to_string(),
-            ));
-        }
-
-        // 3. Serialize Bid Data
-        let estimate_json = serde_json::to_string(&bid.estimate)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize bid estimate: {}", e)))?;
-        
-        let job_id_str = bid.job_id.to_string(); // or job_id_param.to_string()
-        let bidder_did_str = bid.bidder.0.clone(); // Clone because bid might be consumed by broadcaster
-        let price = bid.price; // u64, compatible with INTEGER in SQLite
-        let reputation_score = bid.reputation_score; // Option<f64>, compatible with REAL NULL in SQLite
-
-        // 4. Database Insertion
         sqlx::query!(
             r#"
-            INSERT INTO bids (job_id, bidder_did, price, estimate_json, reputation_score)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO bids (job_id, bidder_did, price, resources_json)
+            VALUES ($1, $2, $3, $4)
             "#,
             job_id_str,
             bidder_did_str,
-            price,
-            estimate_json,
-            reputation_score
+            bid.price as i64,
+            resources_json
         )
         .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to insert bid into database: {}", e)))?;
 
-        // 5. Broadcast Bid
-        let broadcaster_maybe = {
-            // Scope for the read lock
-            let broadcasters_read_guard = self.bid_broadcasters.read()
-                .map_err(|_| AppError::Internal(anyhow::anyhow!("Bid broadcaster read lock poisoned")))?;
-            broadcasters_read_guard.get(job_id_param).cloned() // Clone the sender if it exists
-        };
-
-        if let Some(broadcaster) = broadcaster_maybe {
-            if let Err(_send_error) = broadcaster.send(bid) {
-                // Log this in a real scenario, e.g., using tracing::debug!
-                // For now, we'll ignore if no subscribers, as the DB insert succeeded.
-                // tracing::debug!("Failed to broadcast bid for job {}: {}, no active subscribers?", job_id_param, send_error.to_string());
-            }
-        } else {
-            // No broadcaster existed, meaning no one was subscribed yet. This is fine.
-            // The bid is in the DB. If someone subscribes later, they won't get this old bid via this live channel,
-            // but would see it if they list_bids. This matches InMemoryStore behavior where send is best-effort.
-            // If the bid was consumed by a send attempt above, ensure it's handled. (bid is consumed by send())
-            // Since we only send if broadcaster exists, and `bid` is taken by `send`, this is okay.
-        }
-        
-        // If the intention is to create the broadcaster if it doesn't exist, like InMemoryStore:
-        // let broadcaster = {
-        //     let mut broadcasters_write_guard = self.bid_broadcasters.write()
-        //         .map_err(|_| AppError::Internal(anyhow::anyhow!("Bid broadcaster write lock poisoned")))?;
-        //     broadcasters_write_guard.entry(*job_id_param).or_insert_with(|| broadcast::channel(32).0).clone()
-        // };
-        // if let Err(_send_error) = broadcaster.send(bid) { ... }
-        // For now, sticking to the simpler read-lock version unless explicit creation is required.
-        // The InMemoryStore *does* create it: `self.get_or_create_broadcaster(job_id).await;`
-        // Let's adjust to match that for consistency:
-
-        let broadcaster = {
-            let mut broadcasters_write_guard = self.bid_broadcasters.write()
-                 .map_err(|_| AppError::Internal(anyhow::anyhow!("Bid broadcaster lock poisoned")))?;
-            broadcasters_write_guard.entry(*job_id_param).or_insert_with(|| {
-                let (tx, _) = broadcast::channel(32);
-                tx
-            }).clone()
-        };
-
-        if broadcaster.send(bid).is_err() {
-            // Log this in a real scenario using tracing::debug!
-            // e.g., tracing::debug!("Failed to broadcast bid for job {}: no active subscribers?", job_id_param);
+        // Broadcast the bid to any subscribers
+        if let Some(sender) = self.bid_broadcasters.read().unwrap().get(&bid.job_id) {
+            let _ = sender.send(bid.clone());
         }
 
         Ok(())
     }
 
-    async fn list_bids(&self, job_id_param: &Cid) -> Result<Vec<Bid>, AppError> {
-        let job_id_str = job_id_param.to_string();
-        tracing::debug!(job_id = %job_id_str, "Listing bids for job");
-
+    async fn get_bids_for_job(&self, job_id: &str) -> Result<Vec<Bid>, AppError> {
         let bid_rows = sqlx::query_as!(
             DbBidRow,
             r#"
-            SELECT id, job_id, bidder_did, price, estimate_json, reputation_score
+            SELECT id, job_id, bidder_did, price, resources_json
             FROM bids
             WHERE job_id = $1
-            ORDER BY submitted_at ASC
             "#,
-            job_id_str
+            job_id
         )
         .fetch_all(&*self.pool)
         .await
-        .map_err(|e| {
-            tracing::error!(job_id = %job_id_str, "Failed to fetch bids from DB: {:?}", e);
-            AppError::Internal(anyhow::Error::new(e).context("Failed to fetch bids from database"))
-        })?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to fetch bids from database: {}", e)))?;
 
         let mut bids = Vec::new();
         for row in bid_rows {
-            let job_id = Cid::try_from(row.job_id.as_str()).map_err(|e| {
-                tracing::error!("Failed to parse job_id CID from DB: {}", e);
-                AppError::Internal(anyhow::Error::new(e).context("Failed to parse job_id CID from database row"))
-            })?;
-
-            let estimate: ResourceEstimate = serde_json::from_str(&row.estimate_json).map_err(|e| {
-                tracing::error!("Failed to deserialize ResourceEstimate from DB: {}", e);
-                AppError::Internal(anyhow::Error::new(e).context("Failed to deserialize ResourceEstimate from database row"))
-            })?;
-
-            if row.price < 0 {
-                tracing::error!("Fetched bid with negative price: {}", row.price);
-                return Err(AppError::Internal(anyhow::anyhow!("Fetched bid with negative price from database")));
-            }
+            let resources = serde_json::from_str(&row.resources_json)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to deserialize resources for bid {}: {}", row.id, e)))?;
+            
+            let bidder_did = Did::new_ed25519(row.bidder_did);
 
             bids.push(Bid {
-                id: Some(row.id), // <-- POPULATE THE ID FIELD
-                job_id,
-                bidder: Did::new_ed25519(row.bidder_did),
-                price: row.price as u64, // TokenAmount is u64
-                estimate,
-                reputation_score: row.reputation_score,
+                job_id: row.job_id,
+                bidder_did,
+                price: row.price as u64,
+                resources,
             });
         }
-        tracing::debug!(job_id = %job_id_str, count = bids.len(), "Successfully listed bids");
+
         Ok(bids)
     }
 
     async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>, AppError> {
         // Placeholder - this will likely remain mostly in-memory logic
         let mut broadcasters = self.bid_broadcasters.write().unwrap(); // Handle potential poison
-        let sender = broadcasters.entry(*job_id).or_insert_with(|| {
+        let sender = broadcasters.entry(job_id.to_string()).or_insert_with(|| {
             let (tx, _) = broadcast::channel(32); // Default capacity
             tx
         });
@@ -456,7 +358,7 @@ impl MeshJobStore for SqliteStore {
                 status_did = $1,
                 winning_bid_id = $2,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE job_cid = $3 AND (status_type = 'Pending' OR status_type = 'Bidding')
+            WHERE job_id = $3 AND (status_type = 'Pending' OR status_type = 'Bidding')
             "#,
             winning_bidder_did_str, // $1
             winning_bid_id,         // $2
@@ -488,7 +390,7 @@ impl MeshJobStore for SqliteStore {
             UPDATE bids
             SET status = 'Won',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $1 AND job_cid = $2
+            WHERE id = $1 AND job_id = $2
             "#,
             winning_bid_id, // $1
             job_id_str      // $2
@@ -519,7 +421,7 @@ impl MeshJobStore for SqliteStore {
             UPDATE bids
             SET status = 'Lost',
                 updated_at = CURRENT_TIMESTAMP
-            WHERE job_cid = $1 AND id != $2 AND status = 'Pending' -- Only update other 'Pending' bids
+            WHERE job_id = $1 AND id != $2 AND status = 'Pending' -- Only update other 'Pending' bids
             "#,
             job_id_str,     // $1
             winning_bid_id  // $2
