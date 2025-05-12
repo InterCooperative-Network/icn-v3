@@ -7,6 +7,8 @@ use cid::Cid;
 use chrono::Utc;
 use icn_identity::Did;
 use tracing;
+use std::str::FromStr;
+use multihash::{Hasher, Sha2_256};
 
 use crate::metrics;
 
@@ -38,7 +40,7 @@ impl HttpReputationUpdater {
     fn create_reputation_record(&self, receipt: &RuntimeExecutionReceipt) -> Result<ReputationRecord> {
         // Parse the receipt CID if available
         let anchor_cid = if let Some(cid_str) = &receipt.receipt_cid {
-            Some(Cid::try_from(cid_str.as_str())?)
+            Some(Cid::from_str(cid_str.as_str())?)
         } else {
             None
         };
@@ -49,9 +51,9 @@ impl HttpReputationUpdater {
             ReputationUpdateEvent::JobCompletedSuccessfully {
                 job_id: anchor_cid.unwrap_or_else(|| {
                     // Generate a placeholder CID if not available
-                    let hash = cid::multihash::Code::Sha2_256.digest(
-                        format!("{}:{}", receipt.id, receipt.timestamp).as_bytes()
-                    );
+                    let mut hasher = Sha2_256::default();
+                    hasher.update(format!("{}:{}", receipt.id, receipt.timestamp).as_bytes());
+                    let hash = hasher.finalize();
                     Cid::new_v1(0x55, hash)
                 }),
                 execution_duration_ms: (receipt.metrics.fuel_used / 100) as u32, // Using fuel as proxy for duration
@@ -64,9 +66,9 @@ impl HttpReputationUpdater {
             ReputationUpdateEvent::JobFailed {
                 job_id: anchor_cid.unwrap_or_else(|| {
                     // Generate a placeholder CID if not available
-                    let hash = cid::multihash::Code::Sha2_256.digest(
-                        format!("{}:{}", receipt.id, receipt.timestamp).as_bytes()
-                    );
+                    let mut hasher = Sha2_256::default();
+                    hasher.update(format!("{}:{}", receipt.id, receipt.timestamp).as_bytes());
+                    let hash = hasher.finalize();
                     Cid::new_v1(0x55, hash)
                 }),
                 reason: "Execution failed or zero resource consumption".into(),

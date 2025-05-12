@@ -48,8 +48,15 @@ All notable changes to the ICN v3 project are documented in this file.
 - Docker Compose configuration for reputation service in devnet
 
 ### Changed
+- Updated dependency versions for reqwest, prometheus, and lazy_static
+- Added multihash dependency with compatible version
 
 ### Fixed
+- Fixed reputation integration build issues with missing dependencies
+- Resolved CID version conflicts between crates
+- Fixed multihash dependency and usage in reputation service
+- Corrected KeyPair.did field access in reputation updater
+- Added Dockerfile for the reputation service
 
 ## [0.1.0] - 2023-10-20
 

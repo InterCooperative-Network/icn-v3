@@ -29,7 +29,11 @@ chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.1.0"
 signature = "2.1.0"
 rand_core = "0.6"
-cid = "0.11"
+cid = "=0.10.1"
+reqwest = { version = "0.11", features = ["json"] }
+prometheus = "0.13"
+lazy_static = "1.4"
+multihash = "=0.16.3"
 
 [dev-dependencies]
 icn-identity = { path = "../../common/icn-identity" }

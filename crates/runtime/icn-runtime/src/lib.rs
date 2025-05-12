@@ -593,7 +593,7 @@ impl Runtime {
         if let (Some(url), Some(identity)) = (context.reputation_service_url(), context.identity()) {
             let updater = Arc::new(HttpReputationUpdater::new(
                 url.clone(),
-                identity.did().clone(),
+                identity.did.clone(),
             ));
             runtime = runtime.with_reputation_updater(updater);
             tracing::info!("Configured reputation updater with service URL: {}", url);
