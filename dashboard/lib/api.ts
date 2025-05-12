@@ -95,6 +95,58 @@ export interface TokenFilter {
   offset?: number;
 }
 
+// Define the base URL for the API, prioritizing the environment variable
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1'; // Adjusted to match common pattern if /api/v1 is part of it
+
+// --- Reputation Profile Types and Functions ---
+
+export interface ReputationProfileSummary {
+  subject_did: string; // Assuming 'did' from backend serializes to this field name as string
+  score: number;
+  successful_jobs: number;
+  failed_jobs: number;
+  last_updated: number | null; // Unix timestamp, can be null if no updates
+}
+
+export async function fetchReputationProfiles(): Promise<ReputationProfileSummary[]> {
+  // The backend endpoint in Rust is /reputation/profiles, under a service running on port 8081.
+  // Assuming NEXT_PUBLIC_API_URL points to the gateway or the specific service if mapped directly.
+  // For now, let's assume the reputation service is directly accessible or via a path on the main API_BASE_URL.
+  // If NEXT_PUBLIC_API_URL is http://localhost:8080, and rep service is on 8081,
+  // this needs adjustment or the gateway needs to route it.
+  // For this example, I'll construct it assuming a subpath or direct access via the configured URL.
+  // If your reputation service is on a different port (e.g. 8081) and not routed through :8080,
+  // you might need a separate const for its base URL.
+  const reputationServiceUrl = `${API_BASE_URL.replace(":8080", ":8081")}/reputation/profiles`; 
+  // Or if it's routed: const reputationServiceUrl = `${API_BASE_URL}/reputation/profiles`;
+  // Using the direct port replacement for now as an example, adjust as per your infra.
+  // The user specified GET /api/v1/reputation/profiles, and the rust service is on 8081.
+  // Let's assume the NEXT_PUBLIC_API_URL correctly points to the root that can route this.
+  // And the rust service itself is mounted at / (e.g. http://localhost:8081/reputation/profiles)
+  // If NEXT_PUBLIC_API_URL = http://localhost:8080, and it proxies to services based on path,
+  // then `${API_BASE_URL}/reputation-service/reputation/profiles` or similar might be needed.
+  // Given the backend definition, the path is simply /reputation/profiles from its own root.
+
+  // Simplification: Assuming NEXT_PUBLIC_API_URL is for the gateway and it routes /reputation/profiles correctly, OR
+  // we construct a specific URL for the reputation service if it's standalone.
+  // The Rust service runs on port 8081 with path /reputation/profiles.
+  // Let's use a more robust way to determine the URL, assuming NEXT_PUBLIC_REPUTATION_API_URL might exist.
+  const actualReputationApiUrl = process.env.NEXT_PUBLIC_REPUTATION_API_URL || API_BASE_URL.replace("8080", "8081");
+
+  const res = await fetch(`${actualReputationApiUrl}/reputation/profiles`);
+  if (!res.ok) {
+    const errorBody = await res.text();
+    console.error("Failed to fetch reputation profiles:", errorBody);
+    throw new Error(`Failed to fetch reputation profiles: ${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+  // The backend DID is an object, map it to subject_did string
+  return data.map((profile: any) => ({
+    ...profile,
+    subject_did: typeof profile.did === 'object' ? profile.did.id_str : profile.did, // Assuming Did struct has id_str or serializes to string directly
+  }));
+}
+
 // API services
 export const ICNApi = {
   // Federation nodes

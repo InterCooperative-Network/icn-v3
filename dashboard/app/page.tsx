@@ -4,6 +4,7 @@ import { TokenStats } from '../components/dashboard/token-stats';
 import { FederationStatus } from '../components/dashboard/federation-status';
 import { ReceiptCharts } from '../components/dashboard/receipt-charts';
 import { TokenCharts } from '../components/dashboard/token-charts';
+import { ReputationLeaderboard } from "@/components/dashboard/reputation-leaderboard";
 
 export default function Home() {
   return (
@@ -26,6 +27,11 @@ export default function Home() {
           <ReceiptCharts />
           <TokenCharts />
         </div>
+
+        <div className="mt-6">
+          <ReputationLeaderboard />
+        </div>
+
       </div>
     </Layout>
   );
