@@ -1,12 +1,13 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::info;
+use std::fs;
+use tokio::signal;
+use tracing::{info, error, Level};
 use tracing_subscriber::{fmt, EnvFilter};
 
-// Re-export or use items from lib.rs
-// Adjust this based on what needs to be called from main
-// use icn_runtime::Runtime;
+// Import necessary items from the library crate
+use icn_runtime::{Runtime, config::RuntimeConfig};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -18,29 +19,57 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing subscriber
-    fmt::Subscriber::builder()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
+    // Parse command-line arguments
     let args = Args::parse();
 
-    info!("Starting ICN Runtime Node...");
+    // Load configuration from file
     info!("Loading configuration from: {:?}", args.config);
+    let config_contents = fs::read_to_string(&args.config)
+        .with_context(|| format!("Failed to read configuration file: {:?}", args.config))?;
+    let config: RuntimeConfig = toml::from_str(&config_contents)
+        .with_context(|| format!("Failed to parse configuration file: {:?}", args.config))?;
 
-    // --- Placeholder for Runtime Initialization ---
-    // let storage = ... // Initialize your storage backend
-    // let runtime_context = ... // Build your runtime context (possibly loading from args.config)
-    // let mut runtime = icn_runtime::Runtime::with_context(storage, runtime_context);
-    
-    // --- Placeholder for starting the node's main loop/service ---
-    // runtime.start_service().await?;
+    // Initialize tracing subscriber based on config or default
+    let log_level_str = config.log_level.as_deref().unwrap_or("info"); 
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(log_level_str))
+        .unwrap_or_else(|_| EnvFilter::new(Level::INFO.to_string()));
 
-    info!("ICN Runtime Node initialized (stub - add actual runtime logic)");
-    
-    // Keep the process running (replace with actual service logic)
-    tokio::signal::ctrl_c().await?;
-    info!("Shutting down ICN Runtime Node...");
+    fmt::Subscriber::builder()
+        .with_env_filter(filter)
+        .init();
+
+    info!("Starting ICN Runtime Node...");
+    info!("Using Node DID: {}", config.node_did);
+    info!("Storage Path: {:?}", config.storage_path);
+
+    // --- Runtime Initialization ---
+    // TODO: Replace `Runtime::from_config` with the actual implementation
+    //       that uses the loaded `config`.
+    match Runtime::from_config(config.clone()).await {
+        Ok(runtime) => {
+            info!("Runtime initialized successfully.");
+
+            // --- Start the node's main loop/service ---
+            // This will likely involve starting background tasks, listening for jobs, etc.
+            tokio::select! {
+                res = runtime.run_forever() => {
+                    if let Err(e) = res {
+                        error!("Runtime exited with error: {:?}", e);
+                    }
+                }
+                _ = signal::ctrl_c() => {
+                    info!("Received shutdown signal (Ctrl+C).");
+                }
+            }
+
+            info!("Shutting down ICN Runtime Node...");
+        }
+        Err(e) => {
+            error!("Failed to initialize runtime: {:?}", e);
+            return Err(e);
+        }
+    }
 
     Ok(())
 } 

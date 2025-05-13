@@ -18,10 +18,11 @@ use std::collections::HashMap;
 use chrono::{Utc, DateTime};
 use cid::Cid;
 use icn_types::mesh::{MeshJob, JobStatus as IcnJobStatus, MeshJobParams, QoSProfile, WorkflowType};
-use icn_mesh_receipts::{sign_receipt_in_place, ExecutionReceipt};
+use icn_mesh_receipts::{sign_receipt_in_place, ExecutionReceipt as MeshExecutionReceipt};
 use icn_mesh_protocol::P2PJobStatus;
 use icn_identity::ScopeKey;
 use tracing::info;
+use std::path::PathBuf;
 
 use crate::config::RuntimeConfig;
 
@@ -215,7 +216,7 @@ pub trait RuntimeStorage: Send + Sync {
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>>;
 
     /// Store an execution receipt
-    async fn store_receipt(&self, receipt: &ExecutionReceipt) -> Result<String>;
+    async fn store_receipt(&self, receipt: &MeshExecutionReceipt) -> Result<String>;
 
     /// Anchor a CID to the DAG
     async fn anchor_to_dag(&self, cid: &str) -> Result<String>;
@@ -300,7 +301,7 @@ impl Runtime {
     }
 
     /// Execute a proposal by ID
-    pub async fn execute_proposal(&mut self, proposal_id: &str) -> Result<ExecutionReceipt> {
+    pub async fn execute_proposal(&mut self, proposal_id: &str) -> Result<MeshExecutionReceipt> {
         let mut proposal = self.storage.load_proposal(proposal_id).await?;
 
         if proposal.state != ProposalState::Approved {
@@ -342,7 +343,7 @@ impl Runtime {
             (ResourceType::Memory, 256),
         ].iter().cloned().collect();
 
-        let mut receipt = ExecutionReceipt {
+        let mut receipt = MeshExecutionReceipt {
             job_id: job_id.clone(),
             executor: executor_did.clone(),
             status: IcnJobStatus::Completed,
@@ -371,7 +372,7 @@ impl Runtime {
     }
 
     /// Load and execute a WASM module from a file (Simplified for test/dev)
-    pub async fn execute_wasm_file(&mut self, path: &Path) -> Result<ExecutionReceipt> {
+    pub async fn execute_wasm_file(&mut self, path: &Path) -> Result<MeshExecutionReceipt> {
         let _wasm_bytes = std::fs::read(path)?;
         
         let fake_resource_map: HashMap<ResourceType, u64> = [
@@ -385,7 +386,7 @@ impl Runtime {
         let execution_end_time_dt = Utc::now();
         let execution_end_time = execution_end_time_dt.timestamp();
 
-        let receipt = ExecutionReceipt {
+        let receipt = MeshExecutionReceipt {
             job_id,
             executor: executor_did,
             status: IcnJobStatus::Completed,
@@ -573,7 +574,7 @@ impl Runtime {
         _wasm_bytes: &[u8],
         _params: &MeshJobParams,
         _originator: &Did,
-    ) -> Result<ExecutionReceipt> {
+    ) -> Result<MeshExecutionReceipt> {
         // This is a stub implementation.
         // Replace with actual job execution logic eventually.
         let job_id = Uuid::new_v4().to_string();
@@ -584,7 +585,7 @@ impl Runtime {
         let mut resource_usage = HashMap::new();
         resource_usage.insert(ResourceType::Cpu, 10);
 
-        Ok(ExecutionReceipt {
+        Ok(MeshExecutionReceipt {
             job_id,
             executor: executor_did,
             status: IcnJobStatus::Completed,
@@ -618,6 +619,44 @@ impl Runtime {
         runtime
     }
     
+    /// Construct a Runtime instance from configuration.
+    pub async fn from_config(config: RuntimeConfig) -> Result<Self> {
+        info!("Initializing Runtime from config: {:?}", config);
+
+        // TODO: Initialize storage based on config.storage_path
+        let storage = Arc::new(tests::MemStorage::new()); // Placeholder using test storage
+        info!("Using storage path: {:?}", config.storage_path);
+
+        // TODO: Load identity keypair from config.key_path
+        let identity = if let Some(key_path) = &config.key_path {
+            info!("Loading keypair from: {:?}", key_path);
+            // Placeholder: Replace with actual key loading logic
+            // KeyPair::from_file(key_path)? 
+            None // Temporarily None
+        } else {
+            info!("No keypair path specified, using default or generating new one (if applicable)");
+            None
+        };
+
+        // Initialize RuntimeContext
+        let mut context_builder = RuntimeContextBuilder::new();
+        context_builder = context_builder.with_executor_id(config.node_did.clone());
+        if let Some(identity) = identity {
+             context_builder = context_builder.with_identity(identity);
+        }
+        if let Some(url) = &config.reputation_service_url {
+             context_builder = context_builder.with_reputation_service_url(url.clone());
+        }
+        let context = context_builder.build();
+        
+        // Initialize basic Runtime using `new` or `with_context`
+        let mut runtime = Runtime::with_context(storage, context);
+        runtime.config = config; // Store the loaded config
+        
+        info!("Runtime constructed from configuration.");
+        Ok(runtime)
+    }
+    
     /// Main loop for the runtime node service (placeholder)
     pub async fn run_forever(&self) -> Result<()> {
         info!("Runtime node started. Awaiting jobs... (Config: {:?})", self.config);
@@ -637,7 +676,7 @@ pub mod dsl {
     /// Trait for CCL DSL executables
     pub trait DslExecutable {
         /// Execute the DSL with the given runtime
-        fn execute(&self, runtime: &Runtime) -> Result<ExecutionReceipt>;
+        fn execute(&self, runtime: &Runtime) -> Result<MeshExecutionReceipt>;
     }
 }
 
@@ -699,7 +738,7 @@ mod tests {
                 .ok_or_else(|| anyhow!("WASM module not found"))
         }
 
-        async fn store_receipt(&self, receipt: &ExecutionReceipt) -> Result<String> {
+        async fn store_receipt(&self, receipt: &MeshExecutionReceipt) -> Result<String> {
             let receipt_json = serde_json::to_string(receipt)?;
             let receipt_cid = format!("receipt-{}", Uuid::new_v4());
             let mut receipts_map = self.receipts.lock().unwrap();
@@ -858,12 +897,8 @@ pub async fn execute_mesh_job(
     mesh_job: MeshJob,
     local_keypair: &IcnKeyPair,
     runtime_context: Arc<RuntimeContext>,
-) -> Result<ExecutionReceipt, anyhow::Error> {
-    tracing::info!(
-        "[RuntimeExecute] Attempting to execute job_id: {}, wasm_cid: {}",
-        mesh_job.job_id,
-        mesh_job.params.wasm_cid
-    );
+) -> Result<MeshExecutionReceipt, anyhow::Error> {
+    info!(job_id = %mesh_job.job_id, cid = %mesh_job.params.wasm_cid, "Attempting to execute mesh job");
 
     // ------------------- Mana check & consumption -------------------
     let executor_did_str = local_keypair.did.to_string();
@@ -915,7 +950,7 @@ pub async fn execute_mesh_job(
     let execution_end_time_unix = execution_end_time_dt.timestamp();
     let dummy_cid_str = "bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
-    let mut receipt = ExecutionReceipt {
+    let mut receipt = MeshExecutionReceipt {
         job_id: mesh_job.job_id.clone(),
         executor: local_keypair.did.clone(),
         status: IcnJobStatus::Completed,
