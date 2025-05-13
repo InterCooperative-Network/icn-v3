@@ -3,6 +3,9 @@ use prometheus::{Histogram, register_histogram};
 use prometheus::{IntCounterVec, register_int_counter_vec};
 use prometheus::{HistogramVec, register_histogram_vec};
 use lazy_static::lazy_static;
+use std::sync::Arc;
+use icn_economics::{ScopeKey, ManaMetricsHook};
+use prometheus::{GaugeVec, register_gauge_vec, Registry};
 
 // Define standard label names
 const LABEL_COOP_ID: &str = "coop_id";
@@ -133,4 +136,37 @@ pub fn observe_anchor_receipt_duration(duration_secs: f64, coop_id: &str, commun
         community_id,
         issuer_did
     ]).observe(duration_secs);
+}
+
+// PrometheusManaMetrics and its implementations as per user's latest request
+#[derive(Debug)]
+pub struct PrometheusManaMetrics {
+    gauge: GaugeVec,
+}
+
+impl PrometheusManaMetrics {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            gauge: register_gauge_vec!(
+                "icn_mana_pool_balance",
+                "Current mana balance per scope",
+                &["scope_type", "scope_id"]
+            )
+            .expect("Failed to register mana pool balance gauge"),
+        })
+    }
+}
+
+impl ManaMetricsHook for PrometheusManaMetrics {
+    fn update_balance(&self, scope: &ScopeKey, balance: u64) {
+        let (scope_type, scope_id_val) = match scope {
+            ScopeKey::Individual(did) => ("individual".to_string(), did.to_string()),
+            ScopeKey::Cooperative(id) => ("cooperative".to_string(), id.clone()),
+            ScopeKey::Community(id) => ("community".to_string(), id.clone()),
+            ScopeKey::Federation(id) => ("federation".to_string(), id.clone()),
+        };
+        self.gauge
+            .with_label_values(&[&scope_type, &scope_id_val])
+            .set(balance as f64);
+    }
 } 
