@@ -13,6 +13,7 @@ pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submi
 // Using core::ffi::c_void for potential opaque handles in the future, though not strictly used by current function signatures.
 // use core::ffi::c_void;
 use serde::Serialize;
+use async_trait::async_trait;
 // No wasmer imports needed
 
 // Need Display for Trap::new
@@ -22,7 +23,8 @@ use thiserror::Error;
 // use wasmtime::{Caller, Linker};
 use anyhow::Error as AnyhowError;
 
-use icn_types::mesh::{JobStatus, StageInputSource, WorkflowDefinition, WorkflowStage, WorkflowType, JobPermissions, JobContext, MeshExecutionReceipt as MeshReceipt, OrgScopeIdentifier};
+// Corrected import: only include types that exist in icn_types::mesh
+use icn_types::mesh::{JobStatus, StageInputSource, WorkflowType, OrgScopeIdentifier, MeshJobParams};
 // use wasmtime::Memory; // Commenting out as per new compiler warning
 use std::sync::Arc;
 // use wasmtime::AsContextMut; // Commenting out as per new compiler warning
@@ -37,6 +39,10 @@ use std::slice;
 use std::str;
 
 // --- Helper Enums & Structs for ABI Communication ---
+
+/// Placeholder for JobPermissions if not defined in icn_types::mesh
+#[derive(Debug, Clone, Default)]
+pub struct JobPermissions {} // Defined a placeholder
 
 /// Specifies the type of data contained in a `ReceivedInputInfo` structure,
 /// indicating whether interactive input is provided inline or as a CID.
@@ -86,12 +92,10 @@ pub enum P2PJobStatus {
 impl From<JobStatus> for P2PJobStatus {
     fn from(status: JobStatus) -> Self {
         match status {
-            JobStatus::Pending => P2PJobStatus::Pending,
             JobStatus::InProgress => P2PJobStatus::InProgress,
             JobStatus::Completed => P2PJobStatus::Completed,
             JobStatus::Failed => P2PJobStatus::Failed,
             JobStatus::Cancelled => P2PJobStatus::Cancelled,
-            JobStatus::Unknown => P2PJobStatus::Unknown,
         }
     }
 }
@@ -151,13 +155,12 @@ pub struct AbiBytes {
     pub len: u32,
 }
 
-// Placeholder for JobExecutionContext if not defined elsewhere that host_env can access.
 // This is a simplified version. The actual one might be more complex and involve Arcs/Mutexes.
 pub struct MinimalJobContext {
     pub job_id: String,
     pub originator_did: String, // Assuming DID is a string here
-    pub permissions: JobPermissions,
-    pub workflow_definition: Option<WorkflowDefinition>,
+    pub permissions: JobPermissions, // Using the local placeholder
+    pub workflow_params: Option<MeshJobParams>, // Changed from WorkflowDefinition to MeshJobParams
     pub current_stage_index: Option<usize>,
     pub stage_outputs: HashMap<String, String>, // Stage ID to output CID
     pub interactive_input_buffer: Option<Vec<u8>>,
