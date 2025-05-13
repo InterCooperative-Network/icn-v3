@@ -18,11 +18,16 @@ use crate::metrics;
 pub struct ReputationScoringConfig {
     pub mana_cost_weight: f64, // Weight factor for mana cost scoring (e.g., numerator in 1/cost)
     pub failure_penalty: f64, // Flat penalty score for failed submissions
+    pub max_positive_score: f64, // Maximum possible score delta for a successful, mana-based update
 }
 
 impl Default for ReputationScoringConfig {
     fn default() -> Self {
-        Self { mana_cost_weight: 100.0, failure_penalty: -25.0 } // Default weight and penalty
+        Self { 
+            mana_cost_weight: 100.0, 
+            failure_penalty: -25.0, 
+            max_positive_score: 5.0, // Default cap for positive scores
+        }
     }
 }
 
@@ -68,7 +73,7 @@ impl ReputationUpdater for HttpReputationUpdater {
     async fn submit_receipt_based_reputation(
         &self, 
         receipt: &RuntimeExecutionReceipt, 
-        is_successful: bool, // Use the parameter
+        is_successful: bool,
     ) -> Result<()> {
         metrics::record_reputation_update_attempt();
 
@@ -77,23 +82,26 @@ impl ReputationUpdater for HttpReputationUpdater {
             "missing_cid".to_string()
         });
 
-        // Use the passed is_successful status
         let success = is_successful;
+        let score_delta;
 
-        let score_delta = if success {
-            match receipt.metrics.mana_cost {
-                Some(cost) if cost > 0 => self.config.mana_cost_weight / (cost as f64),
-                _ => 0.0,
-            }
+        if success {
+            score_delta = match receipt.metrics.mana_cost {
+                Some(cost) if cost > 0 => {
+                    let raw_score = self.config.mana_cost_weight / (cost as f64);
+                    raw_score.min(self.config.max_positive_score) // Apply the cap
+                },
+                _ => 0.0, // No score change if mana cost is zero or None, even on success
+            };
         } else {
-            self.config.failure_penalty
+            score_delta = self.config.failure_penalty;
         };
 
         let record = ReputationRecord {
             subject: receipt.issuer.clone(),
             anchor: anchor_str,
             score_delta,
-            success, // Reflect the success status in the record
+            success,
             mana_cost: receipt.metrics.mana_cost,
             timestamp: receipt.timestamp,
         };

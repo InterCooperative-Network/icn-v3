@@ -326,13 +326,18 @@ async fn test_http_reputation_updater_submits_correct_payload() -> Result<()> {
     let server = MockServer::start();
     let expected_subject = "did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345".to_string();
     let expected_anchor = "cid-abc123".to_string();
-    let expected_mana_cost = Some(1000);
+    let expected_mana_cost = Some(1000); // Cost that likely won't hit the cap
     let expected_timestamp = 1_700_000_000;
+    
     let config = ReputationScoringConfig {
         mana_cost_weight: 100.0,
         failure_penalty: -25.0,
+        max_positive_score: 5.0, // Set a cap for the test
     };
-    let expected_score_delta = config.mana_cost_weight / expected_mana_cost.unwrap() as f64;
+
+    let raw_score = config.mana_cost_weight / expected_mana_cost.unwrap() as f64;
+    let expected_score_delta = raw_score.min(config.max_positive_score);
+
     let mock = server.mock(|when, then| {
         when.method(POST)
             .path("/reputation/records")
@@ -340,12 +345,13 @@ async fn test_http_reputation_updater_submits_correct_payload() -> Result<()> {
                 "subject": expected_subject,
                 "anchor": expected_anchor,
                 "mana_cost": expected_mana_cost,
-                "score_delta": expected_score_delta,
+                "score_delta": expected_score_delta, // Will be 0.1, not capped
                 "timestamp": expected_timestamp,
                 "success": true
             }));
         then.status(200);
     });
+
     let receipt = RuntimeExecutionReceipt {
         issuer: expected_subject.clone(),
         proposal_id: "prop-1".to_string(),
@@ -355,19 +361,81 @@ async fn test_http_reputation_updater_submits_correct_payload() -> Result<()> {
         metrics: RuntimeExecutionMetrics {
             host_calls: 5,
             io_bytes: 2048,
-            mana_cost: expected_mana_cost, // Corrected: Added mana_cost
+            mana_cost: expected_mana_cost,
         },
         resource_usage: vec![],
         timestamp: expected_timestamp,
         receipt_cid: Some(expected_anchor.clone()),
         signature: Some(vec![0u8; 64]),
         id: "receipt-id-123".to_string(),
-        dag_epoch: Some(4), // Corrected: Added dag_epoch
+        dag_epoch: Some(4),
     };
+
     let updater = HttpReputationUpdater::new_with_config(
         server.url(""),
-        Did::from_str(&expected_subject).unwrap(),
-        config,
+        Did::from_str(&expected_subject)?,
+        config.clone(), // Clone config for this updater
+    );
+    updater.submit_receipt_based_reputation(&receipt, true).await?;
+    mock.assert_hits(1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_reputation_updater_score_capping() -> Result<()> {
+    let server = MockServer::start();
+    let subject = "did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345".to_string();
+    let anchor = "cid-cap-test".to_string();
+    let timestamp = 1_700_000_002;
+    
+    // Config with a specific cap
+    let config_for_capping = ReputationScoringConfig {
+        mana_cost_weight: 100.0,      // Same weight
+        failure_penalty: -25.0,
+        max_positive_score: 2.0,      // Lower cap to ensure it's hit
+    };
+
+    // Mana cost low enough that raw_score (100.0 / 10.0 = 10.0) would exceed max_positive_score (2.0)
+    let mana_cost_for_capping = Some(10);
+    let expected_capped_score_delta = config_for_capping.max_positive_score; // Should be 2.0
+
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/reputation/records")
+            .json_body_partial(serde_json::json!({
+                "subject": subject,
+                "anchor": anchor,
+                "mana_cost": mana_cost_for_capping,
+                "score_delta": expected_capped_score_delta, // Expect the capped score
+                "timestamp": timestamp,
+                "success": true
+            }));
+        then.status(200);
+    });
+
+    let receipt = RuntimeExecutionReceipt {
+        issuer: subject.clone(),
+        proposal_id: "prop-cap".to_string(),
+        wasm_cid: "wasm-cap".to_string(),
+        ccl_cid: "ccl-cap".to_string(),
+        anchored_cids: vec![],
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 1,
+            io_bytes: 128,
+            mana_cost: mana_cost_for_capping,
+        },
+        resource_usage: vec![],
+        timestamp,
+        receipt_cid: Some(anchor.clone()),
+        signature: Some(vec![0u8; 64]),
+        id: "receipt-cap-id".to_string(),
+        dag_epoch: Some(6),
+    };
+
+    let updater = HttpReputationUpdater::new_with_config(
+        server.url(""),
+        Did::from_str(&subject)?,
+        config_for_capping, // Use the specific config for this test
     );
     updater.submit_receipt_based_reputation(&receipt, true).await?;
     mock.assert_hits(1);
