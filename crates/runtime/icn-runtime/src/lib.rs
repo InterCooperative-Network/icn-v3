@@ -674,6 +674,9 @@ impl Runtime {
         metrics::observe_anchor_receipt_duration(duration.as_secs_f64(), coop_id_label, community_id_label, issuer_did_label);
         if let Some(mana_cost) = receipt.metrics.mana_cost {
             metrics::record_receipt_mana_cost(mana_cost, coop_id_label, community_id_label, issuer_did_label);
+            metrics::MANA_COST_HISTOGRAM
+                .with_label_values(&[receipt.issuer.as_str()]) // executor_did is receipt.issuer
+                .observe(mana_cost as f64);
         }
 
         Ok(final_anchor_cid)
@@ -925,9 +928,9 @@ impl Runtime {
             wasm_cid: wasm_cid_placeholder,
             ccl_cid: ccl_cid_placeholder,
             metrics: RuntimeExecutionMetrics { // Placeholder metrics - Align with new structure
-                host_calls: 0,
-                io_bytes: 0,
-                mana_cost: None, // Set mana_cost to None for now
+                host_calls: 0, // Placeholder
+                io_bytes: 0,   // Placeholder
+                mana_cost: receipt.mana_cost, // Read from incoming MeshExecutionReceipt
             },
             anchored_cids: vec![], // Placeholder anchored CIDs
             resource_usage: resource_usage_vec,
@@ -1076,7 +1079,13 @@ pub async fn execute_mesh_job(
         }
         let balance_after = mana_mgr.balance(&scope_key).unwrap_or(0);
         tracing::info!("[RuntimeExecute] Consumed {} mana for {:?} ({} -> {})", cost, scope_key, balance_before, balance_after);
-    }
+    } // <-- End of mana_mgr lock scope
+
+    // IMPORTANT: Capture the calculated `cost` here after the lock is released.
+    // We need to re-calculate it or pass it out from the block above.
+    // Re-calculating is simpler if `mesh_job` is still available.
+    let declared_cost_again: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
+    let final_cost_spent = if declared_cost_again > 0 { declared_cost_again } else { 50 }; // Fallback cost
 
     tracing::info!("[RuntimeExecute] STUB: Simulating WASM execution for job_id: {}", mesh_job.job_id);
     tokio::time::sleep(std::time::Duration::from_millis(100 + 0 as u64 )).await; // Replaced Ginkou
@@ -1098,6 +1107,7 @@ pub async fn execute_mesh_job(
         result_data_cid: Some(dummy_cid_str.to_string()),
         logs_cid: Some(dummy_cid_str.to_string()),
         resource_usage: resource_usage_actual,
+        mana_cost: Some(final_cost_spent), // Populate the new field
         execution_start_time: execution_start_time_unix as u64,
         execution_end_time: execution_end_time_unix as u64,
         execution_end_time_dt,

@@ -54,6 +54,15 @@ lazy_static! {
             &[LABEL_COOP_ID, LABEL_COMMUNITY_ID, LABEL_ISSUER_DID],
             vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
         ).unwrap();
+
+    // --- Mana Metrics ---
+    pub static ref MANA_COST_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "icn_mana_cost_distribution",
+        "Distribution of mana costs by executor",
+        &["executor_did"], // Label is executor_did
+        // Buckets suitable for typical mana costs (adjust if needed)
+        vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0]
+    ).unwrap();
 }
 
 // --- Helper Functions for Reputation Metrics ---

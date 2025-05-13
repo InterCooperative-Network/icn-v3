@@ -47,6 +47,8 @@ pub struct ExecutionReceipt {
     pub logs_cid: Option<String>,
     /// Reported resource usage for the job.
     pub resource_usage: HashMap<ResourceType, u64>,
+    /// Optional mana cost incurred for the job execution.
+    pub mana_cost: Option<u64>,
     /// Unix timestamp (seconds since epoch) when the job execution started.
     pub execution_start_time: u64,
     /// Unix timestamp (seconds since epoch) when the job execution ended.
@@ -130,6 +132,7 @@ mod tests {
             signature: vec![1, 2, 3, 4],
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         };
         
         let json = serde_json::to_string(&receipt).unwrap();
@@ -159,6 +162,7 @@ mod tests {
             signature: vec![1, 2, 3, 4],
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         };
         
         let cbor = serde_cbor::to_vec(&receipt).unwrap();
@@ -190,6 +194,7 @@ mod tests {
             signature: vec![9, 8, 7, 6],
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         };
         
         // Generate CID
