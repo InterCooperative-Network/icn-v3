@@ -1,10 +1,16 @@
 use serde::{Deserialize, Serialize};
 use crate::resource::ResourceType;
-use icn_identity::Did; // Assuming Did is available from icn_identity
+use icn_identity::Did; // Correct source for Did
 use crate::org::{CooperativeId, CommunityId}; // Assuming these are in icn_types::org
 use crate::jobs::policy::ExecutionPolicy; // New import
-use crate::error::MeshError;
-use crate::trust::TrustBundleId;
+// use crate::identity::Did; // Removed erroneous/duplicate import
+// use crate::runtime_receipt::RuntimeExecutionReceipt; // Removed, as it does not appear to be used in this file
+use std::collections::HashMap;
+
+// Potential unused imports to be checked by compiler, remove if confirmed unused by later build.
+// Based on previous compiler output, these were unused:
+// use crate::error::MeshError;
+// use crate::trust::TrustBundleId;
 
 /// Quality of Service profile for a Mesh Job
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

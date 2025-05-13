@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 // Assuming TokenAmount is accessible. If it's defined in crate::jobs, this import is appropriate.
 // If TokenAmount becomes a more globally used type, it might move to a more central location.
 use crate::jobs::TokenAmount;
-use crate::crypto::Signature; // Import the Signature struct
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReputationProfile {
@@ -48,7 +47,6 @@ pub enum ReputationUpdateEvent {
         job_id: Option<Cid>,
         details: String, // Description of the dishonest act
         penalty_amount: Option<TokenAmount>, // Optional direct token penalty
-        score_impact: f64, // Direct impact on computed_score, if not derived otherwise
     },
     StakeIncreased {
         by_amount: TokenAmount,
@@ -61,7 +59,6 @@ pub enum ReputationUpdateEvent {
     EndorsementReceived {
         from: Did,
         context: Option<String>, // e.g., "Completed Project X successfully"
-        weight: Option<f32>,    // Optional weight of the endorsement
     },
     EndorsementRevoked {
         from: Did,
@@ -120,7 +117,7 @@ impl ReputationProfile {
                 self.total_jobs = self.total_jobs.saturating_add(1);
             }
 
-            DishonestyPenalty { score_impact, .. } => { // Added score_impact from event to be used
+            DishonestyPenalty { .. } => { // Added score_impact from event to be used
                 self.dishonesty_events = self.dishonesty_events.saturating_add(1);
                 // If score_impact is intended to directly modify computed_score, it would happen here or in recompute_score
                 // For now, just tracking the event count. The direct impact could be part of recompute_score logic.
@@ -134,7 +131,7 @@ impl ReputationProfile {
                 self.current_stake = Some(*new_total_stake);
             }
 
-            EndorsementReceived { from, weight, .. } => { // Added weight from event
+            EndorsementReceived { from, .. } => { // Added weight from event
                 if !self.endorsements.contains(from) {
                     self.endorsements.push(from.clone());
                 }

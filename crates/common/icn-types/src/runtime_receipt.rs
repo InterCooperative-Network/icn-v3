@@ -1,18 +1,17 @@
 use serde::{Serialize, Deserialize};
-use anyhow::{Result, Context, bail};
+use anyhow::{Result};
 use icn_identity::Did; // Assuming Did type is used for issuer
-use std::str::FromStr;
-use ed25519_dalek::{Signature, VerifyingKey}; // For signature verification
+// use std::str::FromStr; // Removed unused import
+// use ed25519_dalek::{Signature, VerifyingKey}; // Removed unused imports
 // Import the new trait and payload
 use crate::receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
-// Import bincode if needed for tests (it was used in the old verify/signing logic)
-use bincode;
+// use bincode; // Removed unused import
 
 // NEW IMPORTS for CID generation
 use cid::{Cid, Version}; // Simplified cid import
-use multihash::{Code as MultihashCode, MultihashDigest}; // Assuming multihash is a direct dependency like in icn-mesh-receipts
+use cid::multihash::{Code as MultihashCode, MultihashDigest}; // CORRECTED IMPORT for multihash types
 use serde_cbor;
-use thiserror; // Added for the error type
+use thiserror::Error; // Added for the error type
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct RuntimeExecutionMetrics {
