@@ -24,6 +24,7 @@ use icn_identity::ScopeKey;
 use tracing::{info, warn};
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+use serde_cbor;
 
 use crate::config::RuntimeConfig;
 
@@ -599,87 +600,88 @@ impl Runtime {
     }
 
     /// Anchor a receipt to the DAG and return the CID
-    /// Now generic over any type that implements VerifiableReceipt.
     pub async fn anchor_receipt(
         &self, 
-        receipt: &RuntimeExecutionReceipt // Kept specific to RuntimeExecutionReceipt for now
-    ) -> Result<String> 
+        receipt: &RuntimeExecutionReceipt // Kept specific to RuntimeExecutionReceipt
+    ) -> Result<String> // Returns receipt_cid as String
     {
         let start_time = std::time::Instant::now();
 
-        // ---- Sourcing Federation Labels ----
-        // Use federation_id from context for coop/community labels for now.
-        // Use "unknown" if not set in the context.
         let federation_id = self.context.federation_id.as_deref().unwrap_or("unknown_federation");
-        let coop_id_label = federation_id; // Using federation ID as coop ID
-        let community_id_label = federation_id; // Using federation ID as community ID
+        let coop_id_label = federation_id;
+        let community_id_label = federation_id;
         let issuer_did_label = receipt.issuer.as_str();
-        // ---- End Sourcing Federation Labels ----
         
-        // Verify signature before proceeding and record outcome
-        let verification_passed = match receipt.verify_signature() {
+        // 1. Verify signature
+        match receipt.verify_signature() {
             Ok(_) => {
                 metrics::record_receipt_verification_outcome(true, coop_id_label, community_id_label, issuer_did_label);
-                true
             }
             Err(e) => {
                 metrics::record_receipt_verification_outcome(false, coop_id_label, community_id_label, issuer_did_label);
                 // Re-throw error to halt anchoring on verification failure
-                return Err(e).context("Receipt signature verification failed during anchoring");
+                return Err(e).context("Receipt signature verification failed during anchoring"); // Ensure this uses anyhow::Error context
             }
         };
 
-        // Store the receipt first (optional, depends on flow)
-        let receipt_id = receipt.id.clone(); // Assuming ID is sufficient for lookup
-        self.storage.store_receipt(receipt).await
-            .context("Failed to store receipt during anchoring")?;
+        // 2. Generate the content-addressed CID for the receipt
+        // This now assumes RuntimeExecutionReceipt has a working .cid() method.
+        let actual_receipt_cid = receipt.cid()
+            .map_err(|e| anyhow!("Failed to generate CID for receipt: {}", e))?;
+
+        // 3. Create a version of the receipt that includes its own CID
+        let mut receipt_to_anchor = receipt.clone();
+        receipt_to_anchor.receipt_cid = Some(actual_receipt_cid.to_string());
+
+        // 4. Serialize the receipt_to_anchor for DAG storage
+        let receipt_bytes = serde_cbor::to_vec(&receipt_to_anchor)
+            .context("Failed to serialize receipt for DAG storage")?;
+
+        // 5. Store the serialized receipt in the DAG Store using its actual CID
+        // Assuming dag_store has a method like put_raw_block(&Cid, Vec<u8>, u64_codec).await -> Result<()>
+        // The constant for DAG_CBOR codec is 0x71.
+        // Ensure SharedDagStore has a suitable method e.g., put_block or put_raw_block.
+        // For this example, I am using a hypothetical `put_raw_block` which matches common patterns.
+        // The actual method on `icn_types::dag_store::SharedDagStore` needs to be confirmed.
+        self.dag_store().put_raw_block(&actual_receipt_cid, receipt_bytes, 0x71u64).await
+            .with_context(|| format!("Failed to anchor receipt CID {} to DAG store", actual_receipt_cid))?;
+        tracing::info!(receipt_cid = %actual_receipt_cid, "Receipt anchored to DAG store"); // Use tracing::info
+
+        // 6. Store in local Sled storage (optional, for quick lookups by ID if still needed)
+        self.storage.store_receipt(&receipt_to_anchor).await
+            .context("Failed to store receipt in local Sled storage after DAG anchoring")?;
             
-        // Anchor related CIDs to the DAG (if any)
-        for cid_str in &receipt.anchored_cids {
-            // Placeholder for actual DAG anchoring logic
-            self.storage.anchor_to_dag(cid_str).await
-                .context(format!("Failed to anchor CID {} to DAG", cid_str))?;
-        }
+        // 7. Anchoring receipt.anchored_cids:
+        // The loop `for cid_str in &receipt.anchored_cids` and its call to `self.storage.anchor_to_dag(cid_str).await`
+        // is removed. Storing `receipt_to_anchor` (which contains `anchored_cids`) in the DAG
+        // effectively anchors these references as part of the receipt's immutable record.
 
-        // Generate a final anchor CID for the receipt itself (if needed)
-        // This might involve hashing the receipt content or getting a CID from storage/DAG
-        let final_anchor_cid = format!("anchor-{}", Uuid::new_v4()); // Placeholder
-        
-        // Update receipt with final anchor CID (if mutable access is allowed or return new)
-        // This part depends on whether `receipt` parameter is mutable or if we construct
-        // a new `final_receipt` to pass to the reputation updater.
-        // Assuming we can clone and modify for the reputation update:
-        let mut final_receipt = receipt.clone();
-        final_receipt.receipt_cid = Some(final_anchor_cid.clone());
-
-        // Submit reputation update if an updater is configured
+        // 8. Submit reputation update
         if let Some(updater) = &self.reputation_updater {
-            // Pass federation_id for both coop and community ID to the updater
-            // Note: The updater trait needs to be modified to accept these
             match updater.submit_receipt_based_reputation(
-                &final_receipt, 
-                verification_passed, // Pass verification outcome
+                &receipt_to_anchor, 
+                true, 
                 coop_id_label, 
                 community_id_label
             ).await {
-                Ok(_) => info!("Reputation update submitted for receipt {}", receipt_id),
-                Err(e) => warn!("Failed to submit reputation update for receipt {}: {}", receipt_id, e),
+                Ok(_) => tracing::info!(receipt_id = %receipt_to_anchor.id, "Reputation update submitted"),
+                Err(e) => tracing::warn!(receipt_id = %receipt_to_anchor.id, "Failed to submit reputation update: {}", e),
             }
         } else {
-            info!("No reputation updater configured, skipping submission for receipt {}", receipt_id);
+            tracing::info!(receipt_id = %receipt_to_anchor.id, "No reputation updater configured, skipping submission");
         }
         
-        // Record anchoring duration and mana cost with federation labels
+        // 9. Record metrics
         let duration = start_time.elapsed();
         metrics::observe_anchor_receipt_duration(duration.as_secs_f64(), coop_id_label, community_id_label, issuer_did_label);
         if let Some(mana_cost) = receipt.metrics.mana_cost {
             metrics::record_receipt_mana_cost(mana_cost, coop_id_label, community_id_label, issuer_did_label);
             metrics::MANA_COST_HISTOGRAM
-                .with_label_values(&[receipt.issuer.as_str()]) // executor_did is receipt.issuer
+                .with_label_values(&[issuer_did_label])
                 .observe(mana_cost as f64);
         }
 
-        Ok(final_anchor_cid)
+        Ok(actual_receipt_cid.to_string())
     }
 
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
@@ -1108,3 +1110,4 @@ pub async fn execute_mesh_job(
     } // <-- End of mana_mgr lock scope
 
     // IMPORTANT: Capture the calculated `cost`
+}

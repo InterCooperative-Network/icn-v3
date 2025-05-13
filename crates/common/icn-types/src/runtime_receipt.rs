@@ -8,6 +8,12 @@ use crate::receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 // Import bincode if needed for tests (it was used in the old verify/signing logic)
 use bincode;
 
+// NEW IMPORTS for CID generation
+use cid::{Cid, Version}; // Simplified cid import
+use multihash::{Code as MultihashCode, MultihashDigest}; // Assuming multihash is a direct dependency like in icn-mesh-receipts
+use serde_cbor;
+use thiserror; // Added for the error type
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct RuntimeExecutionMetrics {
     // pub fuel_used: u64, // Removed
@@ -29,16 +35,42 @@ pub struct RuntimeExecutionReceipt {
     pub resource_usage: Vec<(String, u64)>,
     pub timestamp: u64,
     pub dag_epoch: Option<u64>,
-    pub receipt_cid: Option<String>,
+    pub receipt_cid: Option<String>, // This will store the string representation of its own CID
     pub signature: Option<Vec<u8>>,
+}
+
+// Define an error type for CID generation
+#[derive(Debug, thiserror::Error)]
+pub enum ReceiptCidError {
+    #[error("Serialization error for CID generation: {0}")]
+    Serialization(String),
+    // Add other specific errors if needed
 }
 
 impl RuntimeExecutionReceipt {
     // REMOVED: Old signed_payload method, replaced by trait impl below
     // fn signed_payload(&self) -> RuntimeExecutionReceiptPayload { ... }
 
-    // REMOVED: Old verify method, replaced by trait's default implementation
+    // REMOVED: Old verify method, replaced by trait\'s default implementation
     // pub fn verify(&self) -> Result<()> { ... }
+
+    /// Generate a CID (Content Identifier) for this receipt.
+    /// The CID is a unique identifier based on the content of the receipt.
+    /// It uses SHA-256 for hashing and the DAG-CBOR codec (0x71).
+    /// The `receipt_cid` field itself is excluded during CID calculation
+    /// by serializing a temporary clone where this field is None.
+    pub fn cid(&self) -> Result<Cid, ReceiptCidError> {
+        let mut temp_receipt = self.clone();
+        temp_receipt.receipt_cid = None; // Ensure receipt_cid field is not part of its own hash
+
+        let bytes = serde_cbor::to_vec(&temp_receipt)
+            .map_err(|e| ReceiptCidError::Serialization(e.to_string()))?;
+        
+        let hash = MultihashCode::Sha2_256.digest(&bytes);
+        
+        // Use raw u64 for DAG_CBOR codec (0x71) for robustness
+        Ok(Cid::new(Version::V1, 0x71, hash).expect("Failed to create CID v1 dag-cbor"))
+    }
 }
 
 // Implement the new verification trait

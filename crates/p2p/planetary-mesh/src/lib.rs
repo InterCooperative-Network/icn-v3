@@ -33,6 +33,9 @@ pub use node::MeshNode;
 pub mod reputation_integration;
 pub use reputation_integration::{ReputationClient, DefaultReputationClient, BidEvaluatorConfig};
 
+// Add the new metrics module
+pub mod metrics;
+
 /// Error types specific to the planetary mesh
 #[derive(Error, Debug)]
 pub enum MeshError {

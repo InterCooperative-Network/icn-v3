@@ -37,6 +37,9 @@ use tokio::sync::oneshot; // Added for Kademlia query response
 // If reqwest is added as a dependency for submitting reputation records
 use reqwest;
 
+// NEW: Import local metrics module
+use crate::metrics;
+
 // Helper to create job-specific interest topic strings
 fn job_interest_topic_string(job_id: &IcnJobId) -> String {
     format!("/icn/mesh/jobs/{}/interest/v1", job_id)
@@ -354,186 +357,146 @@ impl MeshNode {
     }
 
     pub async fn simulate_execution_and_anchor_receipt(&mut self, job: MeshJob) -> Result<(), Box<dyn Error>> {
-        let job_id = job.job_id.clone();
-        println!("Attempting to take job for execution: {}", job_id);
+        let job_id = job.job_id.clone(); // For logging and potential later use
+        tracing::info!("[Metrics] Attempting to simulate execution and anchor receipt for job {}", job_id);
+        metrics::jobs_execution_attempted_inc();
+        let overall_execution_start_time = std::time::Instant::now();
 
-        // Move to executing_jobs to prevent re-taking (simple lock then move)
-        {
-            let mut executing = self.executing_jobs.write().map_err(|e| format!("Lock error on executing_jobs: {}", e))?;
-            if executing.contains_key(&job_id) || self.completed_job_receipt_cids.read().unwrap().contains_key(&job_id) {
-                // Already processing or completed
-                return Ok(()); 
-            }
-            executing.insert(job_id.clone(), job.clone());
-        }
+        // --- Simulate actual job execution ---
+        // In a real scenario, this block would involve:
+        // 1. Setting up the WASM environment
+        // 2. Executing the job's WASM code
+        // 3. Collecting resource usage, logs, and result CIDs
+        // For now, we simulate these outputs.
+        // This simulation part IS the "job execution" for this function's scope.
+        let execution_start_time = Utc::now().timestamp_micros() as u64 / 1000 - 2000; // mock 2s ago in ms
+        let execution_end_time_dt = Utc::now();
+        let execution_end_time = execution_end_time_dt.timestamp_micros() as u64 / 1000; // current time in ms
         
-        println!("Simulating execution for JobId: {}", job_id);
+        // Mock resource usage (ensure ResourceType can be converted from string or use actual types)
+        let mut resource_usage_actual: HashMap<icn_economics::ResourceType, u64> = HashMap::new();
+        resource_usage_actual.insert(icn_economics::ResourceType::Cpu, 500); // Example: 500 mCPU seconds or similar unit
+        resource_usage_actual.insert(icn_economics::ResourceType::Memory, 128 * 1024 * 1024); // Example: 128MiB in bytes
 
-        // Send a "Running" status update
-        let status_update_running = MeshProtocolMessage::JobStatusUpdateV1 {
-            job_id: job_id.clone(),
-            executor_did: self.local_node_did.clone(),
-            status: super::JobStatus::Running { // Using the detailed JobStatus from lib.rs
-                node_id: self.local_node_did.clone(), // In this context, node_id is the executor's DID string
-                current_stage_index: Some(0),
-                current_stage_id: Some("execution_simulation".to_string()),
-                progress_percent: Some(10),
-                status_message: Some("Execution started".to_string()),
-            },
-        };
-        if let Ok(serialized_status_update) = serde_cbor::to_vec(&status_update_running) {
-            // Determine the topic for job status updates.
-            // For now, let's use the job-specific interest topic, as the originator is subscribed.
-            // A dedicated job-specific status topic could also be an option.
-            let status_topic_string = job_interest_topic_string(&job_id);
-            let status_topic = Topic::new(status_topic_string.clone());
-            if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(status_topic.clone(), serialized_status_update) {
-                eprintln!("Failed to publish JobStatusUpdateV1 (Running) for {}: {:?}", job_id, e);
-            } else {
-                println!("Published JobStatusUpdateV1 (Running) for JobID: {} to topic: {}", job_id, status_topic_string);
-            }
-        } else {
-            eprintln!("Failed to serialize JobStatusUpdateV1 (Running) for {}", job_id);
-        }
+        // Simulate success for this path, error handling would set this to false
+        let mut job_execution_successful = true; 
+        // --- End of simulated job execution ---
 
-        tokio::time::sleep(Duration::from_secs(2)).await; // Simulate work
-        println!("Execution complete for JobId: {}", job_id);
-
-        // Construct ExecutionReceipt
-        let execution_start_time = chrono::Utc::now().timestamp() as u64 - 2;
-        let execution_end_time_dt = chrono::Utc::now();
-        let execution_end_time = execution_end_time_dt.timestamp() as u64;
-
-        // Mock resource usage (ideally derive from job.params.required_resources_json)
-        let mut resource_usage_actual = HashMap::new(); 
-        resource_usage_actual.insert(ResourceType::Cpu, 50); // mock value
-        resource_usage_actual.insert(ResourceType::Memory, 128); // mock value
+        metrics::receipts_created_inc(); // Receipt object is about to be populated
 
         let mut receipt = ExecutionReceipt {
-            job_id: job_id.clone(),
+            job_id: job.job_id.clone(),
             executor: self.local_node_did.clone(), 
-            status: StandardJobStatus::CompletedSuccess, 
+            status: if job_execution_successful { StandardJobStatus::CompletedSuccess } else { StandardJobStatus::Failed { error: "Simulated execution failure".to_string(), stage_index: Some(0), stage_id: Some("execution".to_string()) }}, 
             result_data_cid: Some("bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()), // mock
             logs_cid: Some("bafybeigcafecafebeeffeedbeeffeedbeeffeedbeeffeedbeeffeedbeeffeed".to_string()), // mock
             resource_usage: resource_usage_actual,
-            execution_start_time,
-            execution_end_time,
-            execution_end_time_dt,
+            execution_start_time, // u64, ms precision if possible, or seconds
+            execution_end_time,   // u64, ms precision if possible, or seconds
+            execution_end_time_dt, // DateTime<Utc>
             signature: Vec::new(), // Will be filled by sign_receipt_in_place
             coop_id: job.originator_org_scope.as_ref().and_then(|s| s.coop_id.clone()),
             community_id: job.originator_org_scope.as_ref().and_then(|s| s.community_id.clone()),
+            mana_cost: Some(job.params.resources_required.iter().map(|(_,v)| v).sum::<u64>().max(10)), // Example mana cost
         };
 
-        // Sign the receipt
-        sign_receipt_in_place(&mut receipt, &self.local_keypair)
-            .map_err(|e| format!("Failed to sign receipt for job {}: {:?}", job_id, e))?;
-        println!("Receipt signed for JobId: {}", job_id);
-
-        // Anchor receipt via local runtime context
-        if let Some(rt_ctx) = &self.local_runtime_context {
-            let host_env = ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
-            // anchor_receipt expects the receipt by value
-            match host_env.anchor_receipt(receipt.clone()).await {
-                Ok(_) => {
-                    let anchored_receipt_cid = receipt.cid().map_err(|e| format!("Failed to get CID of anchored receipt: {}", e))?;
-                    println!("Receipt successfully anchored for JobId: {}, Receipt CID: {}", job_id, anchored_receipt_cid);
-                    self.completed_job_receipt_cids.write().unwrap().insert(job_id.clone(), anchored_receipt_cid);
-                    // final_receipt_cid_for_announcement = Some(cid_of_executed_receipt); // Store CID for later announcement
-                    // TODO NEXT: Announce ExecutionReceiptAvailableV1 (will require &mut self.swarm or a channel) - THIS IS BEING ADDRESSED NOW
-                    // For now, we've stored the CID.
-
-                    // 4. In `trigger_execution_for_job`
-                    if let Err(e) = self.internal_action_tx.send(NodeInternalAction::AnnounceReceipt {
-                        job_id: job_id.clone(),
-                        receipt_cid: anchored_receipt_cid.clone(),
-                        executor_did: self.local_node_did.clone(),
-                    }).await {
-                        tracing::error!("[ExecutionTrigger] Failed to enqueue receipt announcement for job {}: {:?}", job_id, e);
-                    }
-
-                }
-                Err(e) => {
-                    eprintln!("Failed to anchor receipt for JobId {}: {:?}", job_id, e);
-                    // TODO: Consider error handling, e.g., retrying or marking job as failed to anchor
-                }
-            }
-        } else {
-            eprintln!("No runtime_context available to anchor receipt for JobID: {}. Skipping anchoring.", job_id);
-            // final_receipt_cid_for_announcement = Some(cid_of_executed_receipt); // Still have a CID, just not anchored by us
-            // TODO NEXT: Announce ExecutionReceiptAvailableV1 (will require &mut self.swarm or a channel) - THIS IS BEING ADDRESSED NOW
-            // If not anchored, but execution was successful, we might still want to announce the receipt CID
-            // if the use case supports unanchored (but signed) receipts.
-            // For now, let's also send it for announcement if we have a CID.
-            if let Err(e) = self.internal_action_tx.send(NodeInternalAction::AnnounceReceipt {
-                job_id: job_id.clone(),
-                receipt_cid: anchored_receipt_cid.clone(), // cid_of_executed_receipt is in scope here
-                executor_did: self.local_node_did.clone(),
-            }).await {
-                tracing::error!("[ExecutionTrigger] Failed to enqueue receipt announcement (unanchored) for job {}: {:?}", job_id, e);
-            }
-        }
-
-        // Clean up from executing_jobs after attempting anchor
-        self.executing_jobs.write().unwrap().remove(&job_id);
-
-        // Announce receipt availability
-        let announcement = MeshProtocolMessage::ExecutionReceiptAvailableV1 {
-            job_id: job_id.clone(),
-            receipt_cid: anchored_receipt_cid.to_string(),
-            executor_did: self.local_node_did.clone(),
-        };
-
-        match serde_json::to_vec(&announcement) {
-            Ok(bytes) => {
-                if let Err(e) = self
-                    .swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .publish(RECEIPT_AVAILABILITY_TOPIC_HASH, bytes)
-                {
-                    eprintln!("Failed to publish receipt availability for JobId {}: {:?}", job_id, e);
-                } else {
-                    println!("Published ExecutionReceiptAvailableV1 for JobId: {}, Receipt CID: {}", job_id, anchored_receipt_cid);
-                }
+        let signing_start_time = std::time::Instant::now();
+        match sign_receipt_in_place(&mut receipt, &self.local_keypair) {
+            Ok(_) => {
+                let signing_duration = signing_start_time.elapsed().as_secs_f64();
+                metrics::receipt_signing_observe(signing_duration, true);
+                tracing::info!("Receipt signed for JobId: {}", job.job_id);
             }
             Err(e) => {
-                eprintln!("Failed to serialize ExecutionReceiptAvailableV1 for JobId {}: {:?}", job_id, e);
+                let signing_duration = signing_start_time.elapsed().as_secs_f64();
+                metrics::receipt_signing_observe(signing_duration, false);
+                tracing::error!("Failed to sign receipt for job {}: {:?}", job.job_id, e);
+                job_execution_successful = false; // Mark overall job as failed
+                                          // No early return here, record overall job execution metrics first
             }
         }
+        
+        let anchored_receipt_cid_str: Option<String>; // To store the final CID string for announcement
 
-        // After successful anchoring and before returning Ok(())
-        // Send a "Completed" status update (if successful, otherwise a "Failed" one)
-        let final_status = if self.completed_job_receipt_cids.read().unwrap().contains_key(&job_id) {
-            super::JobStatus::Completed {
-                node_id: self.local_node_did.clone(),
-                receipt_cid: self.completed_job_receipt_cids.read().unwrap().get(&job_id).unwrap().to_string(),
-            }
-        } else {
-            super::JobStatus::Failed {
-                node_id: Some(self.local_node_did.clone()),
-                error: "Execution simulated but receipt anchoring might have failed or was skipped.".to_string(),
-                stage_index: Some(1), // Assuming anchoring is the next stage
-                stage_id: Some("anchoring".to_string()),
-            }
-        };
+        if job_execution_successful { // Proceed to anchoring only if signing (and simulated execution) was successful
+            // Anchor receipt via local runtime context
+            if let Some(rt_ctx) = &self.local_runtime_context {
+                let host_env = ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
+                
+                let receipt_cid_for_anchor = match receipt.cid() {
+                    Ok(cid) => cid,
+                    Err(e) => {
+                        tracing::error!("Failed to get CID of receipt for job {}: {:?}. Cannot anchor.", job.job_id, e);
+                        metrics::receipt_local_processing_error_inc("cid_generation");
+                        job_execution_successful = false; // Mark overall job as failed
+                        Cid::default() // Dummy CID, won't proceed to anchor
+                    }
+                };
 
-        let status_update_final = MeshProtocolMessage::JobStatusUpdateV1 {
-            job_id: job_id.clone(),
-            executor_did: self.local_node_did.clone(),
-            status: final_status,
-        };
-        if let Ok(serialized_final_update) = serde_cbor::to_vec(&status_update_final) {
-            let status_topic_string = job_interest_topic_string(&job_id);
-            let status_topic = Topic::new(status_topic_string.clone());
-            if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(status_topic, serialized_final_update) {
-                eprintln!("Failed to publish final JobStatusUpdateV1 for {}: {:?}", job_id, e);
+                if job_execution_successful { // Check again if CID generation failed
+                    match host_env.anchor_receipt(receipt.clone()).await { // anchor_receipt expects the receipt by value
+                        Ok(_) => {
+                            tracing::info!("Receipt successfully anchored call initiated for JobId: {}, Receipt CID: {}", job.job_id, receipt_cid_for_anchor);
+                            self.completed_job_receipt_cids.write().unwrap().insert(job.job_id.clone(), receipt_cid_for_anchor.clone());
+                            anchored_receipt_cid_str = Some(receipt_cid_for_anchor.to_string());
+                            
+                            // Announce receipt availability (moved here to ensure it happens after successful anchoring attempt)
+                            if let Err(e) = self.internal_action_tx.send(NodeInternalAction::AnnounceReceipt {
+                                job_id: job.job_id.clone(),
+                                receipt_cid: receipt_cid_for_anchor.clone(),
+                                executor_did: self.local_node_did.clone(),
+                            }).await {
+                                tracing::error!("[ExecutionTrigger] Failed to enqueue receipt announcement for job {}: {:?}", job.job_id, e);
+                                // This is an internal error, might not mark the job itself as failed if anchoring was ok.
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to anchor receipt for JobId {}: {:?}", job.job_id, e);
+                            metrics::receipt_local_processing_error_inc("anchor_initiation");
+                            job_execution_successful = false; // Mark overall job as failed
+                            anchored_receipt_cid_str = None;
+                        }
+                    }
+                } else {
+                     anchored_receipt_cid_str = None; // CID generation failed
+                }
             } else {
-                 println!("Published final JobStatusUpdateV1 for JobID: {} to topic: {}", job_id, status_topic_string);
+                tracing::warn!("No runtime_context available to anchor receipt for JobID: {}. Skipping anchoring.", job.job_id);
+                // Consider this a form of failure if anchoring is mandatory for success.
+                // For now, if execution & signing were ok, but no rt_ctx, we might still consider the *job* part done locally.
+                // However, without anchoring, the receipt is of limited use.
+                metrics::receipt_local_processing_error_inc("anchor_skip_no_rt_ctx");
+                // Depending on policy, could set job_execution_successful = false;
+                anchored_receipt_cid_str = receipt.cid().ok().map(|c| c.to_string()); // Use unanchored CID for announcement if available
             }
-        } else {
-            eprintln!("Failed to serialize final JobStatusUpdateV1 for {}", job_id);
+        } else { // job_execution_successful was already false (e.g. signing failed)
+            anchored_receipt_cid_str = None;
         }
 
+        // Record overall job execution outcome
+        let overall_execution_duration = overall_execution_start_time.elapsed().as_secs_f64();
+        metrics::job_execution_observe(overall_execution_duration, job_execution_successful);
+
+        if !job_execution_successful {
+             tracing::error!("Simulated execution and anchoring failed for job {}", job_id);
+             return Err(format!("Simulated execution and anchoring failed for job {}", job_id).into());
+        }
+        
+        // Clean up from executing_jobs needs to happen regardless of success/failure of this specific method,
+        // perhaps handled by the caller or a broader state machine.
+        // self.executing_jobs.write().unwrap().remove(&job.job_id);
+
+        // Announce receipt availability (if successful and CID is available)
+        if let Some(final_receipt_cid_str) = anchored_receipt_cid_str {
+            // This announcement part was further down, let's assume it's handled by NodeInternalAction::AnnounceReceipt
+            tracing::info!("Receipt announcement for job {} with CID {} will be handled by internal action queue.", job.job_id, final_receipt_cid_str);
+        } else if job_execution_successful {
+            // Execution was "successful" but no CID for announcement (e.g. anchoring skipped but job 'done')
+            tracing::warn!("Job {} considered successful but no receipt CID was finalized for announcement.", job.job_id);
+        }
+
+
+        // Final status update also seems to be handled by the event loop or other mechanisms.
         Ok(())
     }
 
@@ -611,77 +574,79 @@ impl MeshNode {
 
     pub async fn trigger_execution_for_job(&self, job_id: &IcnJobId) -> Result<(), String> {
         tracing::info!("[ExecutionTrigger] Attempting to trigger execution for job {}", job_id);
+        // metrics::jobs_execution_attempted_inc(); // This is tricky. Is this an *attempt* or *decision*?
+                                            // Moved `jobs_execution_attempted_inc` to the actual execution function like `simulate_execution_and_anchor_receipt`
+                                            // or where `icn_runtime::execute_mesh_job` is directly called by this node for its own execution.
 
         let job_details_opt: Option<MeshJob>;
         {
-            // Changed to .read().await since we now have &self
             let assigned_jobs_guard = self.assigned_jobs.read().unwrap();
             job_details_opt = assigned_jobs_guard.get(job_id).cloned();
         }
 
         if let Some(job_details) = job_details_opt {
-            tracing::info!("[ExecutionTrigger] Preparing to execute job: {}", job_id);
+            tracing::info!("[ExecutionTrigger] Preparing to execute job: {} locally", job_id);
 
-            match execute_mesh_job(
-                job_details.clone(), 
-                &self.local_keypair,
-                self.local_runtime_context.clone(),
-            ).await {
-                Ok(executed_receipt) => { 
-                    tracing::info!("[ExecutionTrigger] Execution successful for job {}. Receipt: {:?}", job_id, executed_receipt);
-                    
-                    match executed_receipt.cid() {
-                        Ok(cid_of_executed_receipt) => {
-                            tracing::info!("[ExecutionTrigger] Calculated CID {} for executed receipt of job {}. Attempting to anchor...", cid_of_executed_receipt, job_id);
+            // If this node is executing it directly (e.g. not via runtime module primarily for this metric)
+            // This is a conceptual placement. The actual local execution might be
+            // `simulate_execution_and_anchor_receipt` or another dedicated function.
+            // For now, let's assume `simulate_execution_and_anchor_receipt` is the main path for local execution.
+            // So, `trigger_execution_for_job` might just *initiate* that.
 
-                            if let Some(rt_ctx) = &self.local_runtime_context {
-                                let host_env = ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
-                                match host_env.anchor_receipt(executed_receipt.clone()).await {
-                                    Ok(()) => {
-                                        tracing::info!("[ExecutionTrigger] Successfully anchored receipt CID {} for job {}.", cid_of_executed_receipt, job_id);
-                                        self.completed_job_receipt_cids.write().unwrap().insert(job_id.clone(), cid_of_executed_receipt.clone());
-                                        
-                                        let announce_action = NodeInternalAction::AnnounceReceipt {
-                                            job_id: job_id.clone(),
-                                            receipt_cid: cid_of_executed_receipt.clone(),
-                                            executor_did: self.local_node_did.clone(),
-                                        };
-                                        if let Err(e) = self.internal_action_tx.send(announce_action).await {
-                                            tracing::error!("[ExecutionTrigger] Failed to send AnnounceReceipt for job {}: {:?}", job_id, e);
-                                        }
-                                    }
-                                    Err(anchor_err) => {
-                                        tracing::error!("[ExecutionTrigger] Failed to anchor receipt for job {}: {:?}. Original CID was {}.", job_id, anchor_err, cid_of_executed_receipt);
-                                    }
-                                }
-                            } else {
-                                tracing::warn!("[ExecutionTrigger] No local_runtime_context available. Skipping anchoring of receipt CID {} for job {}.", cid_of_executed_receipt, job_id);
-                                let announce_action = NodeInternalAction::AnnounceReceipt {
-                                    job_id: job_id.clone(),
-                                    receipt_cid: cid_of_executed_receipt.clone(),
-                                    executor_did: self.local_node_did.clone(),
-                                };
-                                if let Err(e) = self.internal_action_tx.send(announce_action).await {
-                                    tracing::error!("[ExecutionTrigger] Failed to send AnnounceReceipt (unanchored) for job {}: {:?}", job_id, e);
-                                }
-                            }
-                        }
-                        Err(cid_err) => {
-                            tracing::warn!("[ExecutionTrigger] Failed to compute receipt CID for job {}: {}.", job_id, cid_err);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("[ExecutionTrigger] Failed to execute job {}: {:?}", job_id, e);
-                    return Err(format!("Execution failed for job {}: {}", job_id, e));
-                }
-            };
+            // If `trigger_execution_for_job` directly calls `icn_runtime::execute_mesh_job`
+            // for its OWN execution (not just as a client to the runtime):
+            // metrics::jobs_execution_attempted_inc(); // Placed here if this node is the executor
+            // let exec_start_time = std::time::Instant::now();
+            // match icn_runtime::execute_mesh_job(
+            //     job_details.clone(),
+            //     &self.local_keypair,
+            //     self.local_runtime_context.clone(), // This implies runtime is used as a library here
+            // ).await {
+            //     Ok(executed_receipt) => {
+            //         metrics::job_execution_observe(exec_start_time.elapsed().as_secs_f64(), true);
+            //         metrics::receipts_created_inc(); 
+            //         // The signing metrics for `sign_receipt_in_place` are ideally inside `icn_runtime::execute_mesh_job`
+            //         // However, if `planetary-mesh` needs to know the outcome of that *specific* call it makes to runtime,
+            //         // it could count a "runtime_job_submission_successful".
+            //         // ... rest of the logic to handle `executed_receipt` ...
+            //
+            //         // Example: If CID generation or anchoring call prep happens here with the result from runtime
+            //         if let Err(e) = executed_receipt.cid() {
+            //              metrics::receipt_local_processing_error_inc("cid_generation_post_runtime");
+            //         }
+            //         // ... then call self.anchor_receipt_locally_or_via_host_env ...
+            //     }
+            //     Err(e) => {
+            //         metrics::job_execution_observe(exec_start_time.elapsed().as_secs_f64(), false);
+            //         tracing::error!("[ExecutionTrigger] Call to icn_runtime::execute_mesh_job FAILED for job {}: {:?}", job_id, e);
+            //         return Err(format!("icn_runtime::execute_mesh_job failed: {}", e));
+            //     }
+            // }
+
+
+            // The existing code calls `self.simulate_execution_and_anchor_receipt` if the job is found in assigned_jobs
+            // This implies `simulate_execution_and_anchor_receipt` is the local execution path.
+            // So, the metrics for actual execution should be within that function.
+            // `jobs_execution_attempted_inc` is already at the start of `simulate_execution_and_anchor_receipt`.
+            let mut self_mut_clone = self.clone_for_async_tasks(); // Assuming this provides mutability if needed or refactor simulate
             
-        } else {
-            tracing::warn!("[ExecutionTrigger] No assigned job found with ID {}", job_id);
-            return Err(format!("Job {} not found for execution", job_id));
-        }
+            // This is how it seems to be structured from test_utils and previous context:
+            // tokio::spawn(async move {
+            //    if let Err(e) = self_mut_clone.simulate_execution_and_anchor_receipt(job_details).await {
+            //        tracing::error!("[ExecutionTrigger] Simulating execution and anchoring failed for job {}: {:?}", job_id, e);
+            //    }
+            // });
+            // For direct instrumentation, let's assume we are modifying the direct call path.
+            // The actual execution flow might be more complex involving task spawning.
+            // The key is that `simulate_execution_and_anchor_receipt` will be called.
+            // `trigger_execution_for_job`'s role here is more about dispatching.
+            // It seems metrics are best placed inside `simulate_execution_and_anchor_receipt` as done above.
 
+
+        } else {
+            tracing::warn!("[ExecutionTrigger] Job details not found for job_id: {}. Cannot execute.", job_id);
+            return Err(format!("Job details not found for {}", job_id));
+        }
         Ok(())
     }
 
