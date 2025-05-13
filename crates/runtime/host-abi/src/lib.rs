@@ -17,20 +17,16 @@ use serde::Serialize;
 
 // Need Display for Trap::new
 // use std::fmt;
-use wasmtime::Trap;
+// use wasmtime::Trap; // Already commented, confirmed unused by new compiler output
 use thiserror::Error;
-// use wasmtime::{Caller, Linker}; // Removed unused import
+// use wasmtime::{Caller, Linker};
 use anyhow::Error as AnyhowError;
 
-use icn_types::mesh::MeshJobParams;
-use wasmtime::Memory;
-// use core::ffi::c_void; // Removed unused import
-use std::sync::Arc;
-use tokio::sync::Mutex;
-// use std::fmt; // Removed unused import
-// use wasmtime::Trap; // Removed unused import
-use wasmtime::AsContextMut;
-// use wasmtime::{Caller, Linker}; // Removed unused imports
+use icn_types::mesh::MeshJobParams; // Assuming this is now resolved by Cargo.toml change
+// use wasmtime::Memory; // Commenting out as per new compiler warning
+// use std::sync::Arc; // Commenting out as per new compiler warning
+use tokio::sync::Mutex; // Assuming this is now resolved by Cargo.toml change
+// use wasmtime::AsContextMut; // Commenting out as per new compiler warning
 
 // --- Helper Enums & Structs for ABI Communication ---
 
