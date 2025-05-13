@@ -68,6 +68,9 @@ pub struct RuntimeContext {
     
     /// Optional reputation service URL
     reputation_service_url: Option<String>,
+    
+    /// Optional mesh job service URL
+    mesh_job_service_url: Option<String>,
 }
 
 impl RuntimeContext {
@@ -88,6 +91,7 @@ impl RuntimeContext {
             identity_index: None,
             identity: None,
             reputation_service_url: None,
+            mesh_job_service_url: None,
         }
     }
 
@@ -108,6 +112,7 @@ impl RuntimeContext {
             identity_index: None,
             identity: None,
             reputation_service_url: None,
+            mesh_job_service_url: None,
         }
     }
 
@@ -173,6 +178,10 @@ impl RuntimeContext {
     pub fn reputation_service_url(&self) -> Option<&String> {
         self.reputation_service_url.as_ref()
     }
+    
+    pub fn mesh_job_service_url(&self) -> Option<&String> {
+        self.mesh_job_service_url.as_ref()
+    }
 }
 
 impl Default for RuntimeContext {
@@ -192,6 +201,7 @@ pub struct RuntimeContextBuilder {
     identity_index: Option<Arc<IdentityIndex>>,
     identity: Option<KeyPair>,
     reputation_service_url: Option<String>,
+    mesh_job_service_url: Option<String>,
 }
 
 impl RuntimeContextBuilder {
@@ -207,6 +217,7 @@ impl RuntimeContextBuilder {
             identity_index: None,
             identity: None,
             reputation_service_url: None,
+            mesh_job_service_url: None,
         }
     }
 
@@ -264,42 +275,31 @@ impl RuntimeContextBuilder {
         self
     }
 
+    /// Set the mesh job service URL
+    pub fn with_mesh_job_service_url(mut self, url: String) -> Self {
+        self.mesh_job_service_url = Some(url);
+        self
+    }
+
     /// Build the RuntimeContext
     pub fn build(self) -> RuntimeContext {
-        let dag_store = self.dag_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
-        let receipt_store = self.receipt_store.unwrap_or_else(|| Arc::new(SharedDagStore::new()));
-        let federation_id = self.federation_id;
-        let executor_id = self.executor_id;
-        let trust_validator = self.trust_validator;
-        let economics = self.economics.unwrap_or_else(|| Arc::new(Economics::new(ResourceAuthorizationPolicy::default())));
-        let resource_ledger = Arc::new(RwLock::new(HashMap::new()));
-        let pending_mesh_jobs = Arc::new(Mutex::new(VecDeque::new()));
-        let mana_manager = Arc::new(Mutex::new(ManaManager::new()));
-        let interactive_input_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let execution_status = ExecutionStatus::Running;
-        let identity_index = self.identity_index;
-        let identity = self.identity;
-        let reputation_service_url = self.reputation_service_url;
-
-        let mut context = RuntimeContext {
-            dag_store,
-            receipt_store,
-            federation_id,
-            executor_id,
-            trust_validator,
-            economics,
-            resource_ledger,
-            pending_mesh_jobs,
-            mana_manager,
-            interactive_input_queue,
-            execution_status,
-            identity_index,
-            identity,
-            reputation_service_url,
-        };
-        
-        // The reputation updater will be configured when the RuntimeContext is used to create a Runtime instance
-        
-        context
+        let default_context = RuntimeContext::new();
+        RuntimeContext {
+            dag_store: self.dag_store.unwrap_or(default_context.dag_store),
+            receipt_store: self.receipt_store.unwrap_or(default_context.receipt_store),
+            federation_id: self.federation_id,
+            executor_id: self.executor_id,
+            trust_validator: self.trust_validator,
+            economics: self.economics.unwrap_or(default_context.economics),
+            resource_ledger: default_context.resource_ledger,
+            pending_mesh_jobs: default_context.pending_mesh_jobs,
+            mana_manager: default_context.mana_manager,
+            interactive_input_queue: default_context.interactive_input_queue,
+            execution_status: default_context.execution_status,
+            identity_index: self.identity_index,
+            identity: self.identity,
+            reputation_service_url: self.reputation_service_url,
+            mesh_job_service_url: self.mesh_job_service_url,
+        }
     }
 } 

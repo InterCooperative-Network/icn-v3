@@ -1,11 +1,12 @@
 use crate::Did;
 use rand::rngs::OsRng;
 use ed25519_dalek::{Signer, Verifier};
+use serde::{Serialize, Deserialize};
 
 pub type Signature = ed25519_dalek::Signature;
 
 /// Ed25519 keypair bound to a DID.
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyPair {
     pub did: Did,
     pub pk: ed25519_dalek::VerifyingKey,

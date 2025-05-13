@@ -5,7 +5,7 @@ edition     = "2021"
 license     = "Apache-2.0 OR MIT"
 
 [dependencies]
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
 multibase     = "0.9"
 multicodec    = "0.1.0"
 cid           = { version = "0.11", default-features = false, features = ["std"] }

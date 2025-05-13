@@ -704,34 +704,27 @@ impl Runtime {
     pub async fn from_config(mut config: RuntimeConfig) -> Result<Self> {
         info!("Initializing runtime from config: {:?}", config);
 
-        // Load or generate KeyPair
         let keypair = load_or_generate_keypair(config.key_path.as_deref())
             .context("Failed to load or generate node keypair")?;
         
         config.node_did = keypair.did.to_string();
-        let node_did_obj = keypair.did.clone();
+        let node_did_obj = keypair.did.clone(); 
         info!(node_did = %config.node_did, "Runtime node DID initialized/confirmed.");
 
         let storage: Arc<dyn RuntimeStorage> = Arc::new(
-            SledStorage::new(&config.storage_path)
+            SledStorage::open(&config.storage_path)
                 .context("Failed to initialize Sled storage")?,
         );
 
         let mut context_builder = RuntimeContextBuilder::new()
-            .with_identity(keypair.clone()) // Use the loaded/generated keypair
+            .with_identity(keypair.clone())
             .with_executor_id(config.node_did.clone())
-            .with_dag_store(icn_types::dag_store::SharedDagStore::new());
+            .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new()));
 
         if let Some(reputation_url) = config.reputation_service_url.as_ref() {
-            info!("Configuring HttpReputationUpdater with URL: {}", reputation_url);
-            let reputation_updater = HttpReputationUpdater::new(reputation_url.clone(), node_did_obj);
-            context_builder = context_builder.with_reputation_service(Arc::new(reputation_updater));
-        } else {
-            warn!("No reputation service URL configured. Using NoopReputationUpdater.");
-            context_builder = context_builder.with_reputation_service(Arc::new(NoopReputationUpdater));
+            context_builder = context_builder.with_reputation_service(reputation_url.clone());
         }
         
-        // Add mesh_job_service_url to context if present
         if let Some(mesh_job_url) = config.mesh_job_service_url.as_ref() {
             context_builder = context_builder.with_mesh_job_service_url(mesh_job_url.clone());
         }
@@ -743,25 +736,26 @@ impl Runtime {
         let mut linker = Linker::new(&engine);
         register_host_functions(&mut linker)?;
 
-        let mut runtime = Self {
+        let reputation_updater: Option<Arc<dyn ReputationUpdater>> = 
+            if let Some(url) = context.reputation_service_url() {
+                info!("Creating HttpReputationUpdater for URL: {}", url);
+                Some(Arc::new(HttpReputationUpdater::new(url.clone(), node_did_obj)))
+            } else {
+                info!("No reputation service URL in context, using NoopReputationUpdater.");
+                Some(Arc::new(NoopReputationUpdater))
+            };
+
+        let runtime = Self {
             config,
-            vm: CoVm::new(&engine),
+            vm: CoVm::new(ResourceLimits::default()),
             storage,
             context,
             engine,
             linker,
-            module_cache: None, // TODO: Initialize module cache if needed
-            host_env: None, // Host env will be set per execution
-            reputation_updater: None, // To be set based on context post-init
+            module_cache: None,
+            host_env: None,
+            reputation_updater,
         };
-
-        // Set reputation updater based on context
-        if let Some(reputation_service) = runtime.context.reputation_service() {
-            runtime.reputation_updater = Some(reputation_service.clone());
-        } else {
-            // This case should ideally be handled by the builder ensuring a NoopUpdater
-            warn!("Reputation service not found in context after build. Runtime will have no reputation updater.");
-        }
 
         Ok(runtime)
     }
