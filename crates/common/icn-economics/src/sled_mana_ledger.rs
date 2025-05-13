@@ -1,9 +1,11 @@
-use anyhow::{Result, Context};
+use anyhow::{Result, Context, anyhow};
 use async_trait::async_trait;
 use icn_identity::Did;
 use sled::Db;
 use std::sync::Arc; // May not be needed directly here, but often with sled
 use std::str::FromStr; // Added for Did::from_str
+use crate::mana_metrics::*; // Added for metrics
+use tracing::{error, debug}; // Added for logging
 
 use crate::mana::{ManaLedger, ManaState};
 
@@ -36,58 +38,185 @@ impl SledManaLedger {
 #[async_trait]
 impl ManaLedger for SledManaLedger {
     async fn get_mana_state(&self, did: &Did) -> Result<Option<ManaState>> {
-        let tree = self.get_tree()?;
-        let did_key = did.to_string(); // Sled keys are typically &[u8]
-        
-        match tree.get(did_key.as_bytes())? {
-            Some(ivec) => {
-                // Deserialize ManaState from bytes (e.g., using bincode or serde_json)
-                let mana_state: ManaState = bincode::deserialize(&ivec)
-                    .context("Failed to deserialize ManaState from Sled")?;
-                Ok(Some(mana_state))
+        let tree_result = self.get_tree();
+        if let Err(e) = tree_result {
+            MANA_LEDGER_OPERATIONS_TOTAL
+                .with_label_values(&["sled", "get_tree", "error"])
+                .inc();
+            MANA_LEDGER_ERRORS_TOTAL
+                .with_label_values(&["sled", "get_tree", "io"])
+                .inc();
+            error!(%did, "Failed to get Sled tree for get_mana_state: {}", e);
+            return Err(e); // Propagate error early if tree cannot be opened
+        }
+        let tree = tree_result.unwrap();
+
+        let did_key_bytes = did.to_string().into_bytes();
+        match tree.get(&did_key_bytes) {
+            Ok(Some(ivec)) => {
+                match bincode::deserialize::<ManaState>(&ivec) {
+                    Ok(state) => {
+                        MANA_LEDGER_OPERATIONS_TOTAL
+                            .with_label_values(&["sled", "get", "success"])
+                            .inc();
+                        Ok(Some(state))
+                    }
+                    Err(e) => {
+                        MANA_LEDGER_OPERATIONS_TOTAL
+                            .with_label_values(&["sled", "get", "error"])
+                            .inc();
+                        MANA_LEDGER_ERRORS_TOTAL
+                            .with_label_values(&["sled", "get", "deserialization"])
+                            .inc();
+                        error!(%did, error = %e, "Failed to deserialize ManaState from Sled");
+                        // Return error instead of Ok(None) to indicate data corruption
+                        Err(anyhow!("Failed to deserialize ManaState for DID {}: {}", did, e))
+                    }
+                }
             }
-            None => Ok(None),
+            Ok(None) => {
+                MANA_LEDGER_OPERATIONS_TOTAL
+                    .with_label_values(&["sled", "get", "success"])
+                    .inc();
+                Ok(None)
+            }
+            Err(e) => {
+                MANA_LEDGER_OPERATIONS_TOTAL
+                    .with_label_values(&["sled", "get", "error"])
+                    .inc();
+                MANA_LEDGER_ERRORS_TOTAL
+                    .with_label_values(&["sled", "get", "io"])
+                    .inc();
+                error!(%did, error = %e, "Failed to get ManaState from Sled tree");
+                Err(anyhow!("Sled tree I/O error for DID {}: {}", did, e))
+            }
         }
     }
 
     async fn update_mana_state(&self, did: &Did, new_state: ManaState) -> Result<()> {
-        let tree = self.get_tree()?;
-        let did_key = did.to_string();
-        
-        // Serialize ManaState to bytes
-        let serialized_state = bincode::serialize(&new_state)
-            .context("Failed to serialize ManaState for Sled")?;
-        
-        tree.insert(did_key.as_bytes(), serialized_state)?;
-        // It's good practice to flush, especially if immediate persistence is critical,
-        // though Sled does auto-flush. For critical updates, explicit flush is safer.
-        // tree.flush_async().await.context("Failed to flush Sled tree after mana update")?;
-        Ok(())
+        let tree_result = self.get_tree();
+        if let Err(e) = tree_result {
+            MANA_LEDGER_OPERATIONS_TOTAL
+                .with_label_values(&["sled", "get_tree", "error"])
+                .inc();
+            MANA_LEDGER_ERRORS_TOTAL
+                .with_label_values(&["sled", "get_tree", "io"])
+                .inc();
+            error!(%did, "Failed to get Sled tree for update_mana_state: {}", e);
+            return Err(e); 
+        }
+        let tree = tree_result.unwrap();
+
+        let did_key_bytes = did.to_string().into_bytes();
+        match bincode::serialize(&new_state) {
+            Ok(serialized_state) => {
+                match tree.insert(&did_key_bytes, serialized_state) {
+                    Ok(_) => {
+                        MANA_LEDGER_OPERATIONS_TOTAL
+                            .with_label_values(&["sled", "set", "success"])
+                            .inc();
+                        // Optional: Explicit flush for critical updates
+                        // if let Err(e) = tree.flush_async().await {
+                        //     MANA_LEDGER_ERRORS_TOTAL
+                        //         .with_label_values(&["sled", "set_flush", "io"])
+                        //         .inc();
+                        //     error!(%did, error = %e, "Failed to flush Sled tree after mana update");
+                        //     return Err(anyhow!("Failed to flush Sled tree for {}: {}", did, e));
+                        // }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        MANA_LEDGER_OPERATIONS_TOTAL
+                            .with_label_values(&["sled", "set", "error"])
+                            .inc();
+                        MANA_LEDGER_ERRORS_TOTAL
+                            .with_label_values(&["sled", "set", "io"])
+                            .inc();
+                        error!(%did, error = %e, "Failed to insert ManaState into Sled tree");
+                        Err(anyhow!("Sled tree insert I/O error for DID {}: {}", did, e))
+                    }
+                }
+            }
+            Err(e) => {
+                MANA_LEDGER_OPERATIONS_TOTAL
+                    .with_label_values(&["sled", "set", "error"])
+                    .inc();
+                MANA_LEDGER_ERRORS_TOTAL
+                    .with_label_values(&["sled", "set", "deserialization"])
+                    .inc();
+                error!(%did, error = %e, "Failed to serialize ManaState for Sled");
+                Err(anyhow!("Serialization error for ManaState for DID {}: {}", did, e))
+            }
+        }
     }
 
     async fn all_dids(&self) -> Result<Vec<Did>> {
-        let tree = self.get_tree()?;
+        let tree_result = self.get_tree();
+        if let Err(e) = tree_result {
+            MANA_LEDGER_OPERATIONS_TOTAL
+                .with_label_values(&["sled", "get_tree", "error"])
+                .inc();
+            MANA_LEDGER_ERRORS_TOTAL
+                .with_label_values(&["sled", "get_tree", "io"])
+                .inc();
+            error!("Failed to get Sled tree for all_dids: {}", e);
+            return Err(e);
+        }
+        let tree = tree_result.unwrap();
+
         let mut dids = Vec::new();
+        let mut operation_successful = true; // Assume success initially
+
         for item_result in tree.iter() {
-            let (key_ivec, _value_ivec) = item_result?;
-            // Convert key from &[u8] back to Did String, then parse to Did if necessary
-            // Assuming Did::from_str is available and appropriate
-            match String::from_utf8(key_ivec.to_vec()) {
-                Ok(did_str) => {
-                    match Did::from_str(&did_str) {
-                        Ok(parsed_did) => dids.push(parsed_did),
+            match item_result {
+                Ok((key_ivec, _value_ivec)) => {
+                    match String::from_utf8(key_ivec.to_vec()) {
+                        Ok(did_str) => {
+                            match Did::from_str(&did_str) {
+                                Ok(parsed_did) => dids.push(parsed_did),
+                                Err(e) => {
+                                    // This is an error in data format, not an I/O error for the overall operation
+                                    MANA_LEDGER_ERRORS_TOTAL
+                                        .with_label_values(&["sled", "list_parse_did", "deserialization"])
+                                        .inc();
+                                    error!(did_str = %did_str, error = %e, "Error parsing Did from Sled key");
+                                    // Optionally, continue collecting other valid DIDs
+                                }
+                            }
+                        }
                         Err(e) => {
-                            // Log error: failed to parse Did from key
-                            eprintln!("Error parsing Did from Sled key '{}': {}", did_str, e);
-                            // Optionally, skip this key or handle error differently
+                            MANA_LEDGER_ERRORS_TOTAL
+                                .with_label_values(&["sled", "list_utf8_key", "deserialization"])
+                                .inc();
+                            error!(key = ?key_ivec, error = %e, "Sled key for mana state is not valid UTF-8");
                         }
                     }
                 }
                 Err(e) => {
-                    // Log error: key is not valid UTF-8
-                    eprintln!("Sled key for mana state is not valid UTF-8: {:?}, error: {}", key_ivec, e);
+                    // This is an I/O error during iteration
+                    MANA_LEDGER_ERRORS_TOTAL
+                        .with_label_values(&["sled", "list_iterate", "io"])
+                        .inc();
+                    error!(error = %e, "Sled tree iteration I/O error");
+                    operation_successful = false; // Mark operation as failed
+                    // Depending on desired behavior, we might stop or continue iteration
+                    // For now, let's stop and report the error for the whole operation
+                    return Err(anyhow!("Sled iteration failed: {}", e)); 
                 }
             }
+        }
+        
+        if operation_successful {
+            MANA_LEDGER_OPERATIONS_TOTAL
+                .with_label_values(&["sled", "list", "success"])
+                .inc();
+        } else {
+            // If we didn't return early from an iteration error, but operation_successful is false
+            // (e.g. if we decided to continue iterating despite errors), this path would be hit.
+            // However, with current logic, an iteration error returns early.
+            MANA_LEDGER_OPERATIONS_TOTAL
+                .with_label_values(&["sled", "list", "error"])
+                .inc();
         }
         Ok(dids)
     }

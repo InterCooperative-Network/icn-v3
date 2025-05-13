@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use icn_identity::Did;
 pub use icn_types::mana::ManaState;
 use tokio::sync::RwLock;
-use tracing;
+use tracing::{self, debug, warn, trace};
 use serde::{Serialize, Deserialize};
+use crate::mana_metrics::*;
 
 /// Trait for reporting mana balance changes to a metrics system.
 pub trait ManaMetricsHook: std::fmt::Debug {
@@ -246,38 +247,37 @@ impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> { // Ensure L is Send + Syn
         match dids_result {
             Ok(dids) => {
                 processed_dids_count = dids.len();
+                MANA_ACTIVE_DIDS_GAUGE.set(dids.len() as i64); // Set active DIDs gauge
+
                 for did in dids {
                     match self.ledger.get_mana_state(&did).await {
                         Ok(Some(mut state)) => {
-                            let original_mana = state.current_mana; // Store original mana for comparison
+                            let original_mana = state.current_mana; 
                             
                             let regen_amount = match self.policy {
                                 RegenerationPolicy::FixedRatePerTick(amount) => amount,
-                                // Add other policy evaluations here if they exist
                             };
 
                             state.current_mana = (state.current_mana + regen_amount).min(state.max_mana);
 
-                            if state.current_mana != original_mana { // Check if mana actually changed
+                            if state.current_mana != original_mana { 
                                 regenerated_dids_count += 1;
-                                // Update the ledger only if mana changed
-                                if let Err(e) = self.ledger.update_mana_state(&did, state).await {
+                                if let Err(e) = self.ledger.update_mana_state(&did, state.clone()).await { // Pass cloned state
                                     errors.push((did.clone(), format!("update_failed: {}", e)));
-                                    // If update failed, we might not count it as regenerated, or handle differently
-                                    // For now, regenerated_dids_count was already incremented.
                                 } else {
-                                     tracing::debug!(did = %did, old_mana = original_mana, new_mana = self.ledger.get_mana_state(&did).await.map_or(0, |s_opt| s_opt.map_or(0, |s_val| s_val.current_mana)), regen_amount = regen_amount, "Mana regenerated");
+                                     // Successfully updated, log if needed (original log was here)
+                                     // Log was: tracing::debug!(did = %did, old_mana = original_mana, new_mana = state.current_mana, regen_amount = regen_amount, "Mana regenerated");
+                                     // Avoiding ledger read just for log: new_mana = state.current_mana
+                                     debug!(did = %did, old_mana = original_mana, new_mana = state.current_mana, regen_amount = regen_amount, "Mana regenerated");
                                 }
                             } else {
-                                tracing::trace!(did = %did, mana = original_mana, "Mana already at max or regen amount is zero.");
-                                // No need to update ledger if mana didn't change
+                                trace!(did = %did, mana = original_mana, "Mana already at max or regen amount is zero.");
                             }
                         }
                         Ok(None) => {
-                            // DID exists in all_dids but not in get_mana_state, could be a race or inconsistency
-                            // For now, we'll just note it as an error or skip.
-                            // errors.push((did.clone(), "state_not_found_after_all_dids".to_string()));
-                            tracing::warn!(did = %did, "ManaState not found for DID listed in all_dids, skipping.");
+                            warn!(did = %did, "ManaState not found for DID listed in all_dids during tick, skipping.");
+                            // Optionally count this as a specific type of processing error if desired
+                            // errors.push((did.clone(), "state_not_found_post_all_dids".to_string()));
                         }
                         Err(e) => {
                             errors.push((did.clone(), format!("read_failed: {}", e)));
@@ -286,18 +286,54 @@ impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> { // Ensure L is Send + Syn
                 }
             }
             Err(e) => {
-                // Failed to get all DIDs, this is a more global error for the tick
-                // errors.push(("global".to_string(), format!("all_dids_failed: {}", e)));
-                // For now, returning the error directly as Result propagation
-                return Err(anyhow::anyhow!("Failed to retrieve all DIDs from ledger: {}", e));
+                // This error means we couldn't even get the list of DIDs to process.
+                // It's a more fundamental issue with the tick operation itself.
+                let policy_label = policy_to_label(&self.policy);
+                MANA_REGENERATION_ERRORS_TOTAL
+                    .with_label_values(&[policy_label, "all_dids_read_failed"])
+                    .inc();
+                return Err(anyhow::anyhow!("Failed to retrieve all DIDs from ledger for tick: {}", e));
             }
         }
 
-        Ok(RegenerationTickDetails {
+        let details = RegenerationTickDetails {
             processed_dids_count,
             regenerated_dids_count,
             errors,
-        })
+        };
+
+        // Increment metrics based on collected details
+        let policy_label = policy_to_label(&self.policy);
+
+        MANA_REGENERATION_TICKS_TOTAL
+            .with_label_values(&[policy_label])
+            .inc();
+
+        MANA_PROCESSED_DIDS_TOTAL
+            .with_label_values(&[policy_label])
+            .inc_by(details.processed_dids_count as u64);
+
+        MANA_REGENERATED_DIDS_TOTAL
+            .with_label_values(&[policy_label])
+            .inc_by(details.regenerated_dids_count as u64);
+
+        for (did, reason) in &details.errors { // Iterate over details.errors
+            // Determine error scope for metrics from the reason string
+            let error_scope = if reason.starts_with("read_failed") {
+                "ledger_read"
+            } else if reason.starts_with("update_failed") {
+                "ledger_update"
+            } else {
+                "unknown" // Fallback for other types of errors if any
+            };
+            MANA_REGENERATION_ERRORS_TOTAL
+                .with_label_values(&[policy_label, error_scope])
+                .inc();
+            // Original log for individual errors was here, handled by errors vector now.
+            warn!(did = %did, error = %reason, "Error during mana regeneration for DID.");
+        }
+
+        Ok(details)
     }
 }
 

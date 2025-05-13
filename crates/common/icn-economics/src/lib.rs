@@ -5,6 +5,7 @@ pub mod policy;
 pub mod types;
 pub mod mana;
 pub mod sled_mana_ledger;
+pub mod mana_metrics;
 
 pub use economics::Economics;
 pub use policy::ResourceAuthorizationPolicy;
