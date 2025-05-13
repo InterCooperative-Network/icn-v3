@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 /// Configuration for the ICN Runtime
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct RuntimeConfig {
     /// The DID of this runtime node. This will be derived from the key_path if provided.
     pub node_did: String,

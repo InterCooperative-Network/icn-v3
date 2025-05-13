@@ -94,7 +94,8 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
     }
 
     // 4. Create job and inject into queue
-    let job_originator_did = Did::from_str("did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345")?;
+    let job_originator_keypair = IcnKeyPair::generate();
+    let job_originator_did = job_originator_keypair.did;
     
     let job_params = MeshJobParams {
         wasm_cid: wasm_cid.clone(), 
@@ -257,6 +258,11 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
              panic!("Failed to load receipt for job {}: {}. This might indicate the job failed or receipt IDing is different.", job_id, e);
         }
     }
+
+    // --- Use receipt_count to verify a receipt was stored ---
+    let count = storage.receipt_count();
+    assert!(count > 0, "Expected at least one receipt to be stored, found {}", count);
+    // ---------------------------------------------------------
 
     runtime_handle.abort();
     Ok(())

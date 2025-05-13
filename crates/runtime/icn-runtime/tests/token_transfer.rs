@@ -65,7 +65,7 @@ async fn test_transfer_tokens_wasm() -> Result<()> {
     let receiver_did = receiver_keypair.did.clone();
 
     let storage = Arc::new(MockRuntimeStorage::default());
-    let mut runtime = Runtime::new(storage.clone());
+    let mut runtime = Runtime::new(storage.clone()).expect("Failed to create runtime in token_transfer test");
     
     let context = RuntimeContextBuilder::new()
         .with_executor_id(sender_did.to_string())

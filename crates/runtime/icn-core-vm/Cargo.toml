@@ -6,7 +6,7 @@ description = "Cooperative VM (CoVM) for executing WASM governance code"
 license = "Apache-2.0"
 
 [dependencies]
-wasmtime = "18.0.0"
+wasmtime = "18.0.4"
 anyhow = "1.0.75"
 thiserror = "1.0.50"
 serde = { version = "1.0.190", features = ["derive"] }
