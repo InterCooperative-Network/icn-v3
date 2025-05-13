@@ -6,7 +6,7 @@ use ed25519_dalek::{Signature, VerifyingKey}; // For signature verification
 // Import the new trait and payload
 use crate::receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 // Import bincode if needed for tests (it was used in the old verify/signing logic)
-use crate::bincode;
+use bincode;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct RuntimeExecutionMetrics {
@@ -94,7 +94,7 @@ mod tests {
         };
 
         // Sign it
-        let payload = receipt.signed_payload();
+        let payload = receipt.get_payload_for_signing().expect("Failed to get payload for signing in test");
         let bytes = bincode::serialize(&payload).expect("Failed to serialize payload for test");
         // Assumes icn_identity::KeyPair has a public method `sign`:
         // fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature;
@@ -134,7 +134,7 @@ mod tests {
         };
 
         // Sign with keypair2's secret key
-        let payload = receipt.signed_payload();
+        let payload = receipt.get_payload_for_signing().expect("Failed to get payload for signing in test (invalid signature)");
         let bytes = bincode::serialize(&payload).unwrap();
         // Assumes icn_identity::KeyPair has a public method `sign`
         let bad_signature = keypair2.sign(&bytes);

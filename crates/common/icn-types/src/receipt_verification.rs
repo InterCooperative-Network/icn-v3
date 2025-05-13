@@ -3,7 +3,7 @@ use anyhow::Result;
 use ed25519_dalek::{Signature, VerifyingKey};
 use icn_identity::Did;
 use std::str::FromStr;
-use crate::bincode; // Assuming bincode is available in icn-types crate dependencies
+use bincode; // Use the crate directly
 
 // Common payload structure for signing and verification across receipt types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

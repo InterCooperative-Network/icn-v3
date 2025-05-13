@@ -14,10 +14,10 @@ pub mod receipt_verification;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
 pub use runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-pub use dag_store::{DagStore, SharedDagStore, StorageError as DagStorageError};
-pub use mesh::{MeshJob, MeshJobParams, QoSProfile, WorkflowType, JobStatus as MeshJobStatus, OrgScope};
-pub use node_config::{NodeConfig, StorageConfig, NetworkConfig, ReputationConfig, LoggingConfig};
+// pub use dag_store::{DagStore, SharedDagStore, StorageError as DagStorageError}; // Still problematic, removing
+pub use mesh::{MeshJob, MeshJobParams, QoSProfile, WorkflowType, JobStatus as MeshJobStatus}; 
+// pub use node_config::{NodeConfig, StorageConfig, NetworkConfig, ReputationConfig, LoggingConfig}; 
 pub use org::{CooperativeId, CommunityId};
-pub use p2p::{PeerId, Multiaddr};
-pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError};
+// pub use p2p::{PeerId, Multiaddr}; 
+// pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError}; 
 pub use receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};

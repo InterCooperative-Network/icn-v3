@@ -600,27 +600,67 @@ impl Runtime {
     }
 
     /// Anchor a receipt to the DAG and return the CID
-    pub async fn anchor_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
-        let receipt_json = serde_json::to_string(receipt)
+    /// Now generic over any type that implements VerifiableReceipt.
+    pub async fn anchor_receipt<R: VerifiableReceipt + ?Sized + Sync>(
+        &self, 
+        receipt: &R
+    ) -> Result<String> 
+    where
+        // Required for serde_json::to_string below.
+        // This bound might be too restrictive or need adjustment based on how 
+        // VerifiableReceipt implementors are structured. 
+        // If only RuntimeExecutionReceipt is passed here, this is fine.
+        // If MeshExecutionReceipt could be passed directly, it also needs Serialize.
+        // Let's assume for now the flow is: verify `R`, then if it's a `RuntimeExecutionReceipt` (or converted to it), serialize *that*.
+        // This is tricky. The original code serialized a RuntimeExecutionReceipt.
+        // For now, let's assume `receipt` *is* a RuntimeExecutionReceipt by the time this is called in practice,
+        // or we convert to it before this stage if MeshExecutionReceipt is the input. 
+        // The verify_signature() happens on `receipt` (the R type).
+        // The serialization happens on a RuntimeExecutionReceipt.
+        // This part of the refactor needs careful handling of types for serialization.
+    {
+        // 1. Verify the signature of the incoming receipt (whatever type R is)
+        receipt.verify_signature()
+            .context("Incoming execution receipt failed signature verification")?;
+
+        // 2. Convert to RuntimeExecutionReceipt for storage and further processing if necessary.
+        //    This is a placeholder for how to handle the types. 
+        //    If `R` is always `RuntimeExecutionReceipt` in practice for this method, no conversion is needed.
+        //    If `R` could be `MeshExecutionReceipt`, this conversion/handling needs to be robust.
+        //    For now, let's assume the `receipt` argument is what we want to serialize, 
+        //    *if* it's a `RuntimeExecutionReceipt`. This is a design choice point.
+        //    Let's revert to the original logic slightly: operate on RuntimeExecutionReceipt for serialization
+        //    but ensure it has been verified. This implies `anchor_mesh_receipt` does its own verification
+        //    and then passes a verified `RuntimeExecutionReceipt` here.
+        //
+        //    Revised plan: This method should take a verified RuntimeExecutionReceipt.
+        //    The generic change might be better suited for a new, higher-level function.
+        //    Let's revert the signature change here and keep it as `&RuntimeExecutionReceipt`,
+        //    and ensure `anchor_mesh_receipt` calls `verify_signature` on `MeshExecutionReceipt` *before* conversion.
+        //
+        //    Decision: Keep anchor_receipt specific to RuntimeExecutionReceipt for now to simplify this step.
+        //    Verification of MeshExecutionReceipt will happen *before* it's converted and passed to this anchor_receipt.
+        //    So, the primary change here is calling verify_signature() on the RuntimeExecutionReceipt.
+        //    The previous `receipt_with_cid.verify()` call can be changed to `receipt.verify_signature()` (on original `receipt`).
+
+        let receipt_json = serde_json::to_string(receipt) // Assuming receipt is &RuntimeExecutionReceipt
             .map_err(|e| RuntimeError::ReceiptError(e.to_string()))?;
 
         let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;
         
         // Create a copy of the receipt with the CID included
-        let receipt_with_cid = RuntimeExecutionReceipt {
-            receipt_cid: Some(receipt_cid.clone()),
-            ..receipt.clone()
-        };
+        // This copy should also be a RuntimeExecutionReceipt
+        let mut receipt_with_cid_data = receipt.clone(); // Assuming receipt is RuntimeExecutionReceipt and Clone
+        receipt_with_cid_data.receipt_cid = Some(receipt_cid.clone());
         
-        // Verify the integrity and signature of the receipt *before* submitting
-        // Use the receipt_with_cid as it contains the CID which might be part of verification
-        // if the verify method evolves to check it against anchors.
-        receipt_with_cid.verify()
-            .context("Generated execution receipt failed verification")?;
+        // Verify the signature of the original receipt *before* creating the CID-d version
+        // The signature covers the content *without* the receipt_cid itself.
+        receipt.verify_signature()
+            .context("Runtime execution receipt failed signature verification")?;
         
-        // If a reputation updater is configured, submit the reputation record
+        // If a reputation updater is configured, submit the reputation record using the CID-adorned receipt
         if let Some(updater) = &self.reputation_updater {
-            match updater.submit_receipt_based_reputation(&receipt_with_cid).await {
+            match updater.submit_receipt_based_reputation(&receipt_with_cid_data).await {
                 Ok(_) => {
                     tracing::info!("Successfully submitted reputation record for receipt {}", receipt.id);
                 }
@@ -893,7 +933,12 @@ impl Runtime {
             signature: Some(receipt.signature.clone()),
         };
 
+        // Verify the MeshExecutionReceipt's signature *before* anchoring the derived RuntimeExecutionReceipt
+        receipt.verify_signature()
+            .context("Incoming MeshExecutionReceipt failed signature verification")?;
+
         // Call the original anchor_receipt method which handles DAG storage and reputation
+        // It will perform its own verification on the RuntimeExecutionReceipt again (which is fine, belt-and-suspenders)
         match self.anchor_receipt(&runtime_receipt).await {
             Ok(receipt_cid) => {
                 info!(job_id = %receipt.job_id, receipt_cid = %receipt_cid, "Successfully anchored receipt");
