@@ -4,7 +4,8 @@ use prometheus::{IntCounterVec, register_int_counter_vec};
 use prometheus::{HistogramVec, register_histogram_vec};
 use lazy_static::lazy_static;
 use std::sync::Arc;
-use icn_economics::{ScopeKey, ManaMetricsHook};
+use icn_identity::ScopeKey;
+use icn_economics::mana::ManaMetricsHook;
 use prometheus::{GaugeVec, register_gauge_vec, Registry};
 
 // Define standard label names

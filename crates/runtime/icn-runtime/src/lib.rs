@@ -447,6 +447,7 @@ impl Runtime {
             signature: Vec::new(),
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         };
         
         // Store the receipt - Temporarily commented out due to type mismatch
@@ -493,6 +494,7 @@ impl Runtime {
             signature: Vec::new(),
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         };
 
         Ok(receipt)
@@ -763,6 +765,7 @@ impl Runtime {
             signature: Vec::new(),
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         })
     }
 
