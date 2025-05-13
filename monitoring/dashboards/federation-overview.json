@@ -569,6 +569,77 @@
       "timeShift": null,
       "title": "Error Distribution (24h)",
       "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 12,
+      "panels": [],
+      "title": "Reputation & Mana",
+      "type": "row"
+    },
+    {
+      "title": "Reputation Delta Distribution (per Cooperative)",
+      "type": "heatmap",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 14,
+      "targets": [
+        {
+          "expr": "sum(increase(icn_runtime_reputation_score_delta_histogram_bucket{coop_id!=\\"\\"}[$__interval])) by (le, coop_id)",
+          "format": "heatmap",
+          "legendFormat": "{{coop_id}}",
+          "refId": "A"
+        }
+      ],
+      "cards": {
+        "cardPadding": null,
+        "cardRound": null
+      },
+      "color": {
+        "cardColor": "#b4ff00",
+        "colorScale": "sqrt",
+        "colorScheme": "interpolateOranges",
+        "exponent": 0.5,
+        "mode": "spectrum"
+      },
+      "dataFormat": "tsbuckets",
+      "heatmap": {},
+      "hideZeroBuckets": false,
+      "highlightCards": true,
+      "legend": {
+        "show": true
+      },
+      "reverseYBuckets": false,
+      "tooltip": {
+        "show": true,
+        "showHistogram": true
+      },
+      "xAxis": {
+        "show": true
+      },
+      "yAxis": {
+        "decimals": 2,
+        "format": "short",
+        "label": "Score Delta",
+        "logBase": 1,
+        "max": null,
+        "min": null,
+        "show": true,
+        "splitFactor": null
+      },
+      "yBucketBound": "auto"
     }
   ],
   "refresh": "10s",
