@@ -1,26 +1,29 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Configuration for the ICN Runtime
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuntimeConfig {
-    /// The DID of this runtime node (used for signing, reputation, etc.)
+    /// The DID of this runtime node. This will be derived from the key_path if provided.
     pub node_did: String,
 
-    /// Path to local storage directory (e.g., for DAG store, job queue, etc.)
+    /// Path to the directory for persistent storage (e.g., Sled DB).
     pub storage_path: PathBuf,
 
-    /// Optional path to a file or keystore containing the node's private key
+    /// Optional path to a file storing the node's identity KeyPair.
+    /// If not provided, or if the file doesn't exist, a new keypair will be generated.
+    /// If provided and the file exists but is invalid, an error will occur.
     pub key_path: Option<PathBuf>,
 
-    /// Base URL of the reputation service (used for reporting receipts, etc.)
+    /// Optional URL for the reputation service.
     pub reputation_service_url: Option<String>,
 
-    /// Base URL of the mesh job service (used to submit or fetch job data)
+    /// Optional URL for the mesh job service to poll for new jobs.
     pub mesh_job_service_url: Option<String>,
 
-    /// Prometheus metrics exporter port
+    /// Optional port for Prometheus metrics http endpoint.
     pub metrics_port: Option<u16>,
 
-    /// Verbosity / log level (e.g., "info", "debug", "trace")
+    /// Optional log level string (e.g., "info", "debug", "icn_runtime=trace").
     pub log_level: Option<String>,
 } 

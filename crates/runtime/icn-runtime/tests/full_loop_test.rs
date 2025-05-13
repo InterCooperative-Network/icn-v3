@@ -8,7 +8,7 @@ use icn_runtime::{
     reputation_integration::{HttpReputationUpdater, NoopReputationUpdater},
 };
 use icn_types::{
-    mesh::{MeshJob, MeshJobParams, JobStatus as IcnJobStatus, QoSProfile, WorkflowType, OriginatorOrganizationScope},
+    mesh::{MeshJob, MeshJobParams, JobStatus as IcnJobStatus, QoSProfile, WorkflowType, OrgScopeIdentifier},
     resource::ResourceType,
     runtime_receipt::RuntimeExecutionMetrics,
 };
@@ -115,7 +115,7 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
         job_id: Uuid::new_v4().to_string(),
         originator_did: job_originator_did.clone(), // Use clone
         params: job_params,
-        originator_org_scope: Some(OriginatorOrganizationScope { 
+        originator_org_scope: Some(OrgScopeIdentifier { 
             coop_id: None,
             community_id: None,
         }), 
@@ -219,7 +219,7 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
         job_id: job_id.clone(),
         params,
         originator_did: job_originator_did.clone(),
-        originator_org_scope: Some(OriginatorOrganizationScope {
+        originator_org_scope: Some(OrgScopeIdentifier {
             coop_id: None,
             community_id: None,
         }),

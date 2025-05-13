@@ -57,6 +57,11 @@ pub mod distribution_worker;
 mod sled_storage;
 use sled_storage::SledStorage;
 
+// Add imports for keypair loading/saving
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use bincode;
+
 /// Module cache trait for caching compiled WASM modules
 #[async_trait]
 pub trait ModuleCache: Send + Sync {
@@ -696,42 +701,68 @@ impl Runtime {
     }
     
     /// Construct a Runtime instance from configuration.
-    pub async fn from_config(config: RuntimeConfig) -> Result<Self> {
-        info!("Initializing Runtime from config: {:?}", config);
+    pub async fn from_config(mut config: RuntimeConfig) -> Result<Self> {
+        info!("Initializing runtime from config: {:?}", config);
 
-        // Initialize SledStorage
-        let sled_db_path = config.storage_path.join("runtime_db");
-        std::fs::create_dir_all(&config.storage_path) // Ensure base directory exists
-            .context(format!("Failed to create storage directory at {:?}", config.storage_path))?;
-        let storage = Arc::new(SledStorage::open(&sled_db_path)?);
-        info!("Using Sled storage at: {:?}", sled_db_path);
+        // Load or generate KeyPair
+        let keypair = load_or_generate_keypair(config.key_path.as_deref())
+            .context("Failed to load or generate node keypair")?;
+        
+        config.node_did = keypair.did.to_string();
+        let node_did_obj = keypair.did.clone();
+        info!(node_did = %config.node_did, "Runtime node DID initialized/confirmed.");
 
-        // TODO: Load identity keypair from config.key_path
-        let identity = if let Some(key_path) = &config.key_path {
-            info!("Loading keypair from: {:?}", key_path);
-            None // Temporarily None
+        let storage: Arc<dyn RuntimeStorage> = Arc::new(
+            SledStorage::new(&config.storage_path)
+                .context("Failed to initialize Sled storage")?,
+        );
+
+        let mut context_builder = RuntimeContextBuilder::new()
+            .with_identity(keypair.clone()) // Use the loaded/generated keypair
+            .with_executor_id(config.node_did.clone())
+            .with_dag_store(icn_types::dag_store::SharedDagStore::new());
+
+        if let Some(reputation_url) = config.reputation_service_url.as_ref() {
+            info!("Configuring HttpReputationUpdater with URL: {}", reputation_url);
+            let reputation_updater = HttpReputationUpdater::new(reputation_url.clone(), node_did_obj);
+            context_builder = context_builder.with_reputation_service(Arc::new(reputation_updater));
         } else {
-            info!("No keypair path specified, assuming key exists in context if needed or generating new one");
-            None
+            warn!("No reputation service URL configured. Using NoopReputationUpdater.");
+            context_builder = context_builder.with_reputation_service(Arc::new(NoopReputationUpdater));
+        }
+        
+        // Add mesh_job_service_url to context if present
+        if let Some(mesh_job_url) = config.mesh_job_service_url.as_ref() {
+            context_builder = context_builder.with_mesh_job_service_url(mesh_job_url.clone());
+        }
+
+        let context = Arc::new(context_builder.build());
+
+        let engine_config = Config::new();
+        let engine = Engine::new(&engine_config)?;
+        let mut linker = Linker::new(&engine);
+        register_host_functions(&mut linker)?;
+
+        let mut runtime = Self {
+            config,
+            vm: CoVm::new(&engine),
+            storage,
+            context,
+            engine,
+            linker,
+            module_cache: None, // TODO: Initialize module cache if needed
+            host_env: None, // Host env will be set per execution
+            reputation_updater: None, // To be set based on context post-init
         };
 
-        // Initialize RuntimeContext
-        let mut context_builder = RuntimeContextBuilder::new();
-        context_builder = context_builder.with_executor_id(config.node_did.clone());
-        if let Some(identity_clone) = identity.clone() { 
-             context_builder = context_builder.with_identity(identity_clone);
+        // Set reputation updater based on context
+        if let Some(reputation_service) = runtime.context.reputation_service() {
+            runtime.reputation_updater = Some(reputation_service.clone());
+        } else {
+            // This case should ideally be handled by the builder ensuring a NoopUpdater
+            warn!("Reputation service not found in context after build. Runtime will have no reputation updater.");
         }
-        if let Some(url) = &config.reputation_service_url {
-             context_builder = context_builder.with_reputation_service(url.clone());
-        }
-        // Consider loading/saving context state (like mana) from/to Sled if needed across restarts
-        let context = Arc::new(context_builder.build());
-        
-        // Initialize Runtime using `with_context` which now accepts Arc<RuntimeContext>
-        let mut runtime = Runtime::with_context(storage, context);
-        runtime.config = config; // Store the loaded config
-        
-        info!("Runtime constructed from configuration.");
+
         Ok(runtime)
     }
     
@@ -1078,3 +1109,48 @@ pub async fn execute_mesh_job(
 }
 
 pub use icn_mesh_receipts::ExecutionReceipt;
+
+/// Loads a KeyPair from the specified path, or generates a new one if the file 
+/// doesn't exist, saving it to the path.
+/// If path is None, always generates a new KeyPair without saving.
+fn load_or_generate_keypair(key_path: Option<&Path>) -> Result<IcnKeyPair> {
+    match key_path {
+        Some(path) => {
+            if path.exists() {
+                info!("Attempting to load keypair from: {:?}", path);
+                let mut file = File::open(path)
+                    .with_context(|| format!("Failed to open keypair file: {:?}", path))?;
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer)
+                    .with_context(|| format!("Failed to read keypair file: {:?}", path))?;
+                
+                let keypair: IcnKeyPair = bincode::deserialize(&buffer)
+                    .with_context(|| format!("Failed to deserialize keypair from file: {:?}", path))?;
+                info!("Successfully loaded keypair from: {:?}", path);
+                Ok(keypair)
+            } else {
+                info!("No keypair file found at {:?}, generating a new one.", path);
+                let keypair = IcnKeyPair::generate();
+                let serialized_keypair = bincode::serialize(&keypair)
+                    .context("Failed to serialize new keypair")?;
+                
+                // Ensure parent directory exists
+                if let Some(parent_dir) = path.parent() {
+                    fs::create_dir_all(parent_dir)
+                        .with_context(|| format!("Failed to create parent directory for keypair: {:?}", parent_dir))?;
+                }
+
+                let mut file = File::create(path)
+                    .with_context(|| format!("Failed to create keypair file: {:?}", path))?;
+                file.write_all(&serialized_keypair)
+                    .with_context(|| format!("Failed to write new keypair to file: {:?}", path))?;
+                info!("Successfully generated and saved new keypair to: {:?}", path);
+                Ok(keypair)
+            }
+        }
+        None => {
+            info!("No key_path provided. Generating an in-memory keypair.");
+            Ok(IcnKeyPair::generate())
+        }
+    }
+}
