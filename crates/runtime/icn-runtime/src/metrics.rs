@@ -15,6 +15,7 @@ const LABEL_ISSUER_DID: &str = "issuer_did";
 const LABEL_EXECUTOR_DID: &str = "executor_did";
 const LABEL_RESULT: &str = "result";
 const LABEL_SUCCESS: &str = "success";
+const LABEL_ERROR_TYPE: &str = "error_type";
 
 // Example buckets for score deltas, adjust as needed
 const SCORE_DELTA_BUCKETS: &[f64] = &[-100.0, -50.0, -25.0, -10.0, 0.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0];
@@ -64,6 +65,28 @@ lazy_static! {
         // Buckets suitable for typical mana costs (adjust if needed)
         vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0]
     ).unwrap();
+
+    // --- New Prometheus Counters for ReputationUpdater ErrorS ---
+    pub static ref REPUTATION_SCORE_FETCH_FAILURES: IntCounterVec =
+        register_int_counter_vec!(
+            "reputation_score_fetch_failures",
+            "Failures when fetching current reputation score",
+            &["executor_did", "reason"]
+        ).unwrap();
+
+    pub static ref REPUTATION_SUBMISSION_HTTP_ERRORS: IntCounterVec =
+        register_int_counter_vec!(
+            "reputation_submission_http_errors",
+            "Non-2xx HTTP responses when submitting reputation",
+            &["executor_did", "status"]
+        ).unwrap();
+
+    pub static ref REPUTATION_SUBMISSION_CLIENT_ERRORS: IntCounterVec =
+        register_int_counter_vec!(
+            "reputation_submission_client_errors",
+            "Client-side errors (reqwest) when submitting reputation",
+            &["executor_did", "reason"]
+        ).unwrap();
 }
 
 // --- Helper Functions for Reputation Metrics ---
