@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use icn_identity::Did;
-use icn_types::mana::ManaState; // Assuming ManaState is in icn_types::mana
+pub use icn_types::mana::ManaState;
 use tokio::sync::RwLock;
 use tracing;
 use serde::{Serialize, Deserialize};
@@ -217,6 +217,14 @@ pub enum RegenerationPolicy {
 }
 
 // --- ManaRegenerator Struct ---
+
+#[derive(Debug)]
+pub struct RegenerationTickDetails {
+    pub processed_dids_count: usize,
+    pub regenerated_dids_count: usize,
+    pub errors: Vec<(Did, String)>,
+}
+
 pub struct ManaRegenerator<L: ManaLedger> {
     pub ledger: Arc<L>,
     pub policy: RegenerationPolicy,
@@ -228,26 +236,68 @@ impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> { // Ensure L is Send + Syn
         Self { ledger, policy }
     }
 
-    pub async fn tick(&self) -> Result<()> {
-        let dids = self.ledger.all_dids().await?;
-        for did in dids {
-            if let Some(mut state) = self.ledger.get_mana_state(&did).await? {
-                let original_mana = state.current_mana;
-                match self.policy {
-                    RegenerationPolicy::FixedRatePerTick(amount) => {
-                        state.current_mana = (state.current_mana + amount).min(state.max_mana);
-                        if state.current_mana != original_mana {
-                            self.ledger.update_mana_state(&did, state).await?;
-                            tracing::debug!(did = %did, old_mana = original_mana, new_mana = self.ledger.get_mana_state(&did).await?.map_or(0, |s| s.current_mana), regen_amount = amount, "Mana regenerated");
-                        } else {
-                            tracing::trace!(did = %did, mana = original_mana, "Mana already at max or regen amount is zero.");
+    pub async fn tick(&self) -> Result<RegenerationTickDetails> {
+        let mut processed_dids_count = 0;
+        let mut regenerated_dids_count = 0;
+        let mut errors = Vec::new();
+
+        let dids_result = self.ledger.all_dids().await;
+        
+        match dids_result {
+            Ok(dids) => {
+                processed_dids_count = dids.len();
+                for did in dids {
+                    match self.ledger.get_mana_state(&did).await {
+                        Ok(Some(mut state)) => {
+                            let original_mana = state.current_mana; // Store original mana for comparison
+                            
+                            let regen_amount = match self.policy {
+                                RegenerationPolicy::FixedRatePerTick(amount) => amount,
+                                // Add other policy evaluations here if they exist
+                            };
+
+                            state.current_mana = (state.current_mana + regen_amount).min(state.max_mana);
+
+                            if state.current_mana != original_mana { // Check if mana actually changed
+                                regenerated_dids_count += 1;
+                                // Update the ledger only if mana changed
+                                if let Err(e) = self.ledger.update_mana_state(&did, state).await {
+                                    errors.push((did.clone(), format!("update_failed: {}", e)));
+                                    // If update failed, we might not count it as regenerated, or handle differently
+                                    // For now, regenerated_dids_count was already incremented.
+                                } else {
+                                     tracing::debug!(did = %did, old_mana = original_mana, new_mana = self.ledger.get_mana_state(&did).await.map_or(0, |s_opt| s_opt.map_or(0, |s_val| s_val.current_mana)), regen_amount = regen_amount, "Mana regenerated");
+                                }
+                            } else {
+                                tracing::trace!(did = %did, mana = original_mana, "Mana already at max or regen amount is zero.");
+                                // No need to update ledger if mana didn't change
+                            }
+                        }
+                        Ok(None) => {
+                            // DID exists in all_dids but not in get_mana_state, could be a race or inconsistency
+                            // For now, we'll just note it as an error or skip.
+                            // errors.push((did.clone(), "state_not_found_after_all_dids".to_string()));
+                            tracing::warn!(did = %did, "ManaState not found for DID listed in all_dids, skipping.");
+                        }
+                        Err(e) => {
+                            errors.push((did.clone(), format!("read_failed: {}", e)));
                         }
                     }
-                    // Handle other policies here in the future
                 }
             }
+            Err(e) => {
+                // Failed to get all DIDs, this is a more global error for the tick
+                // errors.push(("global".to_string(), format!("all_dids_failed: {}", e)));
+                // For now, returning the error directly as Result propagation
+                return Err(anyhow::anyhow!("Failed to retrieve all DIDs from ledger: {}", e));
+            }
         }
-        Ok(())
+
+        Ok(RegenerationTickDetails {
+            processed_dids_count,
+            regenerated_dids_count,
+            errors,
+        })
     }
 }
 
