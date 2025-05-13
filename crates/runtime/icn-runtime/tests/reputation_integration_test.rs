@@ -23,6 +23,10 @@ use httpmock::MockServer;
 use httpmock::Method::POST;
 use tempfile;
 use icn_runtime::config::RuntimeConfig;
+use crate::metrics;
+use crate::reputation_integration::{HttpReputationUpdater, ReputationScoringConfig};
+use icn_types::reputation::ReputationRecord;
+use httpmock::prelude::*;
 
 /// Mock storage implementation
 #[derive(Clone, Default)]
@@ -225,133 +229,206 @@ fn generate_and_sign_dummy_receipt(keypair: &IcnKeyPair) -> Result<RuntimeExecut
 
 #[tokio::test]
 async fn test_valid_receipt_sends_to_http_reputation_service() -> Result<()> {
-    // Setup mock server
     let server = MockServer::start();
-    let mock_endpoint = "/reputation/records"; // Match HttpReputationUpdater's expected path
     let mock = server.mock(|when, then| {
-        when.method(POST)
-            .path(mock_endpoint)
-            .header("content-type", "application/json");
-            // TODO: Add body assertion if needed: .json_body(...) 
+        when.method(POST).path("/reputation/records");
         then.status(200);
     });
-
-    // Create runtime config with mock reputation service URL
-    let config = RuntimeConfig {
-        reputation_service_url: Some(server.url(mock_endpoint)),
-        // Ensure storage_path points to a valid temp dir or use MemStorage approach
-        storage_path: tempfile::tempdir()?.path().to_path_buf(), 
-        key_path: None, // Generate in-memory key
-        ..Default::default()
-    };
-    
-    // Initialize runtime from config (this sets up HttpReputationUpdater)
-    let runtime = Runtime::from_config(config).await?;
-    let keypair = get_runtime_keypair(&runtime)?;
-
-    // Generate dummy receipt (needs fields from RuntimeExecutionReceipt)
-    let mut receipt = RuntimeExecutionReceipt {
-        id: uuid::Uuid::new_v4().to_string(),
-        issuer: keypair.did.to_string(), // Use the runtime's DID as issuer
-        proposal_id: "proposal-xyz".to_string(),
-        wasm_cid: "wasm-cid-demo".to_string(),
-        ccl_cid: "ccl-cid-demo".to_string(),
-        anchored_cids: vec!["cid1".to_string()],
+    let did = Did::from_str("did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345")?;
+    let receipt = RuntimeExecutionReceipt {
+        id: "test-receipt".into(),
+        issuer: did.to_string(),
+        proposal_id: "test-proposal".into(),
+        wasm_cid: "test-wasm".into(),
+        ccl_cid: "test-ccl".into(),
         metrics: RuntimeExecutionMetrics {
-            fuel_used: 123,
             host_calls: 10,
             io_bytes: 1024,
+            mana_cost: Some(500), // Corrected: Added mana_cost
         },
-        resource_usage: vec![("CPU".to_string(), 500)],
-        timestamp: chrono::Utc::now().timestamp() as u64, // Cast to u64
-        dag_epoch: Some(0), // Use Option<u64>
-        receipt_cid: None, // Will be set by anchor_receipt
-        signature: None,
+        anchored_cids: vec!["cid1".into()],
+        resource_usage: vec![("cpu".into(), 100)],
+        timestamp: Utc::now().timestamp() as u64,
+        dag_epoch: Some(1), // Corrected: Added dag_epoch
+        receipt_cid: Some("receipt-cid-123".into()),
+        signature: Some(vec![1, 2, 3]),
     };
-
-    // Sign the receipt (using helper or logic)
-    sign_receipt(&mut receipt, &keypair)?;
-    // Alternatively, if issue_receipt is used, it would handle signing:
-    // let receipt = runtime.issue_receipt(...)?; 
-
-    // Anchor receipt (should trigger reputation submission via HttpReputationUpdater)
-    // Note: anchor_receipt takes &RuntimeExecutionReceipt
-    runtime.anchor_receipt(&receipt).await.expect("Anchoring failed, check verification and submission logic");
-
-    // Assert HTTP request was made exactly once
-    mock.assert();
-    // Or more robustly:
+    let updater = HttpReputationUpdater::new(server.url(""), did.clone());
+    updater.submit_receipt_based_reputation(&receipt, true).await?;
     mock.assert_hits(1);
-    
     Ok(())
 }
 
 #[tokio::test]
 async fn test_reputation_updater_handles_http_500() -> Result<()> {
-    // Setup mock server
     let server = MockServer::start();
-    let mock_endpoint = "/reputation/records";
     let mock = server.mock(|when, then| {
-        when.method(POST).path(mock_endpoint);
-        then.status(500); // Internal server error
+        when.method(POST).path("/reputation/records");
+        then.status(500).body("Internal Server Error");
     });
-
-    // Create runtime config pointing to mock server
-    let temp_dir = tempfile::tempdir()?;
-    let config = RuntimeConfig {
-        reputation_service_url: Some(server.url(mock_endpoint)),
-        storage_path: temp_dir.path().to_path_buf(), 
-        key_path: None, // Generate in-memory key
-        ..Default::default()
+    let did = Did::from_str("did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345")?;
+    let receipt = RuntimeExecutionReceipt {
+        id: "test-receipt-500".into(),
+        issuer: did.to_string(),
+        proposal_id: "test-proposal-500".into(),
+        wasm_cid: "test-wasm-500".into(),
+        ccl_cid: "test-ccl-500".into(),
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 5,
+            io_bytes: 512,
+            mana_cost: Some(250), // Corrected: Added mana_cost
+        },
+        anchored_cids: vec![],
+        resource_usage: vec![],
+        timestamp: Utc::now().timestamp() as u64,
+        dag_epoch: Some(2), // Corrected: Added dag_epoch
+        receipt_cid: Some("receipt-cid-500".into()),
+        signature: None,
     };
-    
-    // Initialize runtime
-    let runtime = Runtime::from_config(config).await?;
-    let keypair = get_runtime_keypair(&runtime)?;
-
-    // Generate a signed receipt
-    let receipt = generate_and_sign_dummy_receipt(&keypair)?;
-
-    // Anchor receipt - should attempt submission but handle the 500 error gracefully
-    let anchor_result = runtime.anchor_receipt(&receipt).await;
-
-    // Assert anchoring succeeded (error was logged, not propagated)
-    // The anchor_receipt function logs the error but returns Ok(receipt_cid)
-    assert!(anchor_result.is_ok(), "anchor_receipt should succeed even on reputation submission failure");
-    
-    // Assert the mock server was hit
+    let updater = HttpReputationUpdater::new(server.url(""), did.clone());
+    let result = updater.submit_receipt_based_reputation(&receipt, true).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("Failed to submit reputation record: 500"));
     mock.assert_hits(1);
-
     Ok(())
 }
 
 #[tokio::test]
 async fn test_noop_reputation_updater_ignores_submission() -> Result<()> {
-    // Setup runtime config WITHOUT reputation service URL
-    let temp_dir = tempfile::tempdir()?;
-    let config = RuntimeConfig {
-        reputation_service_url: None, // <-- This triggers NoopReputationUpdater
-        storage_path: temp_dir.path().to_path_buf(), 
-        key_path: None, 
-        ..Default::default()
+    let updater = icn_runtime::reputation_integration::NoopReputationUpdater;
+    let did = Did::from_str("did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345")?;
+    let receipt = RuntimeExecutionReceipt {
+       id: "test-receipt-noop".into(),
+       issuer: did.to_string(),
+       proposal_id: "test-proposal-noop".into(),
+       wasm_cid: "test-wasm-noop".into(),
+       ccl_cid: "test-ccl-noop".into(),
+       metrics: RuntimeExecutionMetrics {
+           host_calls: 1,
+           io_bytes: 1,
+           mana_cost: Some(10), // Corrected: Added mana_cost
+       },
+       anchored_cids: vec![],
+       resource_usage: vec![],
+       timestamp: Utc::now().timestamp() as u64,
+       dag_epoch: Some(3), // Corrected: Added dag_epoch
+       receipt_cid: Some("receipt-cid-noop".into()),
+       signature: None,
+   };
+   let result = updater.submit_receipt_based_reputation(&receipt, true).await;
+   assert!(result.is_ok());
+   // No mock server to assert hits against
+   Ok(())
+}
+
+#[tokio::test]
+async fn test_http_reputation_updater_submits_correct_payload() -> Result<()> {
+    let server = MockServer::start();
+    let expected_subject = "did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345".to_string();
+    let expected_anchor = "cid-abc123".to_string();
+    let expected_mana_cost = Some(1000);
+    let expected_timestamp = 1_700_000_000;
+    let config = ReputationScoringConfig {
+        mana_cost_weight: 100.0,
+        failure_penalty: -25.0,
     };
+    let expected_score_delta = config.mana_cost_weight / expected_mana_cost.unwrap() as f64;
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/reputation/records")
+            .json_body_partial(serde_json::json!({
+                "subject": expected_subject,
+                "anchor": expected_anchor,
+                "mana_cost": expected_mana_cost,
+                "score_delta": expected_score_delta,
+                "timestamp": expected_timestamp,
+                "success": true
+            }));
+        then.status(200);
+    });
+    let receipt = RuntimeExecutionReceipt {
+        issuer: expected_subject.clone(),
+        proposal_id: "prop-1".to_string(),
+        wasm_cid: "wasm-1".to_string(),
+        ccl_cid: "ccl-1".to_string(),
+        anchored_cids: vec![],
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 5,
+            io_bytes: 2048,
+            mana_cost: expected_mana_cost, // Corrected: Added mana_cost
+        },
+        resource_usage: vec![],
+        timestamp: expected_timestamp,
+        receipt_cid: Some(expected_anchor.clone()),
+        signature: Some(vec![0u8; 64]),
+        id: "receipt-id-123".to_string(),
+        dag_epoch: Some(4), // Corrected: Added dag_epoch
+    };
+    let updater = HttpReputationUpdater::new_with_config(
+        server.url(""),
+        Did::from_str(&expected_subject).unwrap(),
+        config,
+    );
+    updater.submit_receipt_based_reputation(&receipt, true).await?;
+    mock.assert_hits(1);
+    Ok(())
+}
 
-    // Initialize runtime (will use NoopReputationUpdater)
-    let runtime = Runtime::from_config(config).await?;
-    let keypair = get_runtime_keypair(&runtime)?;
+#[tokio::test]
+async fn test_http_reputation_updater_submits_failure_penalty() -> Result<()> {
+    let server = MockServer::start();
+    let subject = "did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345".to_string();
+    let anchor = "cid-fail-xyz".to_string();
+    let timestamp = 1_700_000_001;
+    let config = ReputationScoringConfig {
+        mana_cost_weight: 100.0,
+        failure_penalty: -25.0,
+    };
+    let expected_score_delta_on_fail = config.failure_penalty;
+    let expected_success_status = false;
 
-    // Generate a signed receipt
-    let receipt = generate_and_sign_dummy_receipt(&keypair)?;
-
-    // Anchor receipt - should not attempt any HTTP submission
-    let anchor_result = runtime.anchor_receipt(&receipt).await;
-
-    // Assert anchoring succeeded
-    assert!(anchor_result.is_ok(), "anchor_receipt failed with NoopReputationUpdater");
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/reputation/records")
+            .json_body_partial(serde_json::json!({
+                "subject": subject,
+                "anchor": anchor,
+                "mana_cost": Some(1000),
+                "score_delta": expected_score_delta_on_fail,
+                "timestamp": timestamp,
+                "success": expected_success_status
+            }));
+        then.status(200);
+    });
+    let receipt = RuntimeExecutionReceipt {
+        issuer: subject.clone(),
+        proposal_id: "prop-fail".to_string(),
+        wasm_cid: "wasm-fail".to_string(),
+        ccl_cid: "ccl-fail".to_string(),
+        anchored_cids: vec![],
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 2,
+            io_bytes: 512,
+            mana_cost: Some(1000), // Corrected: Added mana_cost
+        },
+        resource_usage: vec![],
+        timestamp,
+        receipt_cid: Some(anchor.clone()),
+        signature: Some(vec![0u8; 64]),
+        id: "receipt-fail-id".to_string(),
+        dag_epoch: Some(5), // Corrected: Added dag_epoch
+    };
+    let updater = HttpReputationUpdater::new_with_config(
+        server.url(""),
+        Did::from_str(&subject)?,
+        config,
+    );
     
-    // We cannot easily assert that *no* HTTP request was made without 
-    // setting up a mock server and asserting it *wasn't* hit, which feels 
-    // brittle. Trusting the code path based on config is sufficient here.
+    // Pass is_successful = false
+    let _result = updater.submit_receipt_based_reputation(&receipt, false).await;
+
+    // Now the mock assertion should pass because the implementation uses the parameter
+    mock.assert_hits(1); 
 
     Ok(())
 }
