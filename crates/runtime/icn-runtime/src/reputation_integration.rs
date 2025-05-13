@@ -570,7 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_submit_receipt_success_modifier_enabled_score_fails() {
-        // Scenario: Modifier Enabled – Success Path with get_current_score Failure (e.g., 404)
+        // Scenario: Modifier Enabled – Success Path with get_current_score Failure (e.g., 503 Service Unavailable)
         let server = MockServer::start();
         let keypair = KeyPair::generate();
         let local_did = keypair.did.clone();
@@ -607,11 +607,11 @@ mod tests {
             signature: None,
         };
 
-        // Mock for GET /reputation/profiles/{did} - simulate failure (404 Not Found)
+        // Mock for GET /reputation/profiles/{did} - simulate failure (503 Service Unavailable)
         let get_score_mock = server.mock(|when, then| {
             when.method(httpmock::Method::GET)
                 .path(format!("/reputation/profiles/{}", executor_did_str));
-            then.status(404);
+            then.status(503);
         });
 
         // Mock for POST / (main submission)
@@ -620,6 +620,11 @@ mod tests {
             then.status(200).json_body(json!({ "status": "ok" }));
         });
 
+        let metric_labels = [executor_did_str.as_str(), "503"];
+        let initial_metric_value = metrics::REPUTATION_SCORE_FETCH_FAILURES
+            .get_metric_with_label_values(&metric_labels)
+            .map_or(0.0, |m| m.get());
+
         let result = updater.submit_receipt_based_reputation(
             &test_receipt,
             true, // is_successful
@@ -627,9 +632,15 @@ mod tests {
             "test-community-mod-fail"
         ).await;
 
+        let final_metric_value = metrics::REPUTATION_SCORE_FETCH_FAILURES
+            .get_metric_with_label_values(&metric_labels)
+            .map_or(0.0, |m| m.get());
+
+        assert_eq!(final_metric_value - initial_metric_value, 1.0, "REPUTATION_SCORE_FETCH_FAILURES should increment by 1");
+
         get_score_mock.assert();
         post_submission_mock.assert();
-        assert!(result.is_ok(), "Expected successful submission, got {:?}", result.err());
+        assert!(result.is_ok(), "Expected successful submission logic (despite score fetch failure), got {:?}", result.err());
 
         let submitted_json = post_submission_mock.requests()[0].body_json::<serde_json::Value>().unwrap();
 
@@ -729,9 +740,10 @@ mod tests {
         let keypair = KeyPair::generate();
         let local_did = keypair.did.clone();
         let executor_keypair = KeyPair::generate();
+        let executor_did_str = executor_keypair.did.to_string();
 
         // Config doesn't significantly impact this test, but use default
-        let config = ReputationScoringConfig::default(); 
+        let config = ReputationScoringConfig::default();
 
         let updater = HttpReputationUpdater::new_with_config(
             server.base_url(),
@@ -741,7 +753,7 @@ mod tests {
 
         let test_receipt = RuntimeExecutionReceipt {
             id: "test-receipt-http-500".to_string(),
-            issuer: executor_keypair.did.to_string(),
+            issuer: executor_did_str.clone(), // Use the string form for consistency
             proposal_id: "prop-http-500".to_string(),
             wasm_cid: "wasm-cid-http-500".to_string(),
             ccl_cid: "ccl-cid-http-500".to_string(),
@@ -760,11 +772,10 @@ mod tests {
             then.status(500).body("Internal Server Error simulation");
         });
 
-        // If modifier were enabled, GET would happen first. For this test, let's assume modifier disabled
-        // or that the failure happens on POST regardless.
-        // If config.enable_reputation_modifier was true, we'd also need to mock the GET.
-        // For simplicity, and to focus on POST error, assume modifier is off or score fetch succeeds.
-        // The current default config has enable_reputation_modifier = false.
+        let metric_labels = [executor_did_str.as_str(), "500"]; // executor_did, status
+        let initial_metric_value = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
+            .get_metric_with_label_values(&metric_labels)
+            .map_or(0.0, |m| m.get());
 
         let result = updater.submit_receipt_based_reputation(
             &test_receipt,
@@ -772,6 +783,12 @@ mod tests {
             "test-coop-http-err",
             "test-community-http-err"
         ).await;
+
+        let final_metric_value = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
+            .get_metric_with_label_values(&metric_labels)
+            .map_or(0.0, |m| m.get());
+
+        assert_eq!(final_metric_value - initial_metric_value, 1.0, "REPUTATION_SUBMISSION_HTTP_ERRORS should increment by 1");
 
         post_submission_mock.assert(); // Ensure the call was attempted
         assert!(result.is_err(), "Expected an error result due to HTTP 500");
@@ -787,10 +804,11 @@ mod tests {
     async fn test_http_submit_receipt_malformed_url() {
         // Scenario: Malformed ReputationService URL
         // No MockServer needed here as the error should occur before HTTP communication starts or during client build.
-        
+
         let keypair = KeyPair::generate();
         let local_did = keypair.did.clone();
         let executor_keypair = KeyPair::generate();
+        let executor_did_str = executor_keypair.did.to_string();
 
         let config = ReputationScoringConfig::default(); // Modifier disabled by default
 
@@ -803,7 +821,7 @@ mod tests {
 
         let test_receipt = RuntimeExecutionReceipt {
             id: "test-receipt-bad-url".to_string(),
-            issuer: executor_keypair.did.to_string(),
+            issuer: executor_did_str.clone(),
             proposal_id: "prop-bad-url".to_string(),
             wasm_cid: "wasm-cid-bad-url".to_string(),
             ccl_cid: "ccl-cid-bad-url".to_string(),
@@ -816,6 +834,25 @@ mod tests {
             signature: None,
         };
 
+        // We need to capture the expected error string for the metric label
+        // This is a bit tricky as it's internal to reqwest. Let's try to predict or run once to see.
+        // A common error for such a URL is "relative URL without a base"
+        // The metric is incremented in map_err, so the error is whatever reqwest::Error::to_string() gives.
+        // For now, we'll fetch the metric count and if it increments, we know the label was matched by err.to_string().
+        // A more robust test might involve a more specific type of client error if this proves flaky.
+
+        // Initialize a temporary variable for the expected reason label.
+        // This will be populated if/when the actual error occurs.
+        let mut expected_reason_label = String::new();
+
+        // Get initial metric value. Since the reason label is dynamic (the error string itself),
+        // we can't easily get it before the error. Instead, we check if *any* client error for this DID incremented,
+        // or refine this if we can determine the exact error string beforehand.
+        // For now, let's just check if *a* client error for this DID was recorded.
+        // A simpler approach: just check the count *after* and assume if it's 1, it was this error.
+        // This is okay if tests are isolated or we clear metrics, which we are not doing here.
+        // Let's try to get the specific error string from the result.
+
         let result = updater.submit_receipt_based_reputation(
             &test_receipt,
             true, // is_successful
@@ -824,16 +861,26 @@ mod tests {
         ).await;
 
         assert!(result.is_err(), "Expected an error result due to malformed URL");
+        let actual_err = result.err().unwrap();
+        expected_reason_label = actual_err.to_string(); // This is the actual error message used as reason
         
-        // Check if the error is a reqwest::Error (or wraps one)
-        // The actual error from reqwest might be something like "builder error for url" or "relative URL without a base"
-        let err = result.err().unwrap();
-        // We can check if it's a reqwest error by trying to downcast or checking the string representation
-        // For now, let's check parts of the typical reqwest error string for invalid URLs.
-        let err_string = err.to_string().to_lowercase(); // Convert to lowercase for broader matching
+        let metric_labels = [executor_did_str.as_str(), expected_reason_label.as_str()];
+        let final_metric_value = metrics::REPUTATION_SUBMISSION_CLIENT_ERRORS
+            .get_metric_with_label_values(&metric_labels)
+            .map_or(0.0, |m| m.get());
+
+        // We can't easily get initial_metric_value for this specific dynamic label beforehand.
+        // So we assert that the final count is at least 1.
+        // This assumes that this specific error string (reason) hasn't occurred before for this DID in this test run.
+        // For truly isolated test of this counter, one would need to ensure the metric is 0 before this specific error.
+        assert_eq!(final_metric_value, 1.0, 
+            "REPUTATION_SUBMISSION_CLIENT_ERRORS should be 1 for this specific error. Label: {}", expected_reason_label);
+
+        // Previous error string check remains useful for general error type validation
+        let err_string_lowercase = actual_err.to_string().to_lowercase();
         assert!(
-            err_string.contains("url") && (err_string.contains("invalid") || err_string.contains("builder error") || err_string.contains("relative")) || err_string.contains("failed to send request"),
-            "Error message should indicate a URL parsing or request sending issue: {}", err_string
+            err_string_lowercase.contains("url") && (err_string_lowercase.contains("invalid") || err_string_lowercase.contains("builder error") || err_string_lowercase.contains("relative")) || err_string_lowercase.contains("failed to send request"),
+            "Error message should indicate a URL parsing or request sending issue: {}", err_string_lowercase
         );
     }
 
