@@ -1,9 +1,11 @@
+pub mod config;
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use wasmtime::{Module, Caller, Config, Engine, Instance, Linker, Store, TypedFunc, Val, Trap, Func};
 use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-use icn_identity::{TrustBundle, TrustValidationError, Did, DidError};
+use icn_identity::{TrustBundle, TrustValidationError, Did, DidError, KeyPair as IcnKeyPair};
 use icn_economics::{ResourceType, Economics};
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
@@ -15,11 +17,13 @@ use std::str::FromStr;
 use std::collections::HashMap;
 use chrono::{Utc, DateTime};
 use cid::Cid;
-use icn_identity::KeyPair as IcnKeyPair;
 use icn_types::mesh::{MeshJob, JobStatus as IcnJobStatus, MeshJobParams, QoSProfile, WorkflowType};
-use icn_mesh_receipts::{sign_receipt_in_place};
+use icn_mesh_receipts::{sign_receipt_in_place, ExecutionReceipt};
 use icn_mesh_protocol::P2PJobStatus;
 use icn_identity::ScopeKey;
+use tracing::info;
+
+use crate::config::RuntimeConfig;
 
 // Import the context module
 mod context;
@@ -220,6 +224,9 @@ pub trait RuntimeStorage: Send + Sync {
 /// The ICN Runtime for executing governance proposals
 #[derive(Clone)]
 pub struct Runtime {
+    /// Runtime configuration
+    config: RuntimeConfig,
+    
     /// CoVM instance for executing WASM
     vm: CoVm,
 
@@ -256,6 +263,15 @@ impl Runtime {
         let module_cache = None;
         let host_env = None;
         Self {
+            config: RuntimeConfig {
+                node_did: "did:icn:default-runtime".to_string(),
+                storage_path: PathBuf::from("./icn_data"),
+                key_path: None,
+                reputation_service_url: None,
+                mesh_job_service_url: None,
+                metrics_port: None,
+                log_level: None,
+            },
             vm: CoVm::default(),
             storage,
             context: RuntimeContext::default(),
@@ -369,7 +385,7 @@ impl Runtime {
         let execution_end_time_dt = Utc::now();
         let execution_end_time = execution_end_time_dt.timestamp();
 
-        let mut receipt = ExecutionReceipt {
+        let receipt = ExecutionReceipt {
             job_id,
             executor: executor_did,
             status: IcnJobStatus::Completed,
@@ -601,6 +617,17 @@ impl Runtime {
         
         runtime
     }
+    
+    /// Main loop for the runtime node service (placeholder)
+    pub async fn run_forever(&self) -> Result<()> {
+        info!("Runtime node started. Awaiting jobs... (Config: {:?})", self.config);
+        // TODO: Implement actual job polling/listening logic
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+        // Unreachable unless loop is broken, e.g., by signal handling
+        // Ok(())
+    }
 }
 
 /// Module providing executable trait for CCL DSL files
@@ -624,10 +651,11 @@ mod tests {
     use std::fs;
     use std::sync::{Arc, Mutex};
     use tokio::runtime::Runtime as TokioRuntime;
+    use std::path::PathBuf;
 
     // Minimal MemStorage for tests
     #[derive(Clone)]
-    struct MemStorage {
+    pub(crate) struct MemStorage {
         proposals: Arc<Mutex<Vec<Proposal>>>,
         wasm_modules: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
         receipts: Arc<Mutex<std::collections::HashMap<String, String>>>,
@@ -635,7 +663,7 @@ mod tests {
     }
 
     impl MemStorage {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 proposals: Arc::new(Mutex::new(vec![])),
                 wasm_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
