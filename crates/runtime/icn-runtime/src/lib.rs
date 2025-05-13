@@ -5,6 +5,9 @@ use async_trait::async_trait;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use wasmtime::{Module, Caller, Config, Engine, Instance, Linker, Store, TypedFunc, Val, Trap, Func};
 use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
+use icn_types::VerifiableReceipt;
+use icn_types::dag::{DagNode, DagEventType};
+use icn_types::dag_store::DagStore;
 use icn_identity::{TrustBundle, TrustValidationError, Did, DidError, KeyPair as IcnKeyPair};
 use icn_economics::{ResourceType, Economics};
 use ed25519_dalek::VerifyingKey;
@@ -640,14 +643,26 @@ impl Runtime {
             .context("Failed to serialize receipt for DAG storage")?;
 
         // 5. Store the serialized receipt in the DAG Store using its actual CID
-        // Assuming dag_store has a method like put_raw_block(&Cid, Vec<u8>, u64_codec).await -> Result<()>
-        // The constant for DAG_CBOR codec is 0x71.
-        // Ensure SharedDagStore has a suitable method e.g., put_block or put_raw_block.
-        // For this example, I am using a hypothetical `put_raw_block` which matches common patterns.
-        // The actual method on `icn_types::dag_store::SharedDagStore` needs to be confirmed.
-        self.dag_store().put_raw_block(&actual_receipt_cid, receipt_bytes, 0x71u64).await
-            .with_context(|| format!("Failed to anchor receipt CID {} to DAG store", actual_receipt_cid))?;
-        tracing::info!(receipt_cid = %actual_receipt_cid, "Receipt anchored to DAG store"); // Use tracing::info
+        // OLD: self.dag_store().put_raw_block(&actual_receipt_cid, receipt_bytes, 0x71u64).await
+        //    .with_context(|| format!("Failed to anchor receipt CID {} to DAG store", actual_receipt_cid))?;
+        
+        // NEW: Construct DagNode and insert
+        let receipt_json_string = serde_json::to_string(&receipt_to_anchor)
+            .context("Failed to serialize receipt to JSON string for DagNode content")?;
+
+        let dag_node_for_receipt = DagNode {
+            content: receipt_json_string, 
+            parent: None, // TODO: Determine parent if applicable. For now, assuming root or standalone.
+            event_type: DagEventType::Receipt,
+            timestamp: receipt_to_anchor.timestamp, 
+            scope_id: issuer_did_label.to_string(), // Using issuer's DID as scope for this example
+        };
+        
+        // The CID of this dag_node_for_receipt will be different from actual_receipt_cid if DagNode adds metadata.
+        // The insert method will calculate it internally.
+        self.dag_store().insert(dag_node_for_receipt).await
+            .with_context(|| format!("Failed to insert receipt DagNode (derived from original CID {}) into DAG store", actual_receipt_cid))?;
+        tracing::info!(original_receipt_cid = %actual_receipt_cid, "Receipt (as DagNode) submitted to DAG store");
 
         // 6. Store in local Sled storage (optional, for quick lookups by ID if still needed)
         self.storage.store_receipt(&receipt_to_anchor).await
@@ -836,24 +851,22 @@ impl Runtime {
         register_host_functions(&mut linker)?;
 
         // Load Reputation Scoring Config or use default
-        let rep_scoring_config = config.reputation_scoring_config_path.as_ref()
-            .map(|path| {
-                ReputationScoringConfig::from_file(path).map_err(|e| {
-                    warn!("Failed to load reputation scoring config from {:?}: {}. Using default config.", path, e);
-                    e // Keep the error to signal downstream that default is used because of failure
-                })
-            })
-            .transpose()
-            .unwrap_or_else(|_err| {
-                // This block is reached if from_file returned an Err.
-                // Warning already logged inside the map_err closure.
-                Ok(ReputationScoringConfig::default())
-            })
-            .unwrap_or_else(|| {
-                // This block is reached if the path option was None.
+        let rep_scoring_config: ReputationScoringConfig = 
+            if let Some(path) = config.reputation_scoring_config_path.as_ref() {
+                match ReputationScoringConfig::from_file(path) {
+                    Ok(cfg) => {
+                        info!("Successfully loaded reputation scoring config from: {:?}", path);
+                        cfg
+                    }
+                    Err(e) => {
+                        warn!("Failed to load reputation scoring config from {:?}: {}. Using default config.", path, e);
+                        ReputationScoringConfig::default()
+                    }
+                }
+            } else {
                 info!("No reputation scoring config path specified. Using default config.");
                 ReputationScoringConfig::default()
-            });
+            };
 
         // Create Reputation Updater using the loaded or default config
         let reputation_updater: Option<Arc<dyn ReputationUpdater>> = 
@@ -1062,7 +1075,9 @@ fn sign_runtime_receipt_in_place(
         // bail!("Receipt already signed");
     }
     
-    let payload = receipt.signed_payload(); // Assumes signed_payload() is available via import
+    // Corrected: Use get_payload_for_signing() from the VerifiableReceipt trait
+    let payload = receipt.get_payload_for_signing()
+        .context("Failed to get payload from RuntimeExecutionReceipt for signing")?;
     let bytes = bincode::serialize(&payload)
         .context("Failed to serialize RuntimeExecutionReceipt payload for signing")?;
     
@@ -1084,6 +1099,11 @@ pub async fn execute_mesh_job(
 
     // Mana check & consumption
     let executor_did_str = local_keypair.did.to_string();
+
+    // Define cost before the block so it's available later
+    let declared_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
+    let cost = if declared_cost > 0 { declared_cost } else { 50 }; // Fallback cost
+
     {
         let scope_key = if let Some(org) = &mesh_job.originator_org_scope {
             if let Some(coop) = &org.coop_id {
@@ -1101,8 +1121,7 @@ pub async fn execute_mesh_job(
         mana_mgr.ensure_pool(&scope_key, 10_000, 1); // Ensure some default mana if pool doesn't exist
 
         let balance_before = mana_mgr.balance(&scope_key).unwrap_or(0);
-        let declared_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
-        let cost = if declared_cost > 0 { declared_cost } else { 50 }; // Fallback cost
+        let cost = if declared_cost > 0 { declared_cost } else { 50 }; // Use the defined cost
 
         if let Err(e) = mana_mgr.spend(&scope_key, cost) {
             tracing::warn!("[RuntimeExecute] Insufficient mana for {:?}: {}", scope_key, e);
@@ -1112,5 +1131,37 @@ pub async fn execute_mesh_job(
         tracing::info!("[RuntimeExecute] Consumed {} mana for {:?} ({} -> {})", cost, scope_key, balance_before, balance_after);
     } // <-- End of mana_mgr lock scope
 
-    // IMPORTANT: Capture the calculated `cost`
+    // TODO: Implement actual WASM execution for the mesh job here.
+    // For now, creating a placeholder receipt similar to `execute_job` stub.
+    let mut resource_usage = HashMap::new();
+    resource_usage.insert(ResourceType::Cpu, cost); // Use calculated/fallback cost for CPU
+
+    let execution_start_time = Utc::now().timestamp_micros() as u64; // More precision
+    let execution_end_time_dt = Utc::now();
+    let execution_end_time = execution_end_time_dt.timestamp_micros() as u64;
+
+    // Get coop_id and community_id from mesh_job.originator_org_scope
+    let org_scope_ref = mesh_job.originator_org_scope.as_ref();
+    let coop_id = org_scope_ref.and_then(|scope| scope.coop_id.clone());
+    let community_id = org_scope_ref.and_then(|scope| scope.community_id.clone());
+
+    let receipt = MeshExecutionReceipt {
+        job_id: mesh_job.job_id.clone(),
+        executor: local_keypair.did.clone(),
+        status: IcnJobStatus::Completed, // Assuming success for now
+        result_data_cid: Some("bafy...placeholder_mesh_job_result".to_string()),
+        logs_cid: None,
+        resource_usage,
+        execution_start_time,
+        execution_end_time,
+        execution_end_time_dt,
+        signature: Vec::new(), // Needs to be signed properly
+        coop_id: coop_id, // Corrected: Use derived coop_id
+        community_id: community_id, // Corrected: Use derived community_id
+        mana_cost: Some(cost),
+    };
+
+    // TODO: Sign the receipt: sign_receipt_in_place(&mut receipt, local_keypair)?;
+
+    Ok(receipt)
 }
