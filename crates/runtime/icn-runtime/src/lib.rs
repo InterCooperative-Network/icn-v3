@@ -606,11 +606,28 @@ impl Runtime {
     ) -> Result<String> 
     {
         let start_time = std::time::Instant::now();
+
+        // ---- Sourcing Federation Labels ----
+        // Use federation_id from context for coop/community labels for now.
+        // Use "unknown" if not set in the context.
+        let federation_id = self.context.federation_id.as_deref().unwrap_or("unknown_federation");
+        let coop_id_label = federation_id; // Using federation ID as coop ID
+        let community_id_label = federation_id; // Using federation ID as community ID
+        let issuer_did_label = receipt.issuer.as_str();
+        // ---- End Sourcing Federation Labels ----
         
-        // Verify signature before proceeding
-        receipt.verify_signature()
-            .context("Receipt signature verification failed during anchoring")?;
-        metrics::record_receipt_verification_success(); // Record verification success
+        // Verify signature before proceeding and record outcome
+        let verification_passed = match receipt.verify_signature() {
+            Ok(_) => {
+                metrics::record_receipt_verification_outcome(true, coop_id_label, community_id_label, issuer_did_label);
+                true
+            }
+            Err(e) => {
+                metrics::record_receipt_verification_outcome(false, coop_id_label, community_id_label, issuer_did_label);
+                // Re-throw error to halt anchoring on verification failure
+                return Err(e).context("Receipt signature verification failed during anchoring");
+            }
+        };
 
         // Store the receipt first (optional, depends on flow)
         let receipt_id = receipt.id.clone(); // Assuming ID is sufficient for lookup
@@ -637,7 +654,14 @@ impl Runtime {
 
         // Submit reputation update if an updater is configured
         if let Some(updater) = &self.reputation_updater {
-            match updater.submit_receipt_based_reputation(&final_receipt, true).await { // Pass true for success
+            // Pass federation_id for both coop and community ID to the updater
+            // Note: The updater trait needs to be modified to accept these
+            match updater.submit_receipt_based_reputation(
+                &final_receipt, 
+                verification_passed, // Pass verification outcome
+                coop_id_label, 
+                community_id_label
+            ).await {
                 Ok(_) => info!("Reputation update submitted for receipt {}", receipt_id),
                 Err(e) => warn!("Failed to submit reputation update for receipt {}: {}", receipt_id, e),
             }
@@ -645,11 +669,11 @@ impl Runtime {
             info!("No reputation updater configured, skipping submission for receipt {}", receipt_id);
         }
         
-        // Record anchoring duration and mana cost
+        // Record anchoring duration and mana cost with federation labels
         let duration = start_time.elapsed();
-        metrics::record_receipt_anchor_duration(duration.as_secs_f64());
+        metrics::observe_anchor_receipt_duration(duration.as_secs_f64(), coop_id_label, community_id_label, issuer_did_label);
         if let Some(mana_cost) = receipt.metrics.mana_cost {
-            metrics::record_receipt_mana_cost(mana_cost);
+            metrics::record_receipt_mana_cost(mana_cost, coop_id_label, community_id_label, issuer_did_label);
         }
 
         Ok(final_anchor_cid)

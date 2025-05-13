@@ -39,7 +39,9 @@ pub trait ReputationUpdater: Send + Sync {
     async fn submit_receipt_based_reputation(
         &self,
         receipt: &RuntimeExecutionReceipt,
-        is_successful: bool, // Added success status parameter
+        is_successful: bool, // Verification/Execution success status
+        coop_id: &str,       // Cooperative ID label
+        community_id: &str,  // Community ID label
     ) -> Result<()>;
 }
 
@@ -71,60 +73,70 @@ impl HttpReputationUpdater {
 #[async_trait::async_trait]
 impl ReputationUpdater for HttpReputationUpdater {
     async fn submit_receipt_based_reputation(
-        &self, 
-        receipt: &RuntimeExecutionReceipt, 
+        &self,
+        receipt: &RuntimeExecutionReceipt,
         is_successful: bool,
+        coop_id: &str,
+        community_id: &str,
     ) -> Result<()> {
-        metrics::record_reputation_update_attempt();
+        // Extract executor DID from receipt issuer
+        let executor_did = receipt.issuer.as_str();
 
-        let anchor_str = receipt.receipt_cid.clone().unwrap_or_else(|| {
-             tracing::warn!("RuntimeExecutionReceipt {} is missing receipt_cid for reputation update.", receipt.id);
-            "missing_cid".to_string()
-        });
-
-        let success = is_successful;
-        let score_delta;
-
-        if success {
-            score_delta = match receipt.metrics.mana_cost {
-                Some(cost) if cost > 0 => {
-                    let raw_score = self.config.mana_cost_weight / (cost as f64);
-                    raw_score.min(self.config.max_positive_score) // Apply the cap
-                },
-                _ => 0.0, // No score change if mana cost is zero or None, even on success
-            };
+        // Calculate score delta based on success and mana cost using config
+        let score_delta = if is_successful {
+            let mana_cost = receipt.metrics.mana_cost.unwrap_or(1); // Avoid division by zero, treat 0 cost as 1
+            if mana_cost == 0 {
+                // Assign max score if mana cost is 0 (or handle as appropriate)
+                self.config.max_positive_score
+            } else {
+                // Apply weight and cap the score
+                (self.config.mana_cost_weight / mana_cost as f64)
+                    .min(self.config.max_positive_score) 
+            }
         } else {
-            score_delta = self.config.failure_penalty;
+            self.config.failure_penalty
         };
 
+        // Create the record
         let record = ReputationRecord {
             subject: receipt.issuer.clone(),
-            anchor: anchor_str,
+            anchor: receipt.receipt_cid.clone().unwrap_or_else(|| receipt.id.clone()), // Use receipt_cid if available, else id
             score_delta,
-            success,
+            success: is_successful,
             mana_cost: receipt.metrics.mana_cost,
-            timestamp: receipt.timestamp,
+            timestamp: Utc::now().timestamp() as u64, // Use current time for submission
         };
 
-        let url = format!("{}/reputation/records", self.reputation_service_url.trim_end_matches('/'));
-        tracing::info!(
-            "Submitting reputation record for subject {} (anchor: {}, mana_cost: {:?}, success: {}, delta: {:.2})",
-            record.subject, record.anchor, record.mana_cost, record.success, record.score_delta
+        // Increment submission counter metric with all labels
+        metrics::increment_reputation_submission(
+            is_successful, 
+            coop_id, 
+            community_id, 
+            executor_did
         );
-        let response = match self.client.post(&url).json(&record).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("HTTP request failed when submitting reputation record: {}", e);
-                metrics::record_reputation_update_failure();
-                return Err(e.into());
-            }
-        };
+
+        // Observe score delta metric with federation labels
+        metrics::observe_reputation_score_delta(
+            score_delta, 
+            coop_id, 
+            community_id, 
+            executor_did
+        );
+        
+        // Send the record via HTTP
+        let response = self.client
+            .post(&self.reputation_service_url)
+            .json(&record)
+            .send()
+            .await?;
+
+        // Process response (removed old metric calls here, handled above)
         if response.status().is_success() {
             tracing::info!(
                 "Successfully submitted reputation record for subject {} (anchor: {})",
                 record.subject, record.anchor
             );
-            metrics::record_reputation_update_success();
+            // metrics::record_reputation_update_success(); // Removed, handled by increment_reputation_submission
             Ok(())
         } else {
             let status = response.status();
@@ -133,7 +145,7 @@ impl ReputationUpdater for HttpReputationUpdater {
                 "Failed to submit reputation record: Status {}, Body: {}",
                 status, body
             );
-            metrics::record_reputation_update_failure();
+            // metrics::record_reputation_update_failure(); // Removed, handled by increment_reputation_submission
             anyhow::bail!("Failed to submit reputation record: {}", status)
         }
     }
@@ -148,6 +160,8 @@ impl ReputationUpdater for NoopReputationUpdater {
         &self, 
         _receipt: &RuntimeExecutionReceipt,
         _is_successful: bool, // Accept new parameter
+        _coop_id: &str,       // Accept new parameter
+        _community_id: &str,  // Accept new parameter
     ) -> Result<()> {
         Ok(())
     }
@@ -162,7 +176,7 @@ mod tests {
     #[derive(Clone)]
     struct MockReputationUpdater {
         // Store a tuple if you want to assert the success status
-        submitted_items: Arc<Mutex<Vec<(RuntimeExecutionReceipt, bool)>>>,
+        submitted_items: Arc<Mutex<Vec<(RuntimeExecutionReceipt, bool, String, String)>>>,
     }
     
     impl MockReputationUpdater {
@@ -173,19 +187,26 @@ mod tests {
         }
         
         // Getter might change if you want to inspect the success bool
-        fn get_submitted_receipts(&self) -> Vec<RuntimeExecutionReceipt> {
-            self.submitted_items.lock().unwrap().iter().map(|(r, _s)| r.clone()).collect()
+        fn get_submissions(&self) -> Vec<(RuntimeExecutionReceipt, bool, String, String)> {
+            self.submitted_items.lock().unwrap().clone()
         }
     }
     
     #[async_trait::async_trait]
     impl ReputationUpdater for MockReputationUpdater {
         async fn submit_receipt_based_reputation(
-            &self, 
+            &self,
             receipt: &RuntimeExecutionReceipt,
-            is_successful: bool, // Accept new parameter
+            is_successful: bool,
+            coop_id: &str,
+            community_id: &str,
         ) -> Result<()> {
-            self.submitted_items.lock().unwrap().push((receipt.clone(), is_successful));
+            self.submitted_items.lock().unwrap().push((
+                receipt.clone(), 
+                is_successful, 
+                coop_id.to_string(), 
+                community_id.to_string()
+            ));
             Ok(())
         }
     }
@@ -215,10 +236,13 @@ mod tests {
         };
         
         // Pass the new is_successful parameter
-        updater.submit_receipt_based_reputation(&receipt, true).await.unwrap();
+        updater.submit_receipt_based_reputation(&receipt, true, "test-coop", "test-community").await.unwrap();
         
-        let submitted = mock_updater.get_submitted_receipts();
+        let submitted = mock_updater.get_submissions();
         assert_eq!(submitted.len(), 1);
-        assert_eq!(submitted[0].id, "test-receipt-1");
+        assert_eq!(submitted[0].0.id, "test-receipt-1");
+        assert_eq!(submitted[0].1, true);
+        assert_eq!(submitted[0].2, "test-coop");
+        assert_eq!(submitted[0].3, "test-community");
     }
 } 
