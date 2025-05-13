@@ -175,15 +175,11 @@ mod reputation_selector_mana_tests {
 
     #[tokio::test]
     async fn test_3_mana_required_executor_insufficient_mana() {
-        // Replace crate::metrics::increment_bids_disqualified_insufficient_mana with mock_metrics::increment_bids_disqualified_insufficient_mana
-        // This needs to be done in the actual job_assignment.rs for this test to work perfectly by checking the counter.
-        // For now, we check that the bid is None (disqualified).
         mock_metrics::reset_disqualified_count();
 
         let job_request = create_job_request(Some(200));
         let bid1 = create_bid("did:key:z6MkjmmyvM3L4kEUDwT3LcdeXjrSKz2nCMs55Fia72aPjFqH", 50);
 
-        // Executor has 100 mana, needs 200
         let profile1 = create_reputation_profile("did:key:z6MkjmmyvM3L4kEUDwT3LcdeXjrSKz2nCMs55Fia72aPjFqH", Some((100, 1000, 10.0, 0)), 70.0);
         let mock_client = Arc::new(MockReputationClient { profile_to_return: Some(profile1), should_fail: false });
         let selector = ReputationExecutorSelector {
@@ -192,15 +188,10 @@ mod reputation_selector_mana_tests {
         };
 
         let bids = vec![bid1.clone()];
-        // We need to call the actual metrics::increment_bids_disqualified_insufficient_mana 
-        // in job_assignment.rs. Here we rely on the logic that `select` returns None.
         let result = selector.select(&job_request, &bids, Cid::default()).await.unwrap();
 
         assert!(result.is_none(), "Bid should be disqualified due to insufficient mana");
-        // To check mock_metrics::get_disqualified_count(), the call to increment must be using our mock.
-        // This requires either conditional compilation in job_assignment.rs or passing the increment function as a dependency.
-        // For now, this test primarily verifies the bid is disqualified.
-        // assert_eq!(mock_metrics::get_disqualified_count(), 1); // This will only pass if the metric call is mocked in the SUT
+        assert_eq!(mock_metrics::get_disqualified_count(), 1, "Metric for insufficient mana should be incremented");
     }
 
     #[tokio::test]
@@ -209,7 +200,6 @@ mod reputation_selector_mana_tests {
         let job_request = create_job_request(Some(100));
         let bid1 = create_bid("did:key:z6MkjmmyvM3L4kEUDwT3LcdeXjrSKz2nCMs55Fia72aPjFqH", 50);
 
-        // Mock client returns None for profile
         let mock_client = Arc::new(MockReputationClient { profile_to_return: None, should_fail: false });
         let selector = ReputationExecutorSelector {
             config: default_config(),
@@ -217,12 +207,10 @@ mod reputation_selector_mana_tests {
         };
 
         let bids = vec![bid1.clone()];
-        // When no profile is found, the code in select() currently constructs a default one with mana_state: None
-        // So, this should lead to disqualification by the mana check logic.
         let result = selector.select(&job_request, &bids, Cid::default()).await.unwrap();
 
-        assert!(result.is_none(), "Bid should be disqualified if mana is required and profile (and thus mana state) is missing");
-        // assert_eq!(mock_metrics::get_disqualified_count(), 1); // Needs SUT to call mocked metric
+        assert!(result.is_none(), "Bid should be disqualified if mana is required and profile is missing");
+        assert_eq!(mock_metrics::get_disqualified_count(), 1, "Metric for no profile (leading to no mana state) should be incremented");
     }
 
     #[tokio::test]
@@ -231,7 +219,6 @@ mod reputation_selector_mana_tests {
         let job_request = create_job_request(Some(100));
         let bid1 = create_bid("did:key:z6MkjmmyvM3L4kEUDwT3LcdeXjrSKz2nCMs55Fia72aPjFqH", 50);
 
-        // Executor profile exists, but mana_state is None
         let profile1 = create_reputation_profile("did:key:z6MkjmmyvM3L4kEUDwT3LcdeXjrSKz2nCMs55Fia72aPjFqH", None, 78.0);
         let mock_client = Arc::new(MockReputationClient { profile_to_return: Some(profile1), should_fail: false });
         let selector = ReputationExecutorSelector {
@@ -243,6 +230,6 @@ mod reputation_selector_mana_tests {
         let result = selector.select(&job_request, &bids, Cid::default()).await.unwrap();
 
         assert!(result.is_none(), "Bid should be disqualified if mana is required and profile has no mana_state");
-        // assert_eq!(mock_metrics::get_disqualified_count(), 1); // Needs SUT to call mocked metric
+        assert_eq!(mock_metrics::get_disqualified_count(), 1, "Metric for no mana_state should be incremented");
     }
 } 

@@ -84,6 +84,8 @@ pub struct MeshJobParams {
     /// Optional CID of input data required for the job.
     pub input_data_cid: Option<String>,
     pub max_acceptable_bid_tokens: Option<u64>,
+    /// Optional mana cost for executing the job. If present, this will be used for deduction.
+    pub explicit_mana_cost: Option<u64>,
 
     // --- NEW Fields for refactoring ---
     /// Defines the type of workflow for this job. Defaults to `SingleWasmModule`.
@@ -118,6 +120,7 @@ impl Default for MeshJobParams {
             deadline: None,
             input_data_cid: None,
             max_acceptable_bid_tokens: None,
+            explicit_mana_cost: None,
             workflow_type: WorkflowType::default(),
             stages: None,
             is_interactive: false,

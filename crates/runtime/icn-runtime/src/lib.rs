@@ -1100,9 +1100,14 @@ pub async fn execute_mesh_job(
     // Mana check & consumption
     let executor_did_str = local_keypair.did.to_string();
 
-    // Define cost before the block so it's available later
-    let declared_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
-    let cost = if declared_cost > 0 { declared_cost } else { 50 }; // Fallback cost
+    // Determine mana cost: prioritize explicit_mana_cost, then declared, then fallback.
+    let cost = match mesh_job.params.explicit_mana_cost {
+        Some(explicit_cost) => explicit_cost,
+        None => {
+            let declared_resources_cost: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
+            if declared_resources_cost > 0 { declared_resources_cost } else { 50 } // Fallback cost if no explicit and no declared resources
+        }
+    };
 
     {
         let scope_key = if let Some(org) = &mesh_job.originator_org_scope {
@@ -1121,8 +1126,6 @@ pub async fn execute_mesh_job(
         mana_mgr.ensure_pool(&scope_key, 10_000, 1); // Ensure some default mana if pool doesn't exist
 
         let balance_before = mana_mgr.balance(&scope_key).unwrap_or(0);
-        let cost = if declared_cost > 0 { declared_cost } else { 50 }; // Use the defined cost
-
         if let Err(e) = mana_mgr.spend(&scope_key, cost) {
             tracing::warn!("[RuntimeExecute] Insufficient mana for {:?}: {}", scope_key, e);
             return Err(anyhow::anyhow!("Insufficient mana: {}", e));
@@ -1134,7 +1137,7 @@ pub async fn execute_mesh_job(
     // TODO: Implement actual WASM execution for the mesh job here.
     // For now, creating a placeholder receipt similar to `execute_job` stub.
     let mut resource_usage = HashMap::new();
-    resource_usage.insert(ResourceType::Cpu, cost); // Use calculated/fallback cost for CPU
+    resource_usage.insert(ResourceType::Cpu, cost); // Example: using mana cost as a proxy for CPU for now
 
     let execution_start_time = Utc::now().timestamp_micros() as u64; // More precision
     let execution_end_time_dt = Utc::now();
@@ -1158,7 +1161,7 @@ pub async fn execute_mesh_job(
         signature: Vec::new(), // Needs to be signed properly
         coop_id: coop_id, // Corrected: Use derived coop_id
         community_id: community_id, // Corrected: Use derived community_id
-        mana_cost: Some(cost),
+        mana_cost: Some(cost), // Use the determined cost
     };
 
     // TODO: Sign the receipt: sign_receipt_in_place(&mut receipt, local_keypair)?;

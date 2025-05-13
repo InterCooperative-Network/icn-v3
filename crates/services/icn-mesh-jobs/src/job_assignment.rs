@@ -144,7 +144,10 @@ impl ExecutorSelector for ReputationExecutorSelector {
                         required_mana_amount,
                         profile.mana_state.as_ref().map(|ms| ms.state.current_mana)
                     );
+                    #[cfg(not(test))]
                     metrics::increment_bids_disqualified_insufficient_mana();
+                    #[cfg(test)]
+                    crate::job_assignment_tests::reputation_selector_mana_tests::mock_metrics::increment_bids_disqualified_insufficient_mana();
                     continue; // Disqualify bid
                 }
             }
