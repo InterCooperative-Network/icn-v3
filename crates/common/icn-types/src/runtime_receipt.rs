@@ -10,9 +10,11 @@ use bincode;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct RuntimeExecutionMetrics {
-    pub fuel_used: u64,
+    // pub fuel_used: u64, // Removed
     pub host_calls: u64,
     pub io_bytes: u64,
+    /// Optional mana cost computed post-execution
+    pub mana_cost: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

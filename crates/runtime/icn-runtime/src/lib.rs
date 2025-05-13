@@ -559,10 +559,9 @@ impl Runtime {
     ) -> Result<RuntimeExecutionReceipt> {
         // Map fields from CoreVmExecutionMetrics (result.metrics) to RuntimeExecutionMetrics (vc_metrics)
         let vc_metrics = RuntimeExecutionMetrics {
-            fuel_used: result.metrics.fuel_used,
             host_calls: result.metrics.host_calls,
             io_bytes: result.metrics.io_bytes,
-            // anchored_cids_count and job_submissions_count are in result.metrics but not vc_metrics
+            mana_cost: result.metrics.mana_cost,
         };
 
         let receipt_id = Uuid::new_v4().to_string();
@@ -636,7 +635,7 @@ impl Runtime {
         //    Revised plan: This method should take a verified RuntimeExecutionReceipt.
         //    The generic change might be better suited for a new, higher-level function.
         //    Let's revert the signature change here and keep it as `&RuntimeExecutionReceipt`,
-        //    and ensure `anchor_mesh_receipt` calls `verify_signature` on `MeshExecutionReceipt` *before* conversion.
+        //    and ensure `anchor_mesh_receipt` calls `verify_signature` on the RuntimeExecutionReceipt *before* conversion.
         //
         //    Decision: Keep anchor_receipt specific to RuntimeExecutionReceipt for now to simplify this step.
         //    Verification of MeshExecutionReceipt will happen *before* it's converted and passed to this anchor_receipt.
@@ -919,10 +918,10 @@ impl Runtime {
             proposal_id: receipt.job_id.clone(), // Use job_id as proposal_id for mesh jobs?
             wasm_cid: wasm_cid_placeholder,
             ccl_cid: ccl_cid_placeholder,
-            metrics: RuntimeExecutionMetrics { // Placeholder metrics
-                fuel_used: 0,
+            metrics: RuntimeExecutionMetrics { // Placeholder metrics - Align with new structure
                 host_calls: 0,
                 io_bytes: 0,
+                mana_cost: None, // Set mana_cost to None for now
             },
             anchored_cids: vec![], // Placeholder anchored CIDs
             resource_usage: resource_usage_vec,
@@ -1232,11 +1231,9 @@ mod tests {
         let exec_result = ExecutionResult {
             // Initialize CoreVmExecutionMetrics using fully qualified path
             metrics: icn_core_vm::ExecutionMetrics { 
-                fuel_used: 100, 
                 host_calls: 5, 
                 io_bytes: 1024,
-                anchored_cids_count: 1, 
-                job_submissions_count: 0, 
+                mana_cost: None,
             },
             anchored_cids: vec!["anchor1".to_string()],
             resource_usage: vec![("cpu".to_string(), 50)],

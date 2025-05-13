@@ -30,9 +30,6 @@ pub enum CoVmError {
 /// Metrics collected during execution
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ExecutionMetrics {
-    /// Fuel consumed during execution (a measure of computational resources)
-    pub fuel_used: u64,
-
     /// Number of host calls made
     pub host_calls: u64,
 
@@ -44,6 +41,9 @@ pub struct ExecutionMetrics {
 
     /// Number of job submissions
     pub job_submissions_count: usize,
+
+    /// Optional mana cost computed post-execution
+    pub mana_cost: Option<u64>,
 }
 
 /// Resource limits for execution
@@ -217,7 +217,6 @@ impl CoVm {
         let anchored_cids_len = store.data().anchored_cids.lock().unwrap().len();
         let job_submissions_len = store.data().job_submissions.lock().unwrap().len();
 
-        store.data_mut().metrics.lock().unwrap().fuel_used = fuel_consumed;
         store.data_mut().metrics.lock().unwrap().anchored_cids_count = anchored_cids_len;
         store
             .data_mut()
@@ -263,7 +262,6 @@ impl CoVm {
         
         // Track metrics in the host context
         let mut host_context = context;
-        host_context.metrics.lock().unwrap().fuel_used = fuel_consumed;
         
         Ok(host_context)
     }
