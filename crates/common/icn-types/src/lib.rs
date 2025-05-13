@@ -11,10 +11,7 @@ pub mod reputation;
 pub mod resource;
 pub mod runtime_receipt;
 pub mod receipt_verification;
-pub mod anchoring;
-pub mod codec;
 pub mod mana;
-pub mod utils;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
 pub use runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
@@ -25,8 +22,10 @@ pub use org::{CooperativeId, CommunityId};
 // pub use p2p::{PeerId, Multiaddr}; 
 // pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError}; 
 pub use receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
-pub use anchoring::{Anchor, AnchorData, AnchorProof, AnchorType};
-pub use jobs::{JobRequirements, JobCompletionStatus, ResourceType, TokenAmount, WorkerId, JobCidInput, JobResultPayload};
+
+// Corrected jobs re-export to only include types actually defined in icn_types::jobs
+pub use jobs::{TokenAmount, policy::ExecutionPolicy};
+
+pub use resource::ResourceType;
 pub use mana::{ManaState, ScopedMana};
 pub use reputation::{ReputationProfile, ReputationUpdateEvent, compute_score as compute_reputation_score, ReputationRecord};
-pub use runtime_receipt::{ExecutionReceipt, FunctionCall, Input, Output, RuntimeExecutionReceipt};

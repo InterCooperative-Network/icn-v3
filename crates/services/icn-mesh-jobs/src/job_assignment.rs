@@ -420,4 +420,7 @@ impl JobAssignmentService {
 
         reputation_component + price_component + resource_component
     }
-} 
+}
+
+#[cfg(test)]
+mod job_assignment_tests; 
