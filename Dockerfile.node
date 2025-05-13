@@ -7,6 +7,7 @@
 FROM rust:1.77 AS builder
 WORKDIR /src
 COPY . .
+# Build the specific icn-runtime package (now that it has a main.rs)
 RUN cargo build -p icn-runtime --release
 
 # ── Runtime stage ───────────────────────────────────────────────────────────────
