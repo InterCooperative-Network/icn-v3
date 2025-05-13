@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use icn_identity::ScopeKey;
 use std::sync::Arc;
-
-pub type Did = String;
+use anyhow::Result;
+use async_trait::async_trait;
+use icn_identity::Did;
+use icn_types::mana::ManaState; // Assuming ManaState is in icn_types::mana
+use tokio::sync::RwLock;
+use tracing;
 
 /// Trait for reporting mana balance changes to a metrics system.
 pub trait ManaMetricsHook: std::fmt::Debug {
@@ -193,5 +197,88 @@ impl ManaManager {
 impl Default for ManaManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// --- ManaLedger Trait ---
+#[async_trait]
+pub trait ManaLedger: Send + Sync {
+    async fn get_mana_state(&self, did: &Did) -> Result<Option<ManaState>>;
+    async fn update_mana_state(&self, did: &Did, new_state: ManaState) -> Result<()>;
+    async fn all_dids(&self) -> Result<Vec<Did>>;
+}
+
+// --- RegenerationPolicy Enum ---
+#[derive(Debug, Clone)]
+pub enum RegenerationPolicy {
+    FixedRatePerTick(u64), // Fixed mana regenerated each tick
+    // Future policies could include: PercentageOfMax, ReputationScaled, etc.
+}
+
+// --- ManaRegenerator Struct ---
+pub struct ManaRegenerator<L: ManaLedger> {
+    pub ledger: Arc<L>,
+    pub policy: RegenerationPolicy,
+    // Could also include a time source or epoch tracker if regeneration is time-dependent
+}
+
+impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> { // Ensure L is Send + Sync for Arc<L>
+    pub fn new(ledger: Arc<L>, policy: RegenerationPolicy) -> Self {
+        Self { ledger, policy }
+    }
+
+    pub async fn tick(&self) -> Result<()> {
+        let dids = self.ledger.all_dids().await?;
+        for did in dids {
+            if let Some(mut state) = self.ledger.get_mana_state(&did).await? {
+                let original_mana = state.current_mana;
+                match self.policy {
+                    RegenerationPolicy::FixedRatePerTick(amount) => {
+                        state.current_mana = (state.current_mana + amount).min(state.max_mana);
+                        if state.current_mana != original_mana {
+                            self.ledger.update_mana_state(&did, state).await?;
+                            tracing::debug!(did = %did, old_mana = original_mana, new_mana = self.ledger.get_mana_state(&did).await?.map_or(0, |s| s.current_mana), regen_amount = amount, "Mana regenerated");
+                        } else {
+                            tracing::trace!(did = %did, mana = original_mana, "Mana already at max or regen amount is zero.");
+                        }
+                    }
+                    // Handle other policies here in the future
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// --- InMemoryManaLedger (for testing and simple scenarios) ---
+#[derive(Default)]
+pub struct InMemoryManaLedger {
+    inner: RwLock<HashMap<Did, ManaState>>,
+}
+
+impl InMemoryManaLedger {
+    pub fn new() -> Self {
+        Self { inner: RwLock::new(HashMap::new()) }
+    }
+
+    // Helper for tests to set initial states easily
+    pub async fn set_initial_state(&self, did: Did, state: ManaState) {
+        self.inner.write().await.insert(did, state);
+    }
+}
+
+#[async_trait]
+impl ManaLedger for InMemoryManaLedger {
+    async fn get_mana_state(&self, did: &Did) -> Result<Option<ManaState>> {
+        Ok(self.inner.read().await.get(did).cloned())
+    }
+
+    async fn update_mana_state(&self, did: &Did, new_state: ManaState) -> Result<()> {
+        self.inner.write().await.insert(did.clone(), new_state);
+        Ok(())
+    }
+
+    async fn all_dids(&self) -> Result<Vec<Did>> {
+        Ok(self.inner.read().await.keys().cloned().collect())
     }
 } 
