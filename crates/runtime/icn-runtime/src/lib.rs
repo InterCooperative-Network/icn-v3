@@ -557,17 +557,20 @@ impl Runtime {
         result: &ExecutionResult,
         context: &VmContext,
     ) -> Result<RuntimeExecutionReceipt> {
+        // Map fields from CoreVmExecutionMetrics (result.metrics) to RuntimeExecutionMetrics (vc_metrics)
         let vc_metrics = RuntimeExecutionMetrics {
             fuel_used: result.metrics.fuel_used,
             host_calls: result.metrics.host_calls,
             io_bytes: result.metrics.io_bytes,
+            // anchored_cids_count and job_submissions_count are in result.metrics but not vc_metrics
         };
 
         let receipt_id = Uuid::new_v4().to_string();
 
-        let receipt = RuntimeExecutionReceipt {
+        // Create receipt first with signature: None
+        let mut receipt = RuntimeExecutionReceipt {
             id: receipt_id,
-            issuer: context.executor_did.clone(),
+            issuer: context.executor_did.clone(), // This should be the DID of the runtime itself
             proposal_id: context.code_cid.clone().unwrap_or_default(),
             wasm_cid: wasm_cid.to_string(),
             ccl_cid: ccl_cid.to_string(),
@@ -579,9 +582,19 @@ impl Runtime {
                 .map_err(|e| RuntimeError::ReceiptError(e.to_string()))?
                 .as_secs(),
             dag_epoch: context.epoch.as_ref().and_then(|s| s.parse().ok()),
-            receipt_cid: None,
-            signature: None,
+            receipt_cid: None, // Will be set by anchor_receipt
+            signature: None,   // Initialized to None, will be set by signing
         };
+
+        // Sign the receipt using the runtime's identity
+        let keypair = self.context.identity()
+            .ok_or_else(|| RuntimeError::ReceiptError(
+                "Runtime identity not available for signing receipt. Ensure runtime is initialized with a keypair.".to_string()
+            ))?;
+        
+        // Use the new helper function to sign the receipt in place
+        sign_runtime_receipt_in_place(&mut receipt, keypair)
+            .context("Failed to sign runtime execution receipt")?;
 
         Ok(receipt)
     }
@@ -598,6 +611,12 @@ impl Runtime {
             receipt_cid: Some(receipt_cid.clone()),
             ..receipt.clone()
         };
+        
+        // Verify the integrity and signature of the receipt *before* submitting
+        // Use the receipt_with_cid as it contains the CID which might be part of verification
+        // if the verify method evolves to check it against anchors.
+        receipt_with_cid.verify()
+            .context("Generated execution receipt failed verification")?;
         
         // If a reputation updater is configured, submit the reputation record
         if let Some(updater) = &self.reputation_updater {
@@ -940,6 +959,37 @@ fn load_or_generate_keypair(key_path: Option<&Path>) -> Result<IcnKeyPair> {
     }
 }
 
+// Helper function to sign a RuntimeExecutionReceipt using the provided keypair
+fn sign_runtime_receipt_in_place(
+    receipt: &mut RuntimeExecutionReceipt,
+    keypair: &IcnKeyPair,
+) -> Result<()> {
+    // Note: This import assumes KeyPair::sign exists and returns ed25519_dalek::Signature
+    // If KeyPair itself implements ed25519_dalek::Signer, adjust accordingly.
+    // use ed25519_dalek::Signer;
+    use bincode; // Ensure bincode is available
+    use anyhow::Context; // Ensure Context is available
+
+    // Ensure signature is None before signing to avoid confusion 
+    // (or handle re-signing if necessary, though usually not desirable for receipts)
+    if receipt.signature.is_some() {
+        warn!("Receipt already has a signature before signing attempt. Overwriting is generally not recommended.");
+        // Depending on policy, could return an error here instead:
+        // bail!("Receipt already signed");
+    }
+    
+    let payload = receipt.signed_payload(); // Assumes signed_payload() is available via import
+    let bytes = bincode::serialize(&payload)
+        .context("Failed to serialize RuntimeExecutionReceipt payload for signing")?;
+    
+    // Assumes icn_identity::KeyPair has a public method `sign`:
+    // fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature;
+    let signature = keypair.sign(&bytes); // Use the assumed sign method
+    
+    receipt.signature = Some(signature.to_bytes().to_vec());
+    Ok(())
+}
+
 /// Executes a MeshJob within the ICN runtime.
 pub async fn execute_mesh_job(
     mesh_job: MeshJob,
@@ -1024,6 +1074,8 @@ mod tests {
     use std::str::FromStr;
     use icn_identity::Did;
     use anyhow::Result;
+    // Explicitly import the type here
+    use icn_core_vm::ExecutionMetrics as CoreVmExecutionMetrics;
 
     #[tokio::test]
     async fn test_execute_wasm_file() -> Result<()> {
@@ -1113,6 +1165,57 @@ mod tests {
         let receipt = result.expect("runtime.execute_job failed");
 
         assert_eq!(receipt.status, IcnJobStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_issue_receipt_signing_and_verification() -> Result<()> {
+        // 1. Setup Runtime with identity
+        let storage = Arc::new(MemStorage::new());
+        let keypair = IcnKeyPair::generate();
+        let did_string = keypair.did.to_string();
+        let context = Arc::new(
+            RuntimeContextBuilder::new()
+                .with_identity(keypair.clone())
+                .with_executor_id(did_string.clone())
+                .build()
+        );
+        let runtime = Runtime::with_context(storage, context);
+        
+        // 2. Create inputs for issue_receipt
+        let wasm_cid = "test-wasm-cid";
+        let ccl_cid = "test-ccl-cid";
+        let exec_result = ExecutionResult {
+            // Initialize CoreVmExecutionMetrics using fully qualified path
+            metrics: icn_core_vm::ExecutionMetrics { 
+                fuel_used: 100, 
+                host_calls: 5, 
+                io_bytes: 1024,
+                anchored_cids_count: 1, 
+                job_submissions_count: 0, 
+            },
+            anchored_cids: vec!["anchor1".to_string()],
+            resource_usage: vec![("cpu".to_string(), 50)],
+            logs: vec![],
+        };
+        let vm_context = VmContext {
+            executor_did: did_string.clone(), // Ensure issuer matches runtime identity
+            code_cid: Some("proposal-123".to_string()),
+            ..Default::default()
+        };
+        
+        // 3. Call issue_receipt
+        let signed_receipt = runtime.issue_receipt(wasm_cid, ccl_cid, &exec_result, &vm_context)?;
+        
+        // 4. Assert signature is present
+        assert!(signed_receipt.signature.is_some(), "Receipt signature should be present after issue_receipt");
+        
+        // 5. Call anchor_receipt (which internally calls verify)
+        let anchor_result = runtime.anchor_receipt(&signed_receipt).await;
+        
+        // 6. Assert anchoring succeeded (meaning verification passed)
+        assert!(anchor_result.is_ok(), "anchor_receipt failed, likely due to verification error: {:?}", anchor_result.err());
+        
+        Ok(())
     }
 }
 

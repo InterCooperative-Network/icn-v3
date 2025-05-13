@@ -54,6 +54,7 @@ wasm-encoder = "0.31"
 mockito = "1.4"
 sha2 = "0.10"
 multihash = "0.18.1"
+httpmock = "0.7"
 
 [features]
 # Minimal build excludes heavy host ABI and wasm linker code.

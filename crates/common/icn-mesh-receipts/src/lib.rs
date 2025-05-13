@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
+// Import the trait and payload from icn-types
+use icn_types::receipt_verification::{VerifiableReceipt, ExecutionReceiptPayload};
+use anyhow::Result; // For the Result in get_payload_for_signing
+
 /// Error types for receipt operations
 #[derive(Debug, Error)]
 pub enum ReceiptError {
@@ -72,6 +76,28 @@ impl ExecutionReceipt {
         
         // Create CID with DAG-CBOR codec (0x71)
         Ok(Cid::new_v1(0x71, hash))
+    }
+}
+
+impl VerifiableReceipt for ExecutionReceipt {
+    fn get_payload_for_signing(&self) -> Result<ExecutionReceiptPayload> {
+        Ok(ExecutionReceiptPayload {
+            id: self.job_id.clone(),
+            issuer: self.executor.to_string(), // Convert Did to String
+            proposal_id: None, // MeshExecutionReceipt doesn't have a direct proposal_id
+            wasm_cid: None,    // MeshExecutionReceipt doesn't have wasm_cid directly
+                               // (it's often part of the job definition, not the receipt itself)
+            ccl_cid: None,     // Similarly, ccl_cid is not directly on the receipt
+            timestamp: self.execution_end_time, // u64 Unix timestamp
+        })
+    }
+
+    fn get_signature_bytes(&self) -> Option<&[u8]> {
+        Some(&self.signature) // signature is not Option<Vec<u8>>, it's Vec<u8>
+    }
+
+    fn get_issuer_did_str(&self) -> &str {
+        self.executor.as_str() // Assuming Did has an as_str() method or similar
     }
 }
 

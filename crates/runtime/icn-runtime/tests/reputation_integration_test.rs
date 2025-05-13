@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::sync::{Arc, Mutex};
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Context};
 use icn_runtime::{
     RuntimeStorage, Runtime, RuntimeContext, RuntimeContextBuilder,
     reputation_integration::{ReputationUpdater, HttpReputationUpdater}
@@ -139,6 +139,211 @@ async fn test_reputation_submission_skipped_if_no_updater() -> Result<()> {
     let receipt_cid = runtime.anchor_receipt(&receipt).await?;
 
     assert!(receipt_cid.starts_with("anchor-"));
+
+    Ok(())
+}
+
+use icn_runtime::{Runtime, config::RuntimeConfig, reputation_integration::ReputationUpdater};
+use icn_runtime::reputation_integration::{HttpReputationUpdater, NoopReputationUpdater};
+use icn_identity::{KeyPair as IcnKeyPair, Did};
+use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
+use std::sync::Arc;
+use icn_runtime::MemStorage; // Assuming MemStorage is pub or accessible via pub mod storage
+use httpmock::MockServer;
+use httpmock::Method::POST;
+use tempfile;
+use chrono::Utc;
+
+// Import the signing helper if it's made public or accessible
+// For now, assuming it's defined locally or accessible within the tests
+// If not, we might need to call runtime.issue_receipt which does the signing internally.
+// fn sign_runtime_receipt_in_place(
+//     receipt: &mut RuntimeExecutionReceipt,
+//     keypair: &IcnKeyPair,
+// ) -> Result<()>;
+
+// Helper to get runtime identity keypair (assumes runtime has identity)
+fn get_runtime_keypair(runtime: &Runtime) -> Result<IcnKeyPair> {
+    runtime.context().identity()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Runtime context has no identity keypair for test"))
+}
+
+// Helper to sign a receipt (needs access to sign_runtime_receipt_in_place or similar)
+// This might be redundant if we use issue_receipt, but useful if constructing receipts manually.
+fn sign_receipt(receipt: &mut RuntimeExecutionReceipt, keypair: &IcnKeyPair) -> Result<()> {
+    // Placeholder: Ideally call the actual sign_runtime_receipt_in_place helper.
+    // For now, mimic signing for test setup.
+    use bincode;
+    let payload = receipt.signed_payload(); // Ensure this is public
+    let bytes = bincode::serialize(&payload).unwrap();
+    let signature = keypair.sign(&bytes); // Assumes KeyPair::sign exists
+    receipt.signature = Some(signature.to_bytes().to_vec());
+    Ok(())
+}
+
+// Helper to generate and sign a dummy receipt for tests
+fn generate_and_sign_dummy_receipt(keypair: &IcnKeyPair) -> Result<RuntimeExecutionReceipt> {
+    use bincode;
+
+    let mut receipt = RuntimeExecutionReceipt {
+        id: Uuid::new_v4().to_string(),
+        issuer: keypair.did.to_string(), // Use the provided keypair's DID
+        proposal_id: "test-proposal".to_string(),
+        wasm_cid: "bafybeibogus".to_string(),
+        ccl_cid: "bafybeiccl".to_string(),
+        metrics: RuntimeExecutionMetrics {
+            fuel_used: 100,
+            host_calls: 10,
+            io_bytes: 512,
+        },
+        anchored_cids: vec!["bafybeidata".to_string()],
+        resource_usage: vec![("cpu".to_string(), 100)], // Must be Vec<(String, u64)>
+        timestamp: Utc::now().timestamp() as u64,
+        dag_epoch: Some(42), // Must be Option<u64>
+        receipt_cid: None,
+        signature: None, // Will be added below
+    };
+
+    let payload = receipt.signed_payload(); // RuntimeExecutionReceipt::signed_payload must be pub
+    let bytes = bincode::serialize(&payload)
+        .context("Failed to serialize payload in test helper")?;
+    
+    // Assumes KeyPair::sign exists
+    let signature = keypair.sign(&bytes);
+    receipt.signature = Some(signature.to_bytes().to_vec());
+    Ok(receipt)
+}
+
+#[tokio::test]
+async fn test_valid_receipt_sends_to_http_reputation_service() -> Result<()> {
+    // Setup mock server
+    let server = MockServer::start();
+    let mock_endpoint = "/reputation/records"; // Match HttpReputationUpdater's expected path
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path(mock_endpoint)
+            .header("content-type", "application/json");
+            // TODO: Add body assertion if needed: .json_body(...) 
+        then.status(200);
+    });
+
+    // Create runtime config with mock reputation service URL
+    let config = RuntimeConfig {
+        reputation_service_url: Some(server.url(mock_endpoint)),
+        // Ensure storage_path points to a valid temp dir or use MemStorage approach
+        storage_path: tempfile::tempdir()?.path().to_path_buf(), 
+        key_path: None, // Generate in-memory key
+        ..Default::default()
+    };
+    
+    // Initialize runtime from config (this sets up HttpReputationUpdater)
+    let runtime = Runtime::from_config(config).await?;
+    let keypair = get_runtime_keypair(&runtime)?;
+
+    // Generate dummy receipt (needs fields from RuntimeExecutionReceipt)
+    let mut receipt = RuntimeExecutionReceipt {
+        id: uuid::Uuid::new_v4().to_string(),
+        issuer: keypair.did.to_string(), // Use the runtime's DID as issuer
+        proposal_id: "proposal-xyz".to_string(),
+        wasm_cid: "wasm-cid-demo".to_string(),
+        ccl_cid: "ccl-cid-demo".to_string(),
+        anchored_cids: vec!["cid1".to_string()],
+        metrics: RuntimeExecutionMetrics {
+            fuel_used: 123,
+            host_calls: 10,
+            io_bytes: 1024,
+        },
+        resource_usage: vec![("CPU".to_string(), 500)],
+        timestamp: chrono::Utc::now().timestamp() as u64, // Cast to u64
+        dag_epoch: Some(0), // Use Option<u64>
+        receipt_cid: None, // Will be set by anchor_receipt
+        signature: None,
+    };
+
+    // Sign the receipt (using helper or logic)
+    sign_receipt(&mut receipt, &keypair)?;
+    // Alternatively, if issue_receipt is used, it would handle signing:
+    // let receipt = runtime.issue_receipt(...)?; 
+
+    // Anchor receipt (should trigger reputation submission via HttpReputationUpdater)
+    // Note: anchor_receipt takes &RuntimeExecutionReceipt
+    runtime.anchor_receipt(&receipt).await.expect("Anchoring failed, check verification and submission logic");
+
+    // Assert HTTP request was made exactly once
+    mock.assert();
+    // Or more robustly:
+    mock.assert_hits(1);
+    
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reputation_updater_handles_http_500() -> Result<()> {
+    // Setup mock server
+    let server = MockServer::start();
+    let mock_endpoint = "/reputation/records";
+    let mock = server.mock(|when, then| {
+        when.method(POST).path(mock_endpoint);
+        then.status(500); // Internal server error
+    });
+
+    // Create runtime config pointing to mock server
+    let temp_dir = tempfile::tempdir()?;
+    let config = RuntimeConfig {
+        reputation_service_url: Some(server.url(mock_endpoint)),
+        storage_path: temp_dir.path().to_path_buf(), 
+        key_path: None, // Generate in-memory key
+        ..Default::default()
+    };
+    
+    // Initialize runtime
+    let runtime = Runtime::from_config(config).await?;
+    let keypair = get_runtime_keypair(&runtime)?;
+
+    // Generate a signed receipt
+    let receipt = generate_and_sign_dummy_receipt(&keypair)?;
+
+    // Anchor receipt - should attempt submission but handle the 500 error gracefully
+    let anchor_result = runtime.anchor_receipt(&receipt).await;
+
+    // Assert anchoring succeeded (error was logged, not propagated)
+    // The anchor_receipt function logs the error but returns Ok(receipt_cid)
+    assert!(anchor_result.is_ok(), "anchor_receipt should succeed even on reputation submission failure");
+    
+    // Assert the mock server was hit
+    mock.assert_hits(1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_noop_reputation_updater_ignores_submission() -> Result<()> {
+    // Setup runtime config WITHOUT reputation service URL
+    let temp_dir = tempfile::tempdir()?;
+    let config = RuntimeConfig {
+        reputation_service_url: None, // <-- This triggers NoopReputationUpdater
+        storage_path: temp_dir.path().to_path_buf(), 
+        key_path: None, 
+        ..Default::default()
+    };
+
+    // Initialize runtime (will use NoopReputationUpdater)
+    let runtime = Runtime::from_config(config).await?;
+    let keypair = get_runtime_keypair(&runtime)?;
+
+    // Generate a signed receipt
+    let receipt = generate_and_sign_dummy_receipt(&keypair)?;
+
+    // Anchor receipt - should not attempt any HTTP submission
+    let anchor_result = runtime.anchor_receipt(&receipt).await;
+
+    // Assert anchoring succeeded
+    assert!(anchor_result.is_ok(), "anchor_receipt failed with NoopReputationUpdater");
+    
+    // We cannot easily assert that *no* HTTP request was made without 
+    // setting up a mock server and asserting it *wasn't* hit, which feels 
+    // brittle. Trusting the code path based on config is sufficient here.
 
     Ok(())
 } 

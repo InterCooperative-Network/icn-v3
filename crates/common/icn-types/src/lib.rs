@@ -10,6 +10,14 @@ pub mod jobs;
 pub mod reputation;
 pub mod resource;
 pub mod runtime_receipt;
+pub mod receipt_verification;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
 pub use runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
+pub use dag_store::{DagStore, SharedDagStore, StorageError as DagStorageError};
+pub use mesh::{MeshJob, MeshJobParams, QoSProfile, WorkflowType, JobStatus as MeshJobStatus, OrgScope};
+pub use node_config::{NodeConfig, StorageConfig, NetworkConfig, ReputationConfig, LoggingConfig};
+pub use org::{CooperativeId, CommunityId};
+pub use p2p::{PeerId, Multiaddr};
+pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError};
+pub use receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
