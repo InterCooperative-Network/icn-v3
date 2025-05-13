@@ -188,4 +188,10 @@ impl ManaManager {
 
         Ok(())
     }
+}
+
+impl Default for ManaManager {
+    fn default() -> Self {
+        Self::new()
+    }
 } 

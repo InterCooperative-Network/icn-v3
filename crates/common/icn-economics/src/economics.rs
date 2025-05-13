@@ -26,6 +26,19 @@ pub struct LedgerKey {
     pub resource_type: ResourceType,
 }
 
+/// Arguments for the `Economics::transfer` method.
+#[derive(Debug)]
+pub struct TransferArgs<'a> {
+    pub sender: &'a Did,
+    pub sender_coop_id: Option<&'a CooperativeId>,
+    pub sender_community_id: Option<&'a CommunityId>,
+    pub recipient: &'a Did,
+    pub recipient_coop_id: Option<&'a CooperativeId>,
+    pub recipient_community_id: Option<&'a CommunityId>,
+    pub rt: ResourceType,
+    pub amt: u64,
+}
+
 pub struct Economics {
     policy: ResourceAuthorizationPolicy,
 }
@@ -126,38 +139,31 @@ impl Economics {
     /// - -3 on invalid resource type
     pub async fn transfer(
         &self,
-        sender: &Did,
-        sender_coop_id: Option<&CooperativeId>,
-        sender_community_id: Option<&CommunityId>,
-        recipient: &Did,
-        recipient_coop_id: Option<&CooperativeId>,
-        recipient_community_id: Option<&CommunityId>,
-        rt: ResourceType,
-        amt: u64,
+        args: TransferArgs<'_>,
         ledger: &RwLock<HashMap<LedgerKey, u64>>,
     ) -> i32 {
         // Only token type can be transferred
-        if rt != ResourceType::Token {
-            debug!("Attempted to transfer non-token resource type: {:?}", rt);
+        if args.rt != ResourceType::Token {
+            debug!("Attempted to transfer non-token resource type: {:?}", args.rt);
             return -3;
         }
         
-        debug!("Transferring {} tokens from {} to {}", amt, sender, recipient);
+        debug!("Transferring {} tokens from {} to {}", args.amt, args.sender, args.recipient);
         let mut l = ledger.write().await;
         
         // Create keys for sender and recipient
         let sender_key = LedgerKey {
-            did: sender.to_string(),
-            coop_id: sender_coop_id.map(|c| c.to_string()),
-            community_id: sender_community_id.map(|c| c.to_string()),
-            resource_type: rt,
+            did: args.sender.to_string(),
+            coop_id: args.sender_coop_id.map(|c| c.to_string()),
+            community_id: args.sender_community_id.map(|c| c.to_string()),
+            resource_type: args.rt,
         };
         
         let recipient_key = LedgerKey {
-            did: recipient.to_string(),
-            coop_id: recipient_coop_id.map(|c| c.to_string()),
-            community_id: recipient_community_id.map(|c| c.to_string()),
-            resource_type: rt,
+            did: args.recipient.to_string(),
+            coop_id: args.recipient_coop_id.map(|c| c.to_string()),
+            community_id: args.recipient_community_id.map(|c| c.to_string()),
+            resource_type: args.rt,
         };
         
         // In our token model, a usage of 0 means full tokens, and higher usage means fewer tokens
@@ -172,31 +178,26 @@ impl Economics {
         let available_tokens = token_max.saturating_sub(sender_usage);
         
         // If sender doesn't have enough available tokens, return insufficient funds
-        if available_tokens < amt {
+        if available_tokens < args.amt {
             debug!("Insufficient funds: sender {} has usage {} (available tokens: {}), cannot transfer {}", 
-                  sender, sender_usage, available_tokens, amt);
+                  args.sender, sender_usage, available_tokens, args.amt);
             return -1; // Insufficient funds
         }
         
         // Increase sender's usage (decreasing their token balance)
-        l.insert(sender_key, sender_usage + amt);
+        l.insert(sender_key, sender_usage + args.amt);
         
         // Decrease recipient's usage (increasing their token balance)
         let recipient_usage = *l.get(&recipient_key).unwrap_or(&0);
         
-        // Check for overflow - ensure recipient's usage doesn't go negative
-        // Decreasing usage means giving tokens to the recipient
-        let new_recipient_usage = if recipient_usage < amt {
-            0
-        } else {
-            recipient_usage - amt
-        };
+        // Use saturating_sub to prevent underflow
+        let new_recipient_usage = recipient_usage.saturating_sub(args.amt);
         
         // Update recipient's usage
         l.insert(recipient_key, new_recipient_usage);
         
         debug!("Transfer complete. New balances: {} usage={}, {} usage={}",
-              sender, sender_usage + amt, recipient, new_recipient_usage);
+              args.sender, sender_usage + args.amt, args.recipient, new_recipient_usage);
         0 // Success
     }
     
@@ -239,7 +240,7 @@ impl Economics {
         l.iter()
             .filter(|(k, _)| {
                 k.resource_type == rt && 
-                k.coop_id.as_ref().map_or(false, |cid| cid == &coop_id.to_string())
+                k.coop_id.as_ref().is_some_and(|cid| cid == &coop_id.to_string())
             })
             .map(|(_, v)| *v)
             .sum()
@@ -256,7 +257,7 @@ impl Economics {
         l.iter()
             .filter(|(k, _)| {
                 k.resource_type == rt && 
-                k.community_id.as_ref().map_or(false, |cid| cid == &community_id.to_string())
+                k.community_id.as_ref().is_some_and(|cid| cid == &community_id.to_string())
             })
             .map(|(_, v)| *v)
             .sum()

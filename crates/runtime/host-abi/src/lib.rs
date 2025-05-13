@@ -3,7 +3,7 @@ pub mod bindings;
 // Export all bindings at the crate root for easy access
 pub use bindings::*;
 
-pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submission ABI change 
+pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submission ABI change
 
 // InterCooperative Network (ICN) - Host ABI Definitions
 // This crate defines the Application Binary Interface (ABI) that WASM modules (e.g., CCL contracts)
@@ -22,11 +22,19 @@ use thiserror::Error;
 // use wasmtime::{Caller, Linker};
 use anyhow::Error as AnyhowError;
 
-use icn_types::mesh::MeshJobParams; // Assuming this is now resolved by Cargo.toml change
+use icn_types::mesh::{JobStatus, StageInputSource, WorkflowDefinition, WorkflowStage, WorkflowType, JobPermissions, JobContext, MeshExecutionReceipt as MeshReceipt, OrgScopeIdentifier};
 // use wasmtime::Memory; // Commenting out as per new compiler warning
-// use std::sync::Arc; // Commenting out as per new compiler warning
-use tokio::sync::Mutex; // Assuming this is now resolved by Cargo.toml change
+use std::sync::Arc;
 // use wasmtime::AsContextMut; // Commenting out as per new compiler warning
+use tracing::{debug, error, info, warn};
+
+use std::collections::HashMap;
+use std::convert::TryInto;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int, c_void};
+use std::ptr;
+use std::slice;
+use std::str;
 
 // --- Helper Enums & Structs for ABI Communication ---
 
@@ -63,7 +71,34 @@ pub enum LogLevel {
     Trace = 4, // Highly verbose trace information, for deep debugging.
 }
 
+/// Represents the status of a job execution.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum P2PJobStatus {
+    Pending = 0,
+    InProgress = 1,
+    Completed = 2,
+    Failed = 3,
+    Cancelled = 4,
+    Unknown = 5, // Should not happen
+}
+
+impl From<JobStatus> for P2PJobStatus {
+    fn from(status: JobStatus) -> Self {
+        match status {
+            JobStatus::Pending => P2PJobStatus::Pending,
+            JobStatus::InProgress => P2PJobStatus::InProgress,
+            JobStatus::Completed => P2PJobStatus::Completed,
+            JobStatus::Failed => P2PJobStatus::Failed,
+            JobStatus::Cancelled => P2PJobStatus::Cancelled,
+            JobStatus::Unknown => P2PJobStatus::Unknown,
+        }
+    }
+}
+
 /// Errors returned by Host ABI functions.
+/// These are negative i32 values when returned from host functions.
+/// Success is typically represented by 0 or a positive value (e.g., bytes written).
 #[derive(Error, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HostAbiError {
     #[error("Unknown error")]
@@ -104,8 +139,142 @@ pub enum HostAbiError {
     ChannelClosed,
 }
 
-// Add Send + Sync + 'static bounds to HostAbiError if necessary
-// (Assuming it's implicitly Send + Sync + 'static based on its fields)
+/// Represents a CID (Content Identifier) for use across the ABI.
+/// CIDs are passed as null-terminated strings.
+pub type AbiCid = *const c_char;
+
+/// Represents generic binary data passed across the ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AbiBytes {
+    pub ptr: *const u8,
+    pub len: u32,
+}
+
+// Placeholder for JobExecutionContext if not defined elsewhere that host_env can access.
+// This is a simplified version. The actual one might be more complex and involve Arcs/Mutexes.
+pub struct MinimalJobContext {
+    pub job_id: String,
+    pub originator_did: String, // Assuming DID is a string here
+    pub permissions: JobPermissions,
+    pub workflow_definition: Option<WorkflowDefinition>,
+    pub current_stage_index: Option<usize>,
+    pub stage_outputs: HashMap<String, String>, // Stage ID to output CID
+    pub interactive_input_buffer: Option<Vec<u8>>,
+    pub interactive_output_buffer: Option<Vec<u8>>,
+}
+
+/// Maximum size of data that can be directly inlined in a P2P message payload.
+pub const INLINE_PAYLOAD_MAX_SIZE: usize = 1024; // 1KB, example value
+
+/// Max number of bytes that can be peeked from interactive input buffer
+pub const MAX_INTERACTIVE_INPUT_BUFFER_PEEK: usize = 256;
+
+/// Trait defining the Host ABI functions callable from WASM modules.
+/// 
+/// # Error Handling
+/// Most functions return an `i32` status code. `0` generally means success.
+/// Negative values correspond to `HostAbiError` variants.
+/// 
+/// # String/CID Handling
+/// CIDs and other string-like data are passed as `*const c_char` (null-terminated C strings).
+/// Buffers provided by WASM for host functions to write into should be of adequate size.
+/// The host will write a null terminator if the buffer is large enough.
+/// Functions returning string data will indicate the required buffer size if the provided one is too small.
+/// 
+/// # Binary Data Handling
+/// Binary data is passed using `AbiBytes` (pointer and length).
+#[async_trait::async_trait]
+pub trait HostEnvironment: Send + Sync + Clone + 'static {
+    // --- Job Context & Info --- 
+    fn get_job_id(&self, job_id_buf_ptr: *mut c_char, job_id_buf_len: u32) -> i32;
+    fn get_originator_did(&self, did_buf_ptr: *mut c_char, did_buf_len: u32) -> i32;
+    fn get_current_epoch(&self, epoch_buf_ptr: *mut c_char, epoch_buf_len: u32) -> i32;
+    fn get_current_timestamp(&self) -> i64; // Unix timestamp in seconds
+
+    // --- Workflow & Stage Info --- 
+    fn get_workflow_type(&self) -> i32; // Returns WorkflowType variant as i32, or -1 if no workflow context
+    fn get_current_stage_index(&self) -> i32; // Returns stage index, or -1 if not in a multi-stage workflow
+    fn get_current_stage_id(&self, stage_id_buf_ptr: *mut c_char, stage_id_buf_len: u32) -> i32;
+    fn get_stage_input_cid(&self, cid_buf_ptr: *mut c_char, cid_buf_len: u32) -> i32;
+
+    // --- Logging & Diagnostics --- 
+    fn log_msg(&self, level: i32, msg_ptr: *const c_char, msg_len: u32) -> i32;
+
+    // --- Data Storage & Anchoring --- 
+    fn read_cid_data(&self, cid_ptr: *const c_char, offset: u64, buffer_ptr: *mut u8, buffer_len: u32) -> i32;
+    fn write_data_and_get_cid(&self, data_ptr: *const u8, data_len: u32, cid_buf_ptr: *mut c_char, cid_buf_len: u32) -> i32;
+    fn anchor_cid(&self, cid_ptr: *const c_char, metadata_ptr: *const c_char, metadata_len: u32) -> i32;
+
+    // --- Cryptography & Identity --- 
+    fn verify_signature(&self, did_ptr: *const c_char, data_ptr: *const u8, data_len: u32, sig_ptr: *const u8, sig_len: u32) -> i32;
+    fn sign_data(&self, data_ptr: *const u8, data_len: u32, sig_buf_ptr: *mut u8, sig_buf_len: u32) -> i32;
+
+    // --- Resource Management --- 
+    fn consume_resource(&self, rt_type_val: i32, amt: u64) -> i32;
+    fn remaining_resource(&self, rt_type_val: i32) -> i64;
+
+    // --- Interactive Job Support --- (Optional, host may not support)
+    fn send_interactive_output(&self, data_ptr: *const u8, data_len: u32) -> i32;
+    fn receive_interactive_input(&self, buffer_ptr: *mut u8, buffer_len: u32, timeout_ms: u32) -> i32;
+    fn peek_interactive_input_buffer_size(&self) -> i32;
+    fn clear_interactive_input_buffer(&self) -> i32;
+    
+    // --- Network & P2P --- (Optional)
+    async fn p2p_send_message(&self, peer_did_ptr: *const c_char, data_ptr: *const u8, data_len: u32) -> i32;
+    async fn p2p_receive_message(&self, buffer_ptr: *mut u8, buffer_len: u32, timeout_ms: u32) -> i32;
+
+    // --- Dynamic Linking / Capability Invocation --- (Optional)
+    async fn call_capability(&self, capability_cid_ptr: *const c_char, input_ptr: *const u8, input_len: u32, output_buf_ptr: *mut u8, output_buf_len: u32) -> i32;
+}
+
+/// Helper to safely copy a Rust string into a C buffer provided by WASM.
+/// Returns the number of bytes written (excluding null terminator) or a HostAbiError code.
+pub fn copy_string_to_c_buf(rust_str: &str, c_buf: *mut c_char, c_buf_len: u32) -> i32 {
+    if c_buf.is_null() || c_buf_len == 0 {
+        return HostAbiError::InvalidArguments as i32;
+    }
+    let bytes = rust_str.as_bytes();
+    let len_to_write = bytes.len();
+
+    if (len_to_write + 1) > c_buf_len as usize { // +1 for null terminator
+        return HostAbiError::BufferTooSmall as i32;
+    }
+
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), c_buf as *mut u8, len_to_write);
+        // Write null terminator
+        *(c_buf as *mut u8).add(len_to_write) = 0;
+    }
+    len_to_write as i32
+}
+
+/// Helper to safely create a Rust String from a C string provided by WASM.
+pub fn string_from_c_str(c_str_ptr: *const c_char) -> Result<String, HostAbiError> {
+    if c_str_ptr.is_null() {
+        return Err(HostAbiError::InvalidArguments);
+    }
+    unsafe {
+        CStr::from_ptr(c_str_ptr)
+            .to_str()
+            .map(|s| s.to_owned())
+            .map_err(|_| HostAbiError::InvalidArguments) // UTF-8 conversion error
+    }
+}
+
+/// Helper to safely create a Rust Vec<u8> from AbiBytes provided by WASM.
+pub fn vec_from_abi_bytes(abi_bytes: AbiBytes) -> Result<Vec<u8>, HostAbiError> {
+    if abi_bytes.ptr.is_null() {
+        if abi_bytes.len == 0 {
+            return Ok(Vec::new()); // Null ptr with zero length is valid empty vec
+        } else {
+            return Err(HostAbiError::InvalidArguments); // Null ptr with non-zero length is invalid
+        }
+    }
+    unsafe {
+        Ok(slice::from_raw_parts(abi_bytes.ptr, abi_bytes.len as usize).to_vec())
+    }
+}
 
 // --- The Host ABI Trait (Using Wasmtime concepts) ---
 // Functions will be called with a Caller<'a, T> where T is the host state

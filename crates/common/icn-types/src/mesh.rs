@@ -32,21 +32,17 @@ pub enum StageInputSource {
     NoInput,
 }
 
-/// NEW Enum: Defines the type of workflow for a mesh job
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Defines the type of workflow for a mesh job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(crate = "serde")]
 pub enum WorkflowType {
     /// A single WASM module execution, similar to the current behavior.
+    #[default]
     SingleWasmModule,
-    /// A sequence of stages that execute in a defined order.
+    /// A sequence of WASM modules forming a pipeline.
     SequentialPipeline,
-    // Potentially in the future:
-    // DirectedAcyclicGraph, // For more complex dependencies between stages
-}
-
-impl Default for WorkflowType {
-    fn default() -> Self {
-        WorkflowType::SingleWasmModule
-    }
+    /// A DAG of WASM modules for parallel and conditional execution.
+    DagWorkflow,
 }
 
 /// NEW Struct: Defines a single stage within a multi-stage workflow

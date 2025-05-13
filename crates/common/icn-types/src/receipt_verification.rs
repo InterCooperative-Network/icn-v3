@@ -75,10 +75,7 @@ pub trait VerifiableReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
-    use icn_identity::{KeyPair, Did, DidError};
-    use ed25519_dalek::Signer; // For keypair.sign
-    use bincode; // Use crate directly
+    use icn_identity::KeyPair;
 
     // A mock struct that implements VerifiableReceipt for testing purposes
     #[derive(Clone)]

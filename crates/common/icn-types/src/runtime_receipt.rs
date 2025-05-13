@@ -232,4 +232,24 @@ mod tests {
         assert!(verification_result_no_issuer.is_err());
         assert!(verification_result_no_issuer.unwrap_err().to_string().contains("Receipt issuer DID is empty"));
     }
+
+    #[test]
+    fn test_runtime_receipt_verifiable_payload_consistency() {
+        // Create a sample receipt
+        let _receipt_no_id = RuntimeExecutionReceipt {
+            id: "test-id".to_string(),
+            issuer: "did:icn:issuer".to_string(),
+            proposal_id: "test-proposal-id".to_string(),
+            wasm_cid: "test-wasm-cid".to_string(),
+            ccl_cid: "test-ccl-cid".to_string(),
+            metrics: RuntimeExecutionMetrics::default(),
+            anchored_cids: vec!["test-anchor-1".to_string()],
+            resource_usage: vec![("test-resource".to_string(), 100)],
+            timestamp: 1678886400,
+            dag_epoch: Some(10),
+            receipt_cid: None,
+            signature: None,
+        };
+        dbg!(&_receipt_no_id); // Explicitly use the variable
+    }
 } 

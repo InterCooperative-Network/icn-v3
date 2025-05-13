@@ -315,8 +315,8 @@ async fn test_concurrent_inserts_duplicate_cids() -> Result<()> {
     let barrier = Arc::new(Barrier::new(num_threads));
 
     // Create a single node that all tasks will try to insert
-    // Use a valid DagEventType, e.g., ArbitraryData
-    let common_node = create_test_node_with_parent(999, "duplicate", DagEventType::ArbitraryData, None);
+    // Use a valid DagEventType, e.g., Anchor
+    let common_node = create_test_node_with_parent(999, "duplicate", DagEventType::Anchor, None);
     let common_node_cid = common_node.cid()?;
 
     let mut handles = vec![];
@@ -356,7 +356,7 @@ async fn test_concurrent_inserts_duplicate_cids() -> Result<()> {
     assert_eq!(all_nodes.len(), 1, "Expected only one node in the store after duplicate inserts.");
 
     // And that node should be the one we tried to insert.
-    let retrieved_node = store.get(&common_node_cid).await?.expect("Common node not found by CID.");
+    let retrieved_node = store.get(&common_node_cid.to_string()).await?.expect("Common node not found by CID.");
     assert_eq!(retrieved_node.cid()?, common_node_cid, "Retrieved node CID mismatch.");
     // Optionally, check content if DagNode equality is well-defined
     // assert_eq!(retrieved_node, common_node, "Retrieved node content mismatch.");
@@ -373,7 +373,7 @@ async fn test_concurrent_anchoring_to_pending_cids() -> Result<()> {
     let node_x_content = "node_x_content_pending";
     let node_x_to_build = DagNodeBuilder::new()
         .content(node_x_content.to_string())
-        .event_type(DagEventType::Generic)
+        .event_type(DagEventType::Anchor) // Changed from Generic
         .scope_id("test-scope".to_string())
         .timestamp(1)
         .build()?;
@@ -383,43 +383,51 @@ async fn test_concurrent_anchoring_to_pending_cids() -> Result<()> {
     let store_a = store.clone();
     let barrier_a = barrier.clone();
     let node_x_for_a = node_x_to_build.clone();
+    // Capture node_x_cid for return, as node_x_for_a is moved
+    let captured_node_x_cid_for_task_a = node_x_cid.clone(); 
     let handle_a = tokio::spawn(async move {
         barrier_a.wait().await; 
-        // Add a small delay to make it more likely Node Y insertion starts first or concurrently
-        sleep(Duration::from_millis(5)).await;
-        store_a.insert(node_x_for_a).await
+        sleep(Duration::from_millis(5)).await; // Simulate delay
+        store_a.insert(node_x_for_a).await?;
+        Ok::<Cid, anyhow::Error>(captured_node_x_cid_for_task_a) // Return Result<Cid, Error>
     });
 
     // Task B: Inserts Node Y which references Node X's CID
     let store_b = store.clone();
     let barrier_b = barrier.clone();
-    let referenced_cid_for_y = node_x_cid.clone();
+    let referenced_cid_for_y = node_x_cid.clone(); // Node X's CID is known here
     let handle_b = tokio::spawn(async move {
         barrier_b.wait().await;
-        let node_y = create_test_node_with_parent(2, "node_y_references_x", DagEventType::Generic, Some(referenced_cid_for_y.clone()));
-        let insert_result = store_b.insert(node_y.clone()).await;
-        // Even if X is not fully there, Y's insertion with reference to X's CID should be accepted.
-        (insert_result, node_y.cid().unwrap())
+        let node_y = create_test_node_with_parent(
+            2, 
+            "node_y_references_x", 
+            DagEventType::Anchor, // Changed from Generic
+            Some(referenced_cid_for_y.clone())
+        );
+        let current_node_y_cid = node_y.cid()?;
+        store_b.insert(node_y.clone()).await?;
+        Ok::<Cid, anyhow::Error>(current_node_y_cid) // Return Result<Cid, Error>
     });
 
-    let result_a = handle_a.await??;
-    let (result_b, node_y_cid) = handle_b.await??;
+    let result_cid_x = handle_a.await??; // Should now work as task A returns Result<Cid, Error>
+    let result_cid_y = handle_b.await??; // Should now work as task B returns Result<Cid, Error>
 
-    // Ensure both inserts were successful (or handled as per DAG store's contract)
-    // This might need adjustment based on the DAG store's specific error handling for pending CIDs.
-    // For now, we assume Ok is the desired outcome.
+    // Ensure both inserts were successful and CIDs match expected
+    assert_eq!(result_cid_x, node_x_cid, "Node X CID mismatch after task A completion");
+    // For Node Y, its CID was generated inside task B, so we verify against that task's successful return.
+    // No need to re-calculate node_y_cid outside if we trust the task output.
 
     // Verify both nodes are present
-    let fetched_node_x = store.get(&node_x_cid.to_string()).await?;
-    let fetched_node_y = store.get(&node_y_cid.to_string()).await?;
+    let fetched_node_x = store.get(&result_cid_x.to_string()).await?
+        .expect("Node X not found in store");
+    let fetched_node_y = store.get(&result_cid_y.to_string()).await?
+        .expect("Node Y not found in store");
 
-    assert!(fetched_node_x.is_some(), "Node X not found in store");
-    assert!(fetched_node_y.is_some(), "Node Y not found in store");
+    assert_eq!(fetched_node_x.cid()?, result_cid_x, "Fetched Node X CID mismatch");
+    assert!(fetched_node_x.parent.is_none(), "Node X should not have a parent");
 
-    let node_y_unwrapped = fetched_node_y.unwrap();
-    let y_references = node_y_unwrapped.references().unwrap_or_else(Vec::new);
-    assert_eq!(y_references.len(), 1, "Node Y should reference one CID");
-    assert_eq!(y_references[0], node_x_cid, "Node Y does not correctly reference Node X's CID");
+    assert_eq!(fetched_node_y.cid()?, result_cid_y, "Fetched Node Y CID mismatch");
+    assert_eq!(fetched_node_y.parent, Some(result_cid_x), "Node Y does not correctly reference Node X's CID as parent");
 
     Ok(())
 } 

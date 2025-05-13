@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
-use icn_types::mesh::{MeshJob, JobStatus as StandardJobStatus, QoSProfile, StageInputSource, WorkflowType, StageDefinition, OrgScopeIdentifier};
+// use icn_types::mesh::{/* MeshJob, JobStatus as StandardJobStatus, QoSProfile, StageInputSource, WorkflowType, StageDefinition, OrgScopeIdentifier, */ JobId, JobParams, JobResult, JobStatus, MeshOperation, KnownPeer, ProtocolVersion}; // Commenting out entire problematic line
 use icn_identity::Did;
-use cid::Cid;
+// use cid::Cid; // Removed as per clippy
+// use icn_types::signing::Signature; // Also commenting this out as it appeared in a previous bad edit and might be unused.
 
 /// Status of a P2P job
 #[derive(Debug, Clone, Serialize, Deserialize)]
