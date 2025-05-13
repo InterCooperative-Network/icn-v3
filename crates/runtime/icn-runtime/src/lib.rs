@@ -48,7 +48,7 @@ pub mod metrics;
 
 // Import reputation integration module
 pub mod reputation_integration;
-use reputation_integration::{ReputationUpdater, HttpReputationUpdater, NoopReputationUpdater};
+use reputation_integration::{ReputationUpdater, HttpReputationUpdater, NoopReputationUpdater, ReputationScoringConfig};
 
 /// Distribution worker for periodic mana payouts
 pub mod distribution_worker;
@@ -830,10 +830,36 @@ impl Runtime {
         let mut linker = Linker::new(&engine);
         register_host_functions(&mut linker)?;
 
+        // Load Reputation Scoring Config or use default
+        let rep_scoring_config = config.reputation_scoring_config_path.as_ref()
+            .map(|path| {
+                ReputationScoringConfig::from_file(path).map_err(|e| {
+                    warn!("Failed to load reputation scoring config from {:?}: {}. Using default config.", path, e);
+                    e // Keep the error to signal downstream that default is used because of failure
+                })
+            })
+            .transpose()
+            .unwrap_or_else(|_err| {
+                // This block is reached if from_file returned an Err.
+                // Warning already logged inside the map_err closure.
+                Ok(ReputationScoringConfig::default())
+            })
+            .unwrap_or_else(|| {
+                // This block is reached if the path option was None.
+                info!("No reputation scoring config path specified. Using default config.");
+                ReputationScoringConfig::default()
+            });
+
+        // Create Reputation Updater using the loaded or default config
         let reputation_updater: Option<Arc<dyn ReputationUpdater>> = 
             if let Some(url) = context.reputation_service_url() {
                 info!("Creating HttpReputationUpdater for URL: {}", url);
-                Some(Arc::new(HttpReputationUpdater::new(url.clone(), node_did_obj)))
+                // Use new_with_config to pass the loaded or default configuration
+                Some(Arc::new(HttpReputationUpdater::new_with_config(
+                    url.clone(), 
+                    node_did_obj, 
+                    rep_scoring_config // Pass the resolved config
+                )))
             } else {
                 info!("No reputation service URL in context, using NoopReputationUpdater.");
                 Some(Arc::new(NoopReputationUpdater))
@@ -1081,292 +1107,4 @@ pub async fn execute_mesh_job(
         tracing::info!("[RuntimeExecute] Consumed {} mana for {:?} ({} -> {})", cost, scope_key, balance_before, balance_after);
     } // <-- End of mana_mgr lock scope
 
-    // IMPORTANT: Capture the calculated `cost` here after the lock is released.
-    // We need to re-calculate it or pass it out from the block above.
-    // Re-calculating is simpler if `mesh_job` is still available.
-    let declared_cost_again: u64 = mesh_job.params.resources_required.iter().map(|(_, amt)| *amt).sum();
-    let final_cost_spent = if declared_cost_again > 0 { declared_cost_again } else { 50 }; // Fallback cost
-
-    tracing::info!("[RuntimeExecute] STUB: Simulating WASM execution for job_id: {}", mesh_job.job_id);
-    tokio::time::sleep(std::time::Duration::from_millis(100 + 0 as u64 )).await; // Replaced Ginkou
-
-    let mut resource_usage_actual = HashMap::new();
-    resource_usage_actual.insert(ResourceType::Cpu, 100u64 + 0 as u64); // Replaced Ginkou
-    resource_usage_actual.insert(ResourceType::Memory, 64u64 + 0 as u64); // Replaced Ginkou
-    resource_usage_actual.insert(ResourceType::Token, 5u64 + 0 as u64); // Replaced Ginkou
-    
-    let execution_start_time_unix = Utc::now().timestamp() - 1; // Pretend it started 1 sec ago
-    let execution_end_time_dt = Utc::now();
-    let execution_end_time_unix = execution_end_time_dt.timestamp();
-    let dummy_cid_str = "bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
-
-    let mut receipt = MeshExecutionReceipt {
-        job_id: mesh_job.job_id.clone(),
-        executor: local_keypair.did.clone(),
-        status: IcnJobStatus::Completed, // Assume success for stub
-        result_data_cid: Some(dummy_cid_str.to_string()),
-        logs_cid: Some(dummy_cid_str.to_string()),
-        resource_usage: resource_usage_actual,
-        mana_cost: Some(final_cost_spent), // Populate the new field
-        execution_start_time: execution_start_time_unix as u64,
-        execution_end_time: execution_end_time_unix as u64,
-        execution_end_time_dt,
-        signature: Vec::new(), // Will be filled by sign_receipt_in_place
-        coop_id: mesh_job.originator_org_scope.as_ref().and_then(|s| s.coop_id.clone()),
-        community_id: mesh_job.originator_org_scope.as_ref().and_then(|s| s.community_id.clone()),
-    };
-
-    sign_receipt_in_place(&mut receipt, local_keypair)
-        .context("Failed to sign mesh execution receipt")?;
-    tracing::info!("[RuntimeExecute] Successfully signed ExecutionReceipt for job_id: {}.", receipt.job_id);
-
-    Ok(receipt)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use crate::context::RuntimeContextBuilder;
-    use crate::config::RuntimeConfig;
-    use icn_types::mesh::{MeshJobParams, QoSProfile, WorkflowType};
-    use icn_economics::ResourceType;
-    use std::str::FromStr;
-    use icn_identity::Did;
-    use anyhow::Result;
-    // Explicitly import the type here
-    use icn_core_vm::ExecutionMetrics as CoreVmExecutionMetrics;
-
-    #[tokio::test]
-    async fn test_execute_wasm_file() -> Result<()> {
-        let test_dir = tempfile::tempdir()?;
-        let wasm_path = test_dir.path().join("test.wasm");
-
-        // Simple WAT that returns 42
-        let wat = r#"(module (func (export "_start") (result i32) i32.const 42))"#;
-        let wasm_bytes = wat::parse_str(wat)?;
-        fs::write(&wasm_path, wasm_bytes)?;
-
-        let storage = Arc::new(MemStorage::new());
-        let mut runtime = Runtime::new(storage)?; // Use ? for Result from Runtime::new
-
-        let result = runtime.execute_wasm_file(&wasm_path).await?;
-
-        assert_eq!(result.status, IcnJobStatus::Completed);
-        // Further assertions possible if execute_wasm_file populates receipt details
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore] // Ignoring due to "governance WASM disabled in minimal build" error
-    async fn test_resource_economics() -> Result<()> { // Add Result<()> return type
-        // Setup (runtime, storage, context, etc.)
-        let storage = Arc::new(MemStorage::new());
-        let mut runtime = Runtime::new(storage)?; // Use ? for Result from Runtime::new
-
-        let test_did = "did:icn:test-user";
-        let _scope_key = ScopeKey::Individual(test_did.to_string());
-
-        // Example: Define a WASM module (WAT) that consumes resources
-        let wat = r#"
-            (module
-              (import "icn" "host_consume_resource" (func $consume (param i32 i64)))
-              (func (export "_start")
-                ;; Consume 10 CPU units (assuming i32 0 represents CPU)
-                i32.const 0
-                i64.const 10
-                call $consume
-              )
-            )"#;
-        let _wasm_bytes = wat::parse_str(wat)?;
-
-        // TODO: Actually execute this WASM via runtime.execute_job or similar
-        //       and verify mana consumption using runtime.context().mana_manager
-
-        // Placeholder assertion
-        assert!(true);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_wasm_execution() {
-        let storage = Arc::new(MemStorage::new());
-        // Use expect on Runtime::new to get a clearer panic message if it fails
-        let mut runtime = Runtime::new(storage).expect("Runtime::new failed during initialization");
-
-        // Minimal WAT that exports a function "_start" which returns 42
-        let wat = r#"(module (func $start (export "_start") (result i32) i32.const 42))"#;
-        let wasm_bytes = wat::parse_str(wat).expect("Failed to parse WAT");
-        let params = MeshJobParams {
-            wasm_cid: "test_wasm_cid".to_string(),
-            description: "Test job".to_string(),
-            resources_required: vec![(ResourceType::Cpu, 1)],
-            qos_profile: QoSProfile::BestEffort,
-            deadline: None,
-            input_data_cid: None,
-            max_acceptable_bid_tokens: None,
-            workflow_type: WorkflowType::SingleWasmModule,
-            stages: None,
-            is_interactive: false,
-            expected_output_schema_cid: None,
-            execution_policy: None,
-        };
-
-        // Generate a Did for the originator instead of hardcoding
-        let originator_keypair = IcnKeyPair::generate();
-        let originator = originator_keypair.did;
-
-        // Execute the job
-        let result = runtime.execute_job(&wasm_bytes, &params, &originator).await;
-
-        // Use expect on the result of execute_job to see the error if it fails
-        let receipt = result.expect("runtime.execute_job failed");
-
-        assert_eq!(receipt.status, IcnJobStatus::Completed);
-    }
-
-    #[tokio::test]
-    async fn test_issue_receipt_signing_and_verification() -> Result<()> {
-        // 1. Setup Runtime with identity
-        let storage = Arc::new(MemStorage::new());
-        let keypair = IcnKeyPair::generate();
-        let did_string = keypair.did.to_string();
-        let context = Arc::new(
-            RuntimeContextBuilder::new()
-                .with_identity(keypair.clone())
-                .with_executor_id(did_string.clone())
-                .build()
-        );
-        let runtime = Runtime::with_context(storage, context);
-        
-        // 2. Create inputs for issue_receipt
-        let wasm_cid = "test-wasm-cid";
-        let ccl_cid = "test-ccl-cid";
-        let exec_result = ExecutionResult {
-            // Initialize CoreVmExecutionMetrics using fully qualified path
-            // Ensure alignment with the actual struct definition in icn-core-vm
-            metrics: icn_core_vm::ExecutionMetrics { 
-                host_calls: 5, 
-                io_bytes: 1024,
-                anchored_cids_count: 1, // Explicitly include
-                job_submissions_count: 0, // Explicitly include
-                mana_cost: None, // Include mana_cost
-                // fuel_used is definitely removed from ExecutionMetrics
-            },
-            anchored_cids: vec!["anchor1".to_string()],
-            resource_usage: vec![("cpu".to_string(), 50)],
-            logs: vec![],
-        };
-        let vm_context = VmContext {
-            executor_did: did_string.clone(), // Ensure issuer matches runtime identity
-            code_cid: Some("proposal-123".to_string()),
-            ..Default::default()
-        };
-        
-        // 3. Call issue_receipt
-        let signed_receipt = runtime.issue_receipt(wasm_cid, ccl_cid, &exec_result, &vm_context)?;
-        
-        // 4. Assert signature is present
-        assert!(signed_receipt.signature.is_some(), "Receipt signature should be present after issue_receipt");
-        
-        // 5. Call anchor_receipt (which internally calls verify)
-        let anchor_result = runtime.anchor_receipt(&signed_receipt).await;
-        
-        // 6. Assert anchoring succeeded (meaning verification passed)
-        assert!(anchor_result.is_ok(), "anchor_receipt failed, likely due to verification error: {:?}", anchor_result.err());
-        
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod key_loading_tests {
-    use super::*;
-    use tempfile::tempdir;
-    use std::fs::{self, File};
-    use std::io::Write;
-    use std::path::PathBuf;
-    use icn_identity::KeyPair as IcnKeyPair;
-
-    #[tokio::test]
-    async fn test_load_keypair_from_existing_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("keypair.bin");
-
-        let original = IcnKeyPair::generate();
-        let encoded = bincode::serialize(&original).unwrap();
-        fs::write(&path, &encoded).unwrap();
-
-        let loaded = load_or_generate_keypair(Some(&path)).unwrap();
-        assert_eq!(loaded.did, original.did);
-        assert_eq!(loaded.pk, original.pk);
-    }
-
-    #[tokio::test]
-    async fn test_generate_keypair_if_file_not_exists() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("new_keypair.bin");
-
-        assert!(!path.exists());
-        let generated = load_or_generate_keypair(Some(&path)).unwrap();
-        assert!(path.exists());
-
-        let content = fs::read(&path).unwrap();
-        let decoded: IcnKeyPair = bincode::deserialize(&content).unwrap();
-        assert_eq!(decoded.did, generated.did);
-        assert_eq!(decoded.pk, generated.pk);
-    }
-
-    #[tokio::test]
-    async fn test_generate_keypair_if_no_path_provided() {
-        let generated = load_or_generate_keypair(None).unwrap();
-        // Basic check: DID should not be empty
-        assert!(!generated.did.to_string().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_error_on_invalid_keypair_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("corrupt_keypair.bin");
-
-        let mut file = File::create(&path).unwrap();
-        file.write_all(b"not valid bincode").unwrap();
-
-        let result = load_or_generate_keypair(Some(&path));
-        assert!(result.is_err(), "Expected deserialization error");
-    }
-
-    #[tokio::test]
-    async fn test_error_on_unreadable_keypair_file() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let dir = tempdir().unwrap();
-            let path = dir.path().join("unreadable_keypair.bin");
-
-            fs::write(&path, b"validbutunreadable").unwrap();
-            let mut perms = fs::metadata(&path).unwrap().permissions();
-            perms.set_mode(0o000); // No permissions
-            fs::set_permissions(&path, perms).unwrap();
-
-            let result = load_or_generate_keypair(Some(&path));
-            assert!(result.is_err(), "Expected file permission error");
-
-            // Clean up - make file writable again so tempdir can delete it
-            let mut perms = fs::metadata(&path).unwrap().permissions();
-            perms.set_mode(0o600);
-            fs::set_permissions(&path, perms).unwrap();
-        }
-
-        #[cfg(windows)]
-        {
-            // Permissions harder to simulate reliably on Windows — skip or log
-            eprintln!("Skipping unreadable file test on Windows due to permission complexity.");
-            // To make this test pass on Windows, we can just assert true.
-            assert!(true, "Skipping unreadable file test on Windows");
-        }
-    }
-}
+    // IMPORTANT: Capture the calculated `cost`

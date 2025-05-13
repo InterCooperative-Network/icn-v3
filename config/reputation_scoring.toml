@@ -1,0 +1,59 @@
+# Example Reputation Scoring Configuration for ICN Runtime
+# This file can be loaded by the HttpReputationUpdater.
+
+# --- Core Scoring Parameters ---
+
+# Maximum positive score delta that can be awarded for a single successful execution.
+max_positive_score = 5.0
+
+# --- Sigmoid Curve Parameters (for successful executions) ---
+# Adjust these to shape the reward curve based on mana_cost.
+# score_delta_on_success = (1 / (1 + exp(sigmoid_k * (mana_cost - sigmoid_midpoint)))) * max_positive_score
+
+# Steepness factor for the sigmoid curve. Higher values make the curve steeper.
+# Affects how quickly the reward diminishes as mana_cost increases.
+sigmoid_k = 0.02
+
+# Midpoint of the sigmoid curve (in terms of mana_cost).
+# This is roughly the mana_cost at which the unscaled sigmoid output is 0.5.
+sigmoid_midpoint = 100.0
+
+
+# --- Scaled Penalty Parameters (for failed executions) ---
+# Adjust this to shape the penalty curve based on mana_cost.
+# score_delta_on_failure = -failure_penalty_weight * ln(mana_cost + 1.0)
+
+# Weight factor for the scaled failure penalty. Higher values make penalties more severe.
+failure_penalty_weight = 5.0
+
+
+# --- Reputation Modifier Parameters ---
+# These parameters allow adjusting the calculated score_delta based on the executor's existing reputation.
+
+# Enable or disable the reputation modifier logic.
+# If true, the score for successful executions will be multiplied by a factor derived from the executor's current reputation.
+# Penalties for failures are NOT currently affected by this modifier in this model.
+enable_reputation_modifier = false # Disabled by default
+
+# The minimum bound for the reputation modifier.
+# Example: 0.5 means an executor with very low (or new) reputation might get 50% of the base calculated score.
+modifier_min_bound = 0.5
+
+# The maximum bound for the reputation modifier.
+# Example: 2.0 means an executor with very high reputation might get 200% of the base calculated score.
+modifier_max_bound = 2.0
+
+# Note on normalization: To use the reputation_modifier, the system needs to fetch the executor's current
+# reputation score and normalize it (e.g., to a 0.0-1.0 range). This normalization logic and the definition
+# of the "maximum possible reputation score" for scaling are handled within the HttpReputationUpdater.
+# If the reputation service provides scores in a different range, that logic will need adjustment.
+
+
+# --- Deprecated Parameters (kept for struct compatibility, not used in new model) ---
+# These were part of the older, simpler scoring model.
+
+# Old: Weight factor for mana cost scoring (e.g., numerator in 1/cost)
+mana_cost_weight = 100.0
+
+# Old: Flat penalty score for failed submissions
+failure_penalty = -25.0 

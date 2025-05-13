@@ -18,6 +18,10 @@ pub struct RuntimeConfig {
     /// Optional URL for the reputation service.
     pub reputation_service_url: Option<String>,
 
+    /// Optional path to the reputation scoring configuration file (TOML).
+    /// If not provided, default scoring parameters will be used.
+    pub reputation_scoring_config_path: Option<PathBuf>,
+
     /// Optional URL for the mesh job service to poll for new jobs.
     pub mesh_job_service_url: Option<String>,
 
