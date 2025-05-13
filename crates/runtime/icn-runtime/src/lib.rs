@@ -600,75 +600,61 @@ impl Runtime {
 
     /// Anchor a receipt to the DAG and return the CID
     /// Now generic over any type that implements VerifiableReceipt.
-    pub async fn anchor_receipt<R: VerifiableReceipt + ?Sized + Sync>(
+    pub async fn anchor_receipt(
         &self, 
-        receipt: &R
+        receipt: &RuntimeExecutionReceipt // Kept specific to RuntimeExecutionReceipt for now
     ) -> Result<String> 
-    where
-        // Required for serde_json::to_string below.
-        // This bound might be too restrictive or need adjustment based on how 
-        // VerifiableReceipt implementors are structured. 
-        // If only RuntimeExecutionReceipt is passed here, this is fine.
-        // If MeshExecutionReceipt could be passed directly, it also needs Serialize.
-        // Let's assume for now the flow is: verify `R`, then if it's a `RuntimeExecutionReceipt` (or converted to it), serialize *that*.
-        // This is tricky. The original code serialized a RuntimeExecutionReceipt.
-        // For now, let's assume `receipt` *is* a RuntimeExecutionReceipt by the time this is called in practice,
-        // or we convert to it before this stage if MeshExecutionReceipt is the input. 
-        // The verify_signature() happens on `receipt` (the R type).
-        // The serialization happens on a RuntimeExecutionReceipt.
-        // This part of the refactor needs careful handling of types for serialization.
     {
-        // 1. Verify the signature of the incoming receipt (whatever type R is)
-        receipt.verify_signature()
-            .context("Incoming execution receipt failed signature verification")?;
+        use crate::metrics; // Import the metrics module
+        use std::time::Instant; // For timing
 
-        // 2. Convert to RuntimeExecutionReceipt for storage and further processing if necessary.
-        //    This is a placeholder for how to handle the types. 
-        //    If `R` is always `RuntimeExecutionReceipt` in practice for this method, no conversion is needed.
-        //    If `R` could be `MeshExecutionReceipt`, this conversion/handling needs to be robust.
-        //    For now, let's assume the `receipt` argument is what we want to serialize, 
-        //    *if* it's a `RuntimeExecutionReceipt`. This is a design choice point.
-        //    Let's revert to the original logic slightly: operate on RuntimeExecutionReceipt for serialization
-        //    but ensure it has been verified. This implies `anchor_mesh_receipt` does its own verification
-        //    and then passes a verified `RuntimeExecutionReceipt` here.
-        //
-        //    Revised plan: This method should take a verified RuntimeExecutionReceipt.
-        //    The generic change might be better suited for a new, higher-level function.
-        //    Let's revert the signature change here and keep it as `&RuntimeExecutionReceipt`,
-        //    and ensure `anchor_mesh_receipt` calls `verify_signature` on the RuntimeExecutionReceipt *before* conversion.
-        //
-        //    Decision: Keep anchor_receipt specific to RuntimeExecutionReceipt for now to simplify this step.
-        //    Verification of MeshExecutionReceipt will happen *before* it's converted and passed to this anchor_receipt.
-        //    So, the primary change here is calling verify_signature() on the RuntimeExecutionReceipt.
-        //    The previous `receipt_with_cid.verify()` call can be changed to `receipt.verify_signature()` (on original `receipt`).
+        let start_time = Instant::now();
 
-        let receipt_json = serde_json::to_string(receipt) // Assuming receipt is &RuntimeExecutionReceipt
+        // 1. Verify the signature of the incoming receipt
+        match receipt.verify_signature() {
+            Ok(_) => {
+                metrics::record_receipt_verification_success();
+            }
+            Err(e) => {
+                metrics::record_receipt_verification_failure();
+                // Observe duration even on early exit if desired, or only on success.
+                // For now, let's observe only on paths that complete more of the function.
+                return Err(e).context("Incoming execution receipt failed signature verification");
+            }
+        };
+
+        // 2. Record Mana Cost if present
+        if let Some(cost) = receipt.metrics.mana_cost {
+            metrics::record_receipt_mana_cost(cost);
+        }
+
+        // Original logic for serialization and storage
+        let receipt_json = serde_json::to_string(receipt)
             .map_err(|e| RuntimeError::ReceiptError(e.to_string()))?;
 
         let receipt_cid = self.storage.anchor_to_dag(&receipt_json).await?;
         
-        // Create a copy of the receipt with the CID included
-        // This copy should also be a RuntimeExecutionReceipt
-        let mut receipt_with_cid_data = receipt.clone(); // Assuming receipt is RuntimeExecutionReceipt and Clone
+        let mut receipt_with_cid_data = receipt.clone(); 
         receipt_with_cid_data.receipt_cid = Some(receipt_cid.clone());
         
-        // Verify the signature of the original receipt *before* creating the CID-d version
-        // The signature covers the content *without* the receipt_cid itself.
-        receipt.verify_signature()
-            .context("Runtime execution receipt failed signature verification")?;
-        
-        // If a reputation updater is configured, submit the reputation record using the CID-adorned receipt
+        // If a reputation updater is configured, submit the reputation record
         if let Some(updater) = &self.reputation_updater {
+            // Attempt is recorded by the updater or calling code if it makes sense there
+            // metrics::record_reputation_update_attempt(); // Already handled in HttpReputationUpdater
             match updater.submit_receipt_based_reputation(&receipt_with_cid_data).await {
                 Ok(_) => {
+                    // metrics::record_reputation_update_success(); // Already handled in HttpReputationUpdater
                     tracing::info!("Successfully submitted reputation record for receipt {}", receipt.id);
                 }
                 Err(e) => {
+                    // metrics::record_reputation_update_failure(); // Already handled in HttpReputationUpdater
                     tracing::error!("Failed to submit reputation record for receipt {}: {}", receipt.id, e);
-                    // We don't fail the method if reputation update fails - just log the error
                 }
             }
         }
+
+        let duration_secs = start_time.elapsed().as_secs_f64();
+        metrics::observe_anchor_receipt_duration(duration_secs);
 
         Ok(receipt_cid)
     }
@@ -1230,10 +1216,14 @@ mod tests {
         let ccl_cid = "test-ccl-cid";
         let exec_result = ExecutionResult {
             // Initialize CoreVmExecutionMetrics using fully qualified path
+            // Ensure alignment with the actual struct definition in icn-core-vm
             metrics: icn_core_vm::ExecutionMetrics { 
                 host_calls: 5, 
                 io_bytes: 1024,
-                mana_cost: None,
+                anchored_cids_count: 1, // Explicitly include
+                job_submissions_count: 0, // Explicitly include
+                mana_cost: None, // Include mana_cost
+                // fuel_used is definitely removed from ExecutionMetrics
             },
             anchored_cids: vec!["anchor1".to_string()],
             resource_usage: vec![("cpu".to_string(), 50)],
