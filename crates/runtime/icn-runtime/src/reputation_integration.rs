@@ -13,7 +13,6 @@ use multihash::{Hasher, Sha2_256};
 use serde::Deserialize;
 use std::path::Path;
 use std::fs;
-use httpmock::MockServer;
 use icn_identity::KeyPair;
 use serde_json::json;
 
@@ -305,8 +304,11 @@ impl ReputationUpdater for NoopReputationUpdater {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::MockServer;
     use std::sync::{Arc, Mutex};
     use icn_types::runtime_receipt::RuntimeExecutionMetrics; // Keep if used
+    use tokio::time::sleep;
+    use crate::metrics; // Ensure metrics are available in test scope
     
     // Helper to calculate expected score delta for tests, mirroring the main logic
     fn calculate_expected_score_delta(config: &ReputationScoringConfig, mana_cost_val: Option<u64>, is_successful: bool) -> f64 {
@@ -849,7 +851,6 @@ mod tests {
         // we can't easily get it before the error. Instead, we check if *any* client error for this DID incremented,
         // or refine this if we can determine the exact error string beforehand.
         // For now, let's just check if *a* client error for this DID was recorded.
-        // A simpler approach: just check the count *after* and assume if it's 1, it was this error.
         // This is okay if tests are isolated or we clear metrics, which we are not doing here.
         // Let's try to get the specific error string from the result.
 
