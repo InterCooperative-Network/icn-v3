@@ -8,6 +8,7 @@ use icn_identity::Did;
 use icn_types::mana::ManaState; // Assuming ManaState is in icn_types::mana
 use tokio::sync::RwLock;
 use tracing;
+use serde::{Serialize, Deserialize};
 
 /// Trait for reporting mana balance changes to a metrics system.
 pub trait ManaMetricsHook: std::fmt::Debug {
@@ -209,7 +210,7 @@ pub trait ManaLedger: Send + Sync {
 }
 
 // --- RegenerationPolicy Enum ---
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RegenerationPolicy {
     FixedRatePerTick(u64), // Fixed mana regenerated each tick
     // Future policies could include: PercentageOfMax, ReputationScaled, etc.

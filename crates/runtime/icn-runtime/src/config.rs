@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::path::PathBuf;
+use icn_economics::mana::RegenerationPolicy;
 
 /// Configuration for the ICN Runtime
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -30,4 +31,9 @@ pub struct RuntimeConfig {
 
     /// Optional log level string (e.g., "info", "debug", "icn_runtime=trace").
     pub log_level: Option<String>,
+
+    /// Optional mana regeneration policy.
+    /// If not provided, a default policy (e.g., FixedRatePerTick(10)) will be used.
+    #[serde(default)]
+    pub mana_regeneration_policy: Option<RegenerationPolicy>,
 } 

@@ -10,6 +10,7 @@ use icn_types::dag::{DagNode, DagEventType};
 use icn_types::dag_store::DagStore;
 use icn_identity::{TrustBundle, TrustValidationError, Did, DidError, KeyPair as IcnKeyPair};
 use icn_economics::{ResourceType, Economics};
+use icn_economics::mana::{ManaLedger, InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -313,7 +314,7 @@ impl RuntimeStorage for MemStorage {
 
 /// The ICN Runtime for executing governance proposals
 #[derive(Clone)]
-pub struct Runtime {
+pub struct Runtime<L: ManaLedger + Send + Sync + Default + 'static> {
     /// Runtime configuration
     config: RuntimeConfig,
     
@@ -323,8 +324,8 @@ pub struct Runtime {
     /// Storage backend
     storage: Arc<dyn RuntimeStorage>,
     
-    /// Runtime context (now Arc'd)
-    context: Arc<RuntimeContext>,
+    /// Runtime context (now Arc'd and generic)
+    context: Arc<RuntimeContext<L>>,
 
     /// Wasmtime engine
     engine: Engine,
@@ -342,39 +343,41 @@ pub struct Runtime {
     reputation_updater: Option<Arc<dyn ReputationUpdater>>,
 }
 
-impl Runtime {
+impl<L: ManaLedger + Send + Sync + Default + 'static> Runtime<L> {
     /// Create a new runtime with specified storage
     pub fn new(storage: Arc<dyn RuntimeStorage>) -> Result<Self, anyhow::Error> {
-        // Generate a default keypair for tests/direct usage
         let default_keypair = IcnKeyPair::generate();
         let default_did = default_keypair.did.clone();
 
         let mut config = RuntimeConfig::default();
-        config.node_did = default_did.to_string(); // Store the valid did:key string
+        config.node_did = default_did.to_string();
 
         let engine = Engine::default();
         let vm = CoVm::new(ResourceLimits::default());
         let linker = Linker::new(&engine);
         
-        // Build context with the default identity
-        let context = Arc::new(
-            RuntimeContextBuilder::new()
-                .with_identity(default_keypair) // Store the keypair in context
-                .with_executor_id(default_did.to_string()) // Set executor ID in context
-                // Add other necessary defaults if builder requires them
+        let ledger = Arc::new(L::default()); // Create default ledger
+        let policy = RegenerationPolicy::FixedRatePerTick(10); // Default policy
+        let regenerator = Arc::new(ManaRegenerator::new(ledger.clone(), policy));
+
+        let context: Arc<RuntimeContext<L>> = Arc::new(
+            RuntimeContextBuilder::<L>::new()
+                .with_identity(default_keypair)
+                .with_executor_id(default_did.to_string())
+                .with_mana_regenerator(regenerator) // Set the regenerator
                 .build()
         );
 
         Ok(Self {
-            config, // Config has the generated did:key string
+            config,
             vm,
             storage,
-            context, // Context has the keypair/identity
+            context,
             engine,
             linker,
             module_cache: None,
             host_env: None,
-            reputation_updater: None, // Note: This won't be set up automatically here
+            reputation_updater: None,
         })
     }
     
@@ -385,7 +388,7 @@ impl Runtime {
     }
     
     /// Get a reference to the runtime context
-    pub fn context(&self) -> &RuntimeContext {
+    pub fn context(&self) -> &RuntimeContext<L> {
         &self.context
     }
     
@@ -832,13 +835,33 @@ impl Runtime {
         })
     }
 
-    /// Create a new runtime with the given context (context should now be Arc'd)
-    pub fn with_context(storage: Arc<dyn RuntimeStorage>, context: Arc<RuntimeContext>) -> Self {
-        let mut runtime = Self::new(storage)
-            .expect("Runtime::new failed within with_context");
-        runtime.context = context;
+    /// Create a new runtime with the given context (context should now be Arc'd and generic)
+    pub fn with_context(storage: Arc<dyn RuntimeStorage>, context: Arc<RuntimeContext<L>>) -> Self {
+        let default_keypair = context.identity().cloned().unwrap_or_else(IcnKeyPair::generate);
+        let node_did_str = context.executor_id.clone().unwrap_or_else(|| default_keypair.did.to_string());
+
+        let mut config = RuntimeConfig::default();
+        config.node_did = node_did_str;
         
-        // Configure reputation updater using the Arc'd context
+        let engine = Engine::default();
+        let vm = CoVm::new(ResourceLimits::default());
+        let mut linker = Linker::new(&engine);
+        if register_host_functions(&mut linker).is_err() {
+            warn!("Failed to register host functions in with_context, linker might be incomplete.");
+        }
+
+        let mut runtime = Self {
+            config,
+            vm,
+            storage,
+            context,
+            engine,
+            linker,
+            module_cache: None,
+            host_env: None,
+            reputation_updater: None,
+        };
+        
         if let (Some(url), Some(identity)) = (runtime.context.reputation_service_url(), runtime.context.identity()) {
             let updater = Arc::new(HttpReputationUpdater::new(
                 url.clone(),
@@ -852,29 +875,44 @@ impl Runtime {
     }
     
     /// Construct a Runtime instance from configuration.
-    pub async fn from_config(mut config: RuntimeConfig) -> Result<Self> {
+    /// For now, this will default to using InMemoryManaLedger if L is not specified.
+    /// A more advanced setup might make the ledger type configurable.
+    pub async fn from_config(mut config: RuntimeConfig) -> Result<Self> 
+        where L: ManaLedger + Send + Sync + Default + 'static 
+    { 
         info!("Initializing runtime from config: {:?}", config);
 
         let keypair = load_or_generate_keypair(config.key_path.as_deref())
             .context("Failed to load or generate node keypair")?;
         
-        // Ensure config has the correct DID derived from the loaded/generated keypair
         config.node_did = keypair.did.to_string(); 
         let node_did_obj = keypair.did.clone(); 
         info!(node_did = %config.node_did, "Runtime node DID initialized/confirmed.");
 
-        let storage: Arc<dyn RuntimeStorage> = Arc::new(
+        let storage_backend: Arc<dyn RuntimeStorage> = Arc::new(
             SledStorage::open(&config.storage_path)
                 .context("Failed to initialize Sled storage")?,
         );
 
-        // SharedDagStore::new() now takes no arguments
-        let dag_store = Arc::new(icn_types::dag_store::SharedDagStore::new()); // Call with zero arguments
+        let dag_store = Arc::new(icn_types::dag_store::SharedDagStore::new());
 
-        let mut context_builder = RuntimeContextBuilder::new()
+        let ledger = Arc::new(L::default()); // Create default ledger for L
+        
+        // Use configured mana regeneration policy or default
+        let chosen_policy = config.mana_regeneration_policy.clone()
+            .unwrap_or_else(|| {
+                info!("No mana regeneration policy in config, using default: FixedRatePerTick(10)");
+                RegenerationPolicy::FixedRatePerTick(10)
+            });
+        info!(?chosen_policy, "Using mana regeneration policy");
+        
+        let regenerator = Arc::new(ManaRegenerator::new(ledger.clone(), chosen_policy));
+
+        let mut context_builder = RuntimeContextBuilder::<L>::new()
             .with_identity(keypair.clone())
             .with_executor_id(config.node_did.clone())
-            .with_dag_store(dag_store); // Pass the created dag_store
+            .with_dag_store(dag_store.clone())
+            .with_mana_regenerator(regenerator); // Set the regenerator
 
         if let Some(reputation_url) = config.reputation_service_url.as_ref() {
             context_builder = context_builder.with_reputation_service(reputation_url.clone());
@@ -884,21 +922,14 @@ impl Runtime {
             context_builder = context_builder.with_mesh_job_service_url(mesh_job_url.clone());
         }
         
-        // TODO: Add policy loading and setting via builder
-        // let policy_path = config.policy_path.clone().unwrap_or_else(...);
-        // let policy = ...;
-        // context_builder = context_builder.with_policy(policy);
-
         let context = Arc::new(context_builder.build());
 
-        // Setup engine, linker, reputation_updater as before
-        let mut engine_config = Config::new();
-        engine_config.async_support(true); // Ensure async support is enabled
-        let engine = Engine::new(&engine_config)?;
+        let mut engine_config_wasm = Config::new();
+        engine_config_wasm.async_support(true);
+        let engine = Engine::new(&engine_config_wasm)?;
         let mut linker = Linker::new(&engine);
         register_host_functions(&mut linker)?;
 
-        // Load Reputation Scoring Config or use default
         let rep_scoring_config: ReputationScoringConfig = 
             if let Some(path) = config.reputation_scoring_config_path.as_ref() {
                 match ReputationScoringConfig::from_file(path) {
@@ -916,38 +947,34 @@ impl Runtime {
                 ReputationScoringConfig::default()
             };
 
-        // Create Reputation Updater using the loaded or default config
         let reputation_updater: Option<Arc<dyn ReputationUpdater>> = 
             if let Some(url) = context.reputation_service_url() {
                 info!("Creating HttpReputationUpdater for URL: {}", url);
-                // Use new_with_config to pass the loaded or default configuration
                 Some(Arc::new(HttpReputationUpdater::new_with_config(
                     url.clone(), 
                     node_did_obj, 
-                    rep_scoring_config // Pass the resolved config
+                    rep_scoring_config
                 )))
             } else {
                 info!("No reputation service URL in context, using NoopReputationUpdater.");
                 Some(Arc::new(NoopReputationUpdater))
             };
 
-        let runtime = Self {
-            config, // Store the potentially updated config
+        Ok(Self {
+            config,
             vm: CoVm::new(ResourceLimits::default()),
-            storage,
+            storage: storage_backend,
             context,
             engine,
             linker,
             module_cache: None,
             host_env: None,
             reputation_updater,
-        };
-
-        Ok(runtime)
+        })
     }
     
     /// Main loop for the runtime node service
-    pub async fn run_forever(&self) -> Result<()> {
+    pub async fn run_forever(self) -> Result<()> {
         info!("ICN Runtime node started with DID: {}", self.config.node_did);
         
         loop {
@@ -1050,6 +1077,16 @@ impl Runtime {
             }
         }
     }
+
+    pub async fn tick_mana(&self) -> Result<()> {
+        if let Some(regen) = &self.context.mana_regenerator {
+            regen.tick().await?;
+            tracing::debug!("Mana tick processed by runtime.");
+        } else {
+            tracing::trace!("No mana regenerator configured, skipping mana tick.");
+        }
+        Ok(())
+    }
 }
 
 /// Module providing executable trait for CCL DSL files
@@ -1059,7 +1096,7 @@ pub mod dsl {
     /// Trait for CCL DSL executables
     pub trait DslExecutable {
         /// Execute the DSL with the given runtime
-        fn execute(&self, runtime: &Runtime) -> Result<MeshExecutionReceipt>;
+        fn execute(&self, runtime: &Runtime<InMemoryManaLedger>) -> Result<MeshExecutionReceipt>;
     }
 }
 
@@ -1141,7 +1178,7 @@ fn sign_runtime_receipt_in_place(
 pub async fn execute_mesh_job(
     mesh_job: MeshJob,
     local_keypair: &IcnKeyPair,
-    runtime_context: Arc<RuntimeContext>,
+    runtime_context: Arc<RuntimeContext<InMemoryManaLedger>>,
 ) -> Result<MeshExecutionReceipt, anyhow::Error> {
     info!(job_id = %mesh_job.job_id, cid = %mesh_job.params.wasm_cid, "Attempting to execute mesh job");
 

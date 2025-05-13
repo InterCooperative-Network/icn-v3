@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use icn_identity::IdentityIndex;
 use icn_identity::KeyPair;
 use crate::reputation_integration::{ReputationUpdater, HttpReputationUpdater};
+use icn_economics::mana::{ManaRegenerator, ManaLedger, InMemoryManaLedger};
 
 /// High-level execution state of the currently running job / stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +27,7 @@ pub enum ExecutionStatus {
 /// governance events and receipts, and the TrustValidator for verifying
 /// trust bundles.
 #[derive(Clone)]
-pub struct RuntimeContext {
+pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLedger> {
     /// Shared DAG store for transaction and anchor operations
     pub dag_store: Arc<SharedDagStore>,
     
@@ -54,6 +55,9 @@ pub struct RuntimeContext {
     /// Regenerating execution resource pools ("mana") by DID/org
     pub mana_manager: Arc<Mutex<ManaManager>>,
 
+    /// Mana regenerator
+    pub mana_regenerator: Option<Arc<ManaRegenerator<L>>>,
+
     /// Simple FIFO queue of raw interactive input messages pushed by the host.
     pub interactive_input_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
 
@@ -73,7 +77,7 @@ pub struct RuntimeContext {
     mesh_job_service_url: Option<String>,
 }
 
-impl RuntimeContext {
+impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
     /// Create a new context with default values
     pub fn new() -> Self {
         Self {
@@ -86,6 +90,7 @@ impl RuntimeContext {
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
+            mana_regenerator: None,
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
             identity_index: None,
@@ -107,6 +112,7 @@ impl RuntimeContext {
             resource_ledger: Arc::new(RwLock::new(HashMap::new())),
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
+            mana_regenerator: None,
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
             identity_index: None,
@@ -158,7 +164,7 @@ impl RuntimeContext {
     }
 
     /// Return a builder for this context
-    pub fn builder() -> RuntimeContextBuilder {
+    pub fn builder() -> RuntimeContextBuilder<L> {
         RuntimeContextBuilder::new()
     }
 
@@ -184,14 +190,14 @@ impl RuntimeContext {
     }
 }
 
-impl Default for RuntimeContext {
+impl<L: ManaLedger + Send + Sync + 'static> Default for RuntimeContext<L> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// Builder pattern for RuntimeContext
-pub struct RuntimeContextBuilder {
+pub struct RuntimeContextBuilder<L: ManaLedger + Send + Sync + 'static = InMemoryManaLedger> {
     dag_store: Option<Arc<SharedDagStore>>,
     receipt_store: Option<Arc<SharedDagStore>>,
     federation_id: Option<String>,
@@ -202,9 +208,10 @@ pub struct RuntimeContextBuilder {
     identity: Option<KeyPair>,
     reputation_service_url: Option<String>,
     mesh_job_service_url: Option<String>,
+    mana_regenerator: Option<Arc<ManaRegenerator<L>>>,
 }
 
-impl RuntimeContextBuilder {
+impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
@@ -218,6 +225,7 @@ impl RuntimeContextBuilder {
             identity: None,
             reputation_service_url: None,
             mesh_job_service_url: None,
+            mana_regenerator: None,
         }
     }
 
@@ -281,9 +289,15 @@ impl RuntimeContextBuilder {
         self
     }
 
+    /// Set the mana regenerator
+    pub fn with_mana_regenerator(mut self, regen: Arc<ManaRegenerator<L>>) -> Self {
+        self.mana_regenerator = Some(regen);
+        self
+    }
+
     /// Build the RuntimeContext
-    pub fn build(self) -> RuntimeContext {
-        let default_context = RuntimeContext::new();
+    pub fn build(self) -> RuntimeContext<L> {
+        let default_context = RuntimeContext::<L>::new();
         RuntimeContext {
             dag_store: self.dag_store.unwrap_or(default_context.dag_store),
             receipt_store: self.receipt_store.unwrap_or(default_context.receipt_store),
@@ -294,6 +308,7 @@ impl RuntimeContextBuilder {
             resource_ledger: default_context.resource_ledger,
             pending_mesh_jobs: default_context.pending_mesh_jobs,
             mana_manager: default_context.mana_manager,
+            mana_regenerator: self.mana_regenerator,
             interactive_input_queue: default_context.interactive_input_queue,
             execution_status: default_context.execution_status,
             identity_index: self.identity_index,
