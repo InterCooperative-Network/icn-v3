@@ -36,6 +36,10 @@ The InterCooperative Network is built as a layered architecture designed to repl
 
 See the [RFC index](./rfcs/README.md) for detailed design decisions and project structure.
 
+Key system documentation:
+- [ICN Runtime Observability Guide](./docs/observability.md) - Monitoring, dashboards, and alerts.
+- [ICN Reputation System Integration](./docs/reputation.md) - How execution outcomes translate to reputation.
+
 ## Services
 
 - **AgoraNet API** — Threaded deliberation & governance endpoints ([docs](docs/agoranet_api.md))
