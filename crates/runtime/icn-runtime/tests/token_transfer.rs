@@ -65,7 +65,7 @@ async fn test_transfer_tokens_wasm() -> Result<()> {
     let receiver_did = receiver_keypair.did.clone();
 
     let storage = Arc::new(MockRuntimeStorage::default());
-    let runtime = Runtime::new(storage.clone());
+    let mut runtime = Runtime::new(storage.clone());
     
     let context = RuntimeContextBuilder::new()
         .with_executor_id(sender_did.to_string())
@@ -97,7 +97,7 @@ async fn test_transfer_tokens_wasm() -> Result<()> {
 
     let _result = runtime.execute_wasm(&wasm_bytes, "_start".to_string(), Vec::new()).await?;
 
-    let final_mana_mgr = context.mana_manager.lock().unwrap();
+    let mut final_mana_mgr = context.mana_manager.lock().unwrap();
     // Use ScopeKey instead of LedgerKey for balance check
     let sender_scope_key = ScopeKey::Individual(sender_did.to_string());
     let receiver_scope_key = ScopeKey::Individual(receiver_did.to_string());

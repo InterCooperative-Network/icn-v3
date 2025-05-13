@@ -80,7 +80,7 @@ async fn test_receipt_dag_anchoring() -> Result<()> {
         .with_dag_store(receipt_store.clone())
         .build();
 
-    let runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
+    let mut runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
 
     let original_receipt = RuntimeExecutionReceipt {
         id: "test-receipt-id".to_string(),
@@ -105,11 +105,12 @@ async fn test_receipt_dag_anchoring() -> Result<()> {
     let anchored_cid = Cid::from_str(&anchored_cid_str)?;
 
     let dag_nodes = receipt_store.list().await?;
-    let found_in_dag = dag_nodes.iter().any(|node_cid_str| {
-        if let Ok(cid_from_store) = Cid::from_str(node_cid_str) {
+    let found_in_dag = dag_nodes.iter().any(|dag_node| {
+        let cid_str_from_node = dag_node.cid().to_string();
+        if let Ok(cid_from_store) = Cid::from_str(&cid_str_from_node) {
             cid_from_store == anchored_cid
         } else {
-            tracing::warn!("Failed to parse CID {} from DAG store", node_cid_str);
+            tracing::warn!("Failed to parse CID {:?} from DAG node", dag_node);
             false
         }
     });
@@ -174,7 +175,7 @@ async fn test_wasm_anchors_receipt() -> Result<()> {
         .with_dag_store(receipt_store.clone())
         .build();
 
-    let runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
+    let mut runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
 
     let mesh_receipt = MeshExecutionReceipt {
         job_id: "job-123".to_string(),
