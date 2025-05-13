@@ -34,11 +34,14 @@ pub enum ReputationUpdateEvent {
         bid_accuracy: f32, // 0.0–1.0
         on_time: bool,
         anchor_cid: Option<Cid>, // Optional CID of the execution receipt or result anchor
+        mana_cost: Option<u64>,      // Added mana cost
+        verification_passed: bool, // Added verification status
     },
     JobFailed {
         job_id: Cid,
         reason: String,
         anchor_cid: Option<Cid>, // Optional CID of any failure report or evidence
+        verification_failed: bool, // Added verification failure status
     },
     DishonestyPenalty {
         // Could be related to a specific job or general misbehavior
@@ -77,14 +80,14 @@ pub enum ReputationUpdateEvent {
     // },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReputationRecord {
-    pub timestamp: DateTime<Utc>,
-    pub issuer: Did,                          // Who emitted the event (e.g., executor, federation, job submitter)
-    pub subject: Did,                         // Node whose profile is affected
-    pub event: ReputationUpdateEvent,         // The actual update (success, penalty, etc.)
-    pub anchor: Option<Cid>,                  // Link to supporting receipt or proof
-    pub signature: Option<Signature>,         // If signed, validates issuer identity
+    pub subject: String, // DID
+    pub anchor: String,  // Receipt CID
+    pub score_delta: f64,
+    pub success: bool,
+    pub mana_cost: Option<u64>,
+    pub timestamp: u64, // Unix epoch timestamp (seconds)
 }
 
 impl ReputationProfile {
