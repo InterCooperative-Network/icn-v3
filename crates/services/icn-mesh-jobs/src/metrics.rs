@@ -90,6 +90,16 @@ static REPUTATION_CACHE_SIZE: Lazy<IntGauge> = Lazy::new(|| {
     reputation_cache_size
 });
 
+// New metric for bids disqualified due to insufficient mana
+static BIDS_DISQUALIFIED_INSUFFICIENT_MANA: Lazy<IntCounter> = Lazy::new(|| {
+    let counter = IntCounter::new(
+        "mesh_bids_disqualified_insufficient_mana_total",
+        "Total number of bids disqualified due to insufficient mana"
+    ).expect("Failed to create mesh_bids_disqualified_insufficient_mana_total metric");
+    register_metric(&counter).expect("Failed to register mesh_bids_disqualified_insufficient_mana_total metric");
+    counter
+});
+
 /// Helper function to register a metric with the registry
 fn register_metric<M: prometheus::core::Collector>(metric: &M) {
     let mut registry = REGISTRY.lock().unwrap();
@@ -137,4 +147,13 @@ pub fn update_reputation_cache_size(size: usize) {
 /// Get the registry of all metrics
 pub fn get_registry() -> Registry {
     REGISTRY.lock().unwrap().clone()
+}
+
+// New function to increment the mana disqualification counter
+pub fn increment_bids_disqualified_insufficient_mana() {
+    BIDS_DISQUALIFIED_INSUFFICIENT_MANA.inc();
+}
+
+pub fn record_job_lifecycle_event(job_id: &str, event_type: &str) {
+    JOB_LIFECYCLE_EVENTS.with_label_values(&[job_id, event_type]).inc();
 } 

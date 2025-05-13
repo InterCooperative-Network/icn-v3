@@ -16,6 +16,7 @@ pub struct JobRequirements {
     pub memory_mb: u32,
     pub storage_gb: u32,
     pub max_price: u64,
+    pub required_mana: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

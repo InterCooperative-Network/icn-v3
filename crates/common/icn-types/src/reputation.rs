@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 // Assuming TokenAmount is accessible. If it's defined in crate::jobs, this import is appropriate.
 // If TokenAmount becomes a more globally used type, it might move to a more central location.
 use crate::jobs::TokenAmount;
+use crate::mana::ScopedMana; // Import ScopedMana
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReputationProfile {
@@ -23,6 +24,7 @@ pub struct ReputationProfile {
     pub current_stake: Option<TokenAmount>,
     pub computed_score: f64, // f64 also doesn't have Eq/Hash, but PartialEq is fine.
     pub latest_anchor_cid: Option<Cid>,
+    pub mana_state: Option<ScopedMana>, // New field for mana
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

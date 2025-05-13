@@ -2,13 +2,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cid::Cid;
 use icn_identity::Did;
-use crate::types::{Bid, JobRequest};
+use crate::types::{Bid, JobRequest, JobRequirements};
 use std::sync::Arc;
 use crate::bid_logic;
 use crate::models::BidEvaluatorConfig;
 use crate::reputation_client::{ReputationClient, ReputationProfile};
 use crate::metrics;
 use tracing;
+use icn_types::reputation::ReputationProfile as ICNReputationProfile;
 
 /// Defines the selection strategy to use for assigning jobs to executors
 #[derive(Debug, Clone, PartialEq)]
@@ -93,26 +94,22 @@ impl ExecutorSelector for ReputationExecutorSelector {
             return Ok(None);
         }
         
-        // Calculate max price for normalization
         let max_price = bids.iter().map(|b| b.price).max().unwrap_or(1);
-        
         let mut best: Option<(Bid, f64, String)> = None;
-        
+
         for bid in bids {
-            // Calculate normalized price (0-1 where 0 is best)
-            let normalized_price = if max_price > 0 { bid.price as f64 / max_price as f64 } else { 0.0 };
-            
-            // Calculate resource match (0-1 where 1 is best)
-            let resource_match = self.calculate_resource_match(&bid.estimate, &request.requirements);
-            
             // Fetch reputation profile
-            let profile = match self.reputation_client.fetch_profile(&bid.bidder.0).await {
-                Ok(profile) => profile,
-                Err(e) => {
-                    tracing::warn!("Failed to fetch reputation for {}: {}", bid.bidder.0, e);
-                    // Use a default profile with neutral reputation
-                    ReputationProfile {
-                        node_id: bid.bidder.0.clone(),
+            let profile = match self.reputation_client.fetch_profile(&bid.bidder_did).await {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    tracing::debug!("No reputation profile found for bidder {}. Constructing default profile.", bid.bidder_did);
+                    // Construct a default profile if none is found.
+                    // Ensure mana_state is None so it fails checks if mana is required.
+                    ICNReputationProfile {
+                        node_id: bid.bidder_did.clone(),
+                        mana_state: None, // Explicitly None for default profile
+                        // Initialize other fields to sensible defaults
+                        last_updated: chrono::Utc::now(), // Placeholder, might need specific default
                         total_jobs: 0,
                         successful_jobs: 0,
                         failed_jobs: 0,
@@ -122,10 +119,41 @@ impl ExecutorSelector for ReputationExecutorSelector {
                         average_bid_accuracy: None,
                         dishonesty_events: 0,
                         endorsements: vec![],
-                        computed_score: 50.0, // Neutral score
+                        current_stake: None,
+                        computed_score: 50.0, // Neutral score, adjust as per existing defaults
+                        latest_anchor_cid: None,
                     }
                 }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch reputation for {}: {}. Skipping bid.", bid.bidder_did, e);
+                    continue; // Skip bid if profile fetch fails
+                }
             };
+
+            // Mana Check
+            if let Some(required_mana_amount) = request.requirements.required_mana {
+                let has_sufficient_mana = profile.mana_state.as_ref().map_or(false, |mana_details| {
+                    mana_details.state.current_mana >= required_mana_amount
+                });
+
+                if !has_sufficient_mana {
+                    tracing::info!(
+                        "Bidder {} for job {} disqualified due to insufficient mana. Required: {}, Available: {:?}.",
+                        bid.bidder_did,
+                        bid.job_id,
+                        required_mana_amount,
+                        profile.mana_state.as_ref().map(|ms| ms.state.current_mana)
+                    );
+                    metrics::increment_bids_disqualified_insufficient_mana();
+                    continue; // Disqualify bid
+                }
+            }
+
+            // Calculate normalized price (0-1 where 0 is best)
+            let normalized_price = if max_price > 0 { bid.price as f64 / max_price as f64 } else { 0.0 };
+            
+            // Calculate resource match (0-1 where 1 is best)
+            let resource_match = self.calculate_resource_match(&bid.resources, &request.requirements);
             
             // Calculate score using the client's logic
             let score = self.reputation_client.calculate_bid_score(
@@ -135,19 +163,24 @@ impl ExecutorSelector for ReputationExecutorSelector {
                 resource_match
             );
             
-            // Determine if this is the best bid so far
+            if score < 0.0 {
+                tracing::debug!(
+                    "Bidder {} for job {} has a negative score ({}) and is disqualified.",
+                    bid.bidder_did, bid.job_id, score
+                );
+                continue;
+            }
+
             if best.is_none() || score > best.as_ref().unwrap().1 {
-                // Create reason string based on dominant factor
                 let reason = if profile.computed_score > 75.0 {
-                    format!("high_reputation_{}", bid.bidder.0)
+                    format!("high_reputation_{}", bid.bidder_did)
                 } else if normalized_price < 0.3 {
-                    format!("low_price_{}", bid.bidder.0)
+                    format!("low_price_{}", bid.bidder_did)
                 } else if resource_match > 0.8 {
-                    format!("good_resource_match_{}", bid.bidder.0)
+                    format!("good_resource_match_{}", bid.bidder_did)
                 } else {
-                    format!("balanced_score_{}", bid.bidder.0)
+                    format!("balanced_score_{}", bid.bidder_did)
                 };
-                
                 best = Some((bid.clone(), score, reason));
             }
         }
@@ -157,31 +190,46 @@ impl ExecutorSelector for ReputationExecutorSelector {
 }
 
 impl ReputationExecutorSelector {
-    // Helper method to calculate resource match
-    fn calculate_resource_match(&self, estimate: &icn_types::jobs::ResourceEstimate, requirements: &icn_types::jobs::ResourceRequirements) -> f64 {
-        // CPU match - estimate should be >= requirement
-        let cpu_match = if estimate.cpu >= requirements.cpu {
+    fn calculate_resource_match(
+        &self, 
+        bid_resources: &JobRequirements, // Changed from &icn_types::jobs::ResourceEstimate to local JobRequirements
+        job_requirements: &JobRequirements  // Changed from &icn_types::jobs::ResourceRequirements to local JobRequirements
+    ) -> f64 {
+        // Implementation using fields from local JobRequirements
+        // (cpu_cores, memory_mb, storage_gb)
+        // Ensure these fields exist and are comparable.
+        // The fields in JobRequirements are: cpu_cores, memory_mb, storage_gb.
+        // The original icn_types::jobs::ResourceEstimate had: cpu, memory_mb, storage_mb.
+        // Assuming a direct mapping for now. If fields differ significantly, logic needs adjustment.
+
+        let cpu_match = if bid_resources.cpu_cores >= job_requirements.cpu_cores {
             1.0
+        } else if job_requirements.cpu_cores == 0 { // Avoid division by zero if requirement is 0
+            1.0 // or 0.0, depending on desired behavior for 0 requirement
         } else {
-            estimate.cpu as f64 / requirements.cpu as f64
+            bid_resources.cpu_cores as f64 / job_requirements.cpu_cores as f64
         };
         
-        // Memory match
-        let memory_match = if estimate.memory_mb >= requirements.memory_mb {
+        let memory_match = if bid_resources.memory_mb >= job_requirements.memory_mb {
+            1.0
+        } else if job_requirements.memory_mb == 0 {
             1.0
         } else {
-            estimate.memory_mb as f64 / requirements.memory_mb as f64
+            bid_resources.memory_mb as f64 / job_requirements.memory_mb as f64
         };
         
-        // Storage match
-        let storage_match = if estimate.storage_mb >= requirements.storage_mb {
+        // Assuming storage_gb on both. Original had storage_mb for estimate.
+        // If JobRequirements has storage_gb for both, this is fine.
+        let storage_match = if bid_resources.storage_gb >= job_requirements.storage_gb {
+            1.0
+        } else if job_requirements.storage_gb == 0 {
             1.0
         } else {
-            estimate.storage_mb as f64 / requirements.storage_mb as f64
+            bid_resources.storage_gb as f64 / job_requirements.storage_gb as f64
         };
         
-        // Average the match scores
-        (cpu_match + memory_match + storage_match) / 3.0
+        // Average the match scores, ensure it's clamped 0.0 to 1.0
+        ((cpu_match + memory_match + storage_match) / 3.0).clamp(0.0, 1.0)
     }
 }
 
@@ -203,7 +251,7 @@ impl ExecutorSelector for HybridExecutorSelector {
             let mut valid_bids = Vec::new();
             
             for bid in bids {
-                let profile = match self.reputation_client.fetch_profile(&bid.bidder.0).await {
+                let profile = match self.reputation_client.fetch_profile(&bid.bidder_did).await {
                     Ok(profile) => profile,
                     Err(_) => continue, // Skip bids where we can't fetch reputation
                 };
@@ -353,7 +401,7 @@ impl JobAssignmentService {
     fn calculate_bid_score(
         &self,
         config: &BidEvaluatorConfig,
-        profile: &ReputationProfile,
+        profile: &ICNReputationProfile,
         normalized_price: f64,
         resource_match: f64,
     ) -> f64 {
