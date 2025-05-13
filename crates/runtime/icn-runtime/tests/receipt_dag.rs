@@ -106,12 +106,20 @@ async fn test_receipt_dag_anchoring() -> Result<()> {
 
     let dag_nodes = receipt_store.list().await?;
     let found_in_dag = dag_nodes.iter().any(|dag_node| {
-        let cid_str_from_node = dag_node.cid().to_string();
-        if let Ok(cid_from_store) = Cid::from_str(&cid_str_from_node) {
-            cid_from_store == anchored_cid
-        } else {
-            tracing::warn!("Failed to parse CID {:?} from DAG node", dag_node);
-            false
+        match dag_node.cid() {
+            Ok(cid_from_node) => {
+                let cid_str_from_node = cid_from_node.to_string();
+                if let Ok(cid_from_store_parsed) = Cid::from_str(&cid_str_from_node) {
+                    cid_from_store_parsed == anchored_cid
+                } else {
+                    tracing::warn!("Failed to re-parse CID string {} from DAG node {:?}", cid_str_from_node, dag_node);
+                    false
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get CID from DAG node {:?}: {}", dag_node, e);
+                false
+            }
         }
     });
     assert!(found_in_dag, "Anchored CID {} not found in DAG store", anchored_cid_str);

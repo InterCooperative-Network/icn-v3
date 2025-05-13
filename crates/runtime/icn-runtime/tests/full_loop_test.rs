@@ -8,10 +8,9 @@ use icn_runtime::{
     reputation_integration::{HttpReputationUpdater, NoopReputationUpdater},
 };
 use icn_types::{
-    mesh::{MeshJob, MeshJobParams, JobStatus as IcnJobStatus, QoSProfile, WorkflowType},
+    mesh::{MeshJob, MeshJobParams, JobStatus as IcnJobStatus, QoSProfile, WorkflowType, OriginatorOrganizationScope},
     resource::ResourceType,
     runtime_receipt::RuntimeExecutionMetrics,
-    mesh::OriginatorOrganizationScope,
 };
 use icn_identity::{Did, KeyPair as IcnKeyPair};
 
@@ -59,11 +58,11 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
     hasher.update(&wasm_bytes);
     let hash_result = hasher.finalize();
     let wasm_multihash = Multihash::wrap(Code::Sha2_256.into(), &hash_result).expect("Failed to wrap hash");
-    let wasm_cid = IcnCid::new_v1(multihash::Code::DagCbor as u64, wasm_multihash).to_string();
+    let wasm_cid = IcnCid::new_v1(0x55, wasm_multihash).to_string();
 
     // 2. Build config - Ensure node has an identity (KeyPair)
     let node_keypair = IcnKeyPair::generate();
-    let node_did_str = node_keypair.did().to_string();
+    let node_did_str = node_keypair.did.to_string();
 
     let config = RuntimeConfig { // Config is needed for Runtime::from_config or setting context details
         node_did: node_did_str.clone(),
@@ -173,7 +172,7 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
     hasher.update(&wasm_bytes);
     let hash_digest = hasher.finalize();
     let wasm_multihash = Multihash::wrap(Code::Sha2_256.into(), &hash_digest)?;
-    let wasm_cid = IcnCid::new_v1(multihash::Code::DagCbor as u64, wasm_multihash);
+    let wasm_cid = IcnCid::new_v1(0x55, wasm_multihash);
     let wasm_cid_str = wasm_cid.to_string();
     // -------------------------------------
 
@@ -181,8 +180,8 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
     storage.store_wasm(&wasm_cid_str, &wasm_bytes).await?;
 
     let keypair = IcnKeyPair::generate();
-    let executor_did = keypair.did().clone();
-    let job_originator_did = keypair.did().clone(); // Use same DID
+    let executor_did = keypair.did.clone();
+    let job_originator_did = keypair.did.clone(); // Use same DID
 
     // --- Use public RuntimeContextBuilder ---
     let mut context_builder = RuntimeContextBuilder::new();
