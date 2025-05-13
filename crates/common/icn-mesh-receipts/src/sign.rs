@@ -1,5 +1,5 @@
 use crate::ExecutionReceipt;
-use icn_identity::{KeyPair, Did};
+use icn_identity::KeyPair;
 use ed25519_dalek::Signature as DalekSignature;
 use signature::Verifier;
 use serde_cbor;

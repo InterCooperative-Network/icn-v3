@@ -1,8 +1,7 @@
-use icn_identity::Did;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use uuid::Uuid;
-use chrono::{DateTime, Utc};
+use icn_types::mesh::{MeshJob, JobStatus as StandardJobStatus, QoSProfile, StageInputSource, WorkflowType, StageDefinition, OrgScopeIdentifier};
+use icn_identity::Did;
+use cid::Cid;
 
 /// Status of a P2P job
 #[derive(Debug, Clone, Serialize, Deserialize)]

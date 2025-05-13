@@ -212,7 +212,7 @@ impl CoVm {
         let execution_result = self.call_entrypoint(&mut store, &instance);
 
         let fuel_remaining = store.get_fuel().unwrap_or(0);
-        let fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
+        let _fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
 
         let anchored_cids_len = store.data().anchored_cids.lock().unwrap().len();
         let job_submissions_len = store.data().job_submissions.lock().unwrap().len();
@@ -258,10 +258,10 @@ impl CoVm {
         
         // Calculate resource usage
         let fuel_remaining = store.get_fuel().unwrap_or(0);
-        let fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
+        let _fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
         
         // Track metrics in the host context
-        let mut host_context = context;
+        let host_context = context;
         
         Ok(host_context)
     }

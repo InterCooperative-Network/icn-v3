@@ -11,16 +11,26 @@ pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submi
 // data structures, and error codes for this interaction.
 
 // Using core::ffi::c_void for potential opaque handles in the future, though not strictly used by current function signatures.
-use core::ffi::c_void;
+// use core::ffi::c_void;
 use serde::Serialize;
 // No wasmer imports needed
 
 // Need Display for Trap::new
-use std::fmt;
+// use std::fmt;
 use wasmtime::Trap;
 use thiserror::Error;
-use wasmtime::{Caller, Linker}; // Keep Trap for now, might be needed elsewhere or remove later if truly unused.
+// use wasmtime::{Caller, Linker}; // Removed unused import
 use anyhow::Error as AnyhowError;
+
+use icn_types::mesh::MeshJobParams;
+use wasmtime::Memory;
+// use core::ffi::c_void; // Removed unused import
+use std::sync::Arc;
+use tokio::sync::Mutex;
+// use std::fmt; // Removed unused import
+// use wasmtime::Trap; // Removed unused import
+use wasmtime::AsContextMut;
+// use wasmtime::{Caller, Linker}; // Removed unused imports
 
 // --- Helper Enums & Structs for ABI Communication ---
 
