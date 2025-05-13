@@ -234,82 +234,66 @@ pub trait RuntimeStorage: Send + Sync {
 }
 
 /// Minimal MemStorage for tests (moved out for placeholder use in from_config)
-#[derive(Clone)]
-pub(crate) struct MemStorage {
-    proposals: Arc<Mutex<Vec<Proposal>>>,
-    wasm_modules: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
-    // Changed receipts to store RuntimeExecutionReceipt (matching trait change)
-    receipts: Arc<Mutex<std::collections::HashMap<String, RuntimeExecutionReceipt>>>,
-    anchored_cids: Arc<Mutex<Vec<String>>>,
+pub struct MemStorage {
+    proposals: std::sync::Mutex<HashMap<String, Proposal>>,
+    wasm_modules: std::sync::Mutex<HashMap<String, Vec<u8>>>,
+    receipts: std::sync::Mutex<HashMap<String, RuntimeExecutionReceipt>>,
+    anchored_cids: std::sync::Mutex<Vec<String>>,
+}
+
+impl Default for MemStorage {
+    fn default() -> Self {
+        Self {
+            proposals: std::sync::Mutex::new(HashMap::new()),
+            wasm_modules: std::sync::Mutex::new(HashMap::new()),
+            receipts: std::sync::Mutex::new(HashMap::new()),
+            anchored_cids: std::sync::Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl MemStorage {
-    pub(crate) fn new() -> Self {
-        Self {
-            proposals: Arc::new(Mutex::new(vec![])),
-            wasm_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            receipts: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            anchored_cids: Arc::new(Mutex::new(vec![])),
-        }
+    pub fn new() -> Self {
+        Default::default()
     }
 }
 
 #[async_trait]
 impl RuntimeStorage for MemStorage {
     async fn load_proposal(&self, id: &str) -> Result<Proposal> {
-        let proposals = self.proposals.lock().unwrap();
-        proposals
-            .iter()
-            .find(|p| p.id == id)
-            .cloned()
-            .ok_or_else(|| anyhow!("Proposal not found"))
+        self.proposals.lock().unwrap().get(id).cloned().ok_or_else(|| anyhow!("Proposal {} not found", id))
     }
 
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
-        let mut proposals = self.proposals.lock().unwrap();
-        proposals.retain(|p| p.id != proposal.id);
-        proposals.push(proposal.clone());
+        self.proposals.lock().unwrap().insert(proposal.id.clone(), proposal.clone());
         Ok(())
     }
 
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
-        let modules = self.wasm_modules.lock().unwrap();
-        modules
-            .get(cid)
-            .cloned()
-            .ok_or_else(|| anyhow!("WASM module not found"))
+        self.wasm_modules.lock().unwrap().get(cid).cloned().ok_or_else(|| anyhow!("WASM {} not found", cid))
     }
-    
-    // Added store_wasm implementation for MemStorage
+
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
-        let mut modules = self.wasm_modules.lock().unwrap();
-        modules.insert(cid.to_string(), bytes.to_vec());
+        self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
         Ok(())
     }
 
-    // Updated store_receipt for MemStorage to match trait (RuntimeExecutionReceipt)
     async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
         let receipt_id = receipt.id.clone();
-        let mut receipts_map = self.receipts.lock().unwrap();
-        // Store the actual receipt object, not serialized JSON
-        receipts_map.insert(receipt_id.clone(), receipt.clone()); 
-        Ok(receipt_id)
+        // Simple hash for mock storage ID - replace with proper CID generation if needed
+        let cid = format!("mock-receipt-{}", receipt_id);
+        self.receipts.lock().unwrap().insert(cid.clone(), receipt.clone());
+        Ok(cid)
     }
-    
-    // Added load_receipt implementation for MemStorage
+
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
-        let receipts_map = self.receipts.lock().unwrap();
-        receipts_map
-            .get(receipt_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("Receipt not found for ID {}", receipt_id))
+        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt {} not found", receipt_id))
     }
 
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
-        let mut anchored = self.anchored_cids.lock().unwrap();
-        anchored.push(cid.to_string());
-        let anchor_id = format!("anchor-{}", Uuid::new_v4());
-        Ok(anchor_id)
+        let anchor_cid = format!("mock-anchor-{}", cid);
+        self.anchored_cids.lock().unwrap().push(anchor_cid.clone());
+        Ok(anchor_cid)
     }
 }
 

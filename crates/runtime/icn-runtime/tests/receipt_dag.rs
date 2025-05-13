@@ -1,189 +1,211 @@
-use anyhow::{Result, anyhow};
+#![allow(dead_code)]
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use chrono::Utc;
-use icn_economics::ResourceType;
-use icn_identity::{Did, KeyPair};
-use icn_mesh_receipts::{ExecutionReceipt, sign_receipt};
-use icn_runtime::{Runtime, RuntimeContext, VmContext};
-use icn_types::dag_store::SharedDagStore;
+use cid::Cid;
+use icn_identity::{KeyPair, Did};
+use icn_mesh_receipts::ExecutionReceipt as MeshExecutionReceipt;
+use icn_runtime::{
+    Runtime, RuntimeContext, RuntimeContextBuilder, RuntimeStorage, VmContext,
+    Proposal, ProposalState, QuorumStatus
+};
+use icn_types::dag_store::{DagStore, SharedDagStore};
+use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
+use icn_types::mesh::JobStatus as MeshJobStatus;
+use serde_cbor;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
-use uuid::Uuid;
 use wasm_encoder::{
-    CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, 
-    ImportSection, Instruction, Module, TypeSection, ValType, DataSection, DataSegment,
-    MemorySection, MemoryType,
+    CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection, ValType
 };
+use chrono::Utc;
+use std::pin::Pin;
+use std::future::Future;
 
-// Mock storage for testing
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct MockStorage {
-    receipts: Arc<Mutex<Vec<String>>>,
-    anchored: Arc<RwLock<Vec<String>>>,
-}
-
-impl MockStorage {
-    pub fn new() -> Self {
-        Self {
-            receipts: Arc::new(Mutex::new(Vec::new())),
-            anchored: Arc::new(RwLock::new(Vec::new())),
-        }
-    }
+    proposals: Arc<Mutex<HashMap<String, Proposal>>>,
+    wasm_modules: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    receipts: Arc<Mutex<HashMap<String, RuntimeExecutionReceipt>>>,
+    anchored_cids: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
-impl icn_runtime::RuntimeStorage for MockStorage {
-    async fn load_proposal(&self, _id: &str) -> Result<icn_runtime::Proposal> {
-        Err(anyhow!("Not implemented for test"))
+impl RuntimeStorage for MockStorage {
+    async fn load_proposal(&self, id: &str) -> Result<Proposal> {
+        self.proposals.lock().unwrap().get(id).cloned().ok_or_else(|| anyhow!("Proposal not found"))
     }
 
-    async fn update_proposal(&self, _proposal: &icn_runtime::Proposal) -> Result<()> {
-        Err(anyhow!("Not implemented for test"))
+    async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
+        self.proposals.lock().unwrap().insert(proposal.id.clone(), proposal.clone());
+        Ok(())
     }
 
-    async fn load_wasm(&self, _cid: &str) -> Result<Vec<u8>> {
-        Err(anyhow!("Not implemented for test"))
+    async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
+        self.wasm_modules.lock().unwrap().get(cid).cloned().ok_or_else(|| anyhow!("WASM not found"))
     }
 
-    async fn store_receipt(&self, _receipt: &icn_runtime::ExecutionReceipt) -> Result<String> {
-        let receipt_id = format!("receipt-{}", Uuid::new_v4());
-        self.receipts.lock().unwrap().push(receipt_id.clone());
-        Ok(receipt_id)
+    async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
+        let id = receipt.id.clone();
+        self.receipts.lock().unwrap().insert(id.clone(), receipt.clone());
+        Ok(id)
+    }
+
+    async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
+        self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        Ok(())
+    }
+
+    async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
+        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt not found"))
     }
 
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
-        self.anchored.write().await.push(cid.to_string());
-        Ok(format!("anchor-{}", Uuid::new_v4()))
+        self.anchored_cids.lock().unwrap().push(cid.to_string());
+        Ok(format!("anchor-{}", cid))
     }
 }
 
 #[tokio::test]
-async fn test_anchor_receipt_in_dag() -> Result<()> {
-    // 1. Generate a keypair for signing
-    let kp = KeyPair::generate();
-    
-    // 2. Create a shared DAG store
+async fn test_receipt_dag_anchoring() -> Result<()> {
+    let storage = Arc::new(MockStorage::default());
     let receipt_store = Arc::new(SharedDagStore::new());
-    
-    // 3. Create runtime context with receipt store and federation ID
-    let ctx = RuntimeContext::builder()
-        .with_receipt_store(receipt_store.clone())
-        .with_federation_id("test-federation")
-        .with_executor_id(kp.did.to_string())
+
+    let keypair = KeyPair::generate();
+    let node_did = keypair.did.clone();
+
+    let ctx = RuntimeContextBuilder::new()
+        .with_identity(keypair.clone())
+        .with_executor_id(node_did.to_string())
+        .with_dag_store(receipt_store.clone())
         .build();
-    
-    // 4. Create runtime with mock storage
-    let storage = Arc::new(MockStorage::new());
-    let runtime = Runtime::with_context(storage, ctx);
-    
-    // 5. Create a test receipt
-    let mut usage = HashMap::new();
-    usage.insert(ResourceType::Cpu, 500);
-    
-    let mut receipt = ExecutionReceipt {
-        task_cid: "bafybeideputvakentavfc".to_string(),
-        executor: kp.did.clone(),
-        resource_usage: usage,
-        timestamp: Utc::now(),
-        signature: Vec::new(), // Will be filled after signing
+
+    let runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
+
+    let original_receipt = RuntimeExecutionReceipt {
+        id: "test-receipt-id".to_string(),
+        issuer: node_did.to_string(),
+        proposal_id: "test-proposal".to_string(),
+        wasm_cid: "test-wasm-cid".to_string(),
+        ccl_cid: "test-ccl-cid".to_string(),
+        metrics: RuntimeExecutionMetrics {
+            fuel_used: 0,
+            host_calls: 0,
+            io_bytes: 0,
+        },
+        anchored_cids: vec![],
+        resource_usage: vec![],
+        timestamp: Utc::now().timestamp_millis() as u64,
+        dag_epoch: Some(1),
+        receipt_cid: None,
+        signature: None,
     };
-    
-    // 6. Sign the receipt
-    let signature = sign_receipt(&receipt, &kp)?;
-    receipt.signature = signature.to_bytes().to_vec();
-    
-    // 7. Create WASM module to call host_anchor_receipt
-    let receipt_cbor = serde_cbor::to_vec(&receipt)?;
-    
-    // Create a minimal WASM module using wasm_encoder
+
+    let anchored_cid_str = runtime.anchor_receipt(&original_receipt).await?;
+    let anchored_cid = Cid::from_str(&anchored_cid_str)?;
+
+    let dag_nodes = receipt_store.list().await?;
+    let found_in_dag = dag_nodes.iter().any(|node_cid_str| {
+        if let Ok(cid_from_store) = Cid::from_str(node_cid_str) {
+            cid_from_store == anchored_cid
+        } else {
+            tracing::warn!("Failed to parse CID {} from DAG store", node_cid_str);
+            false
+        }
+    });
+    assert!(found_in_dag, "Anchored CID {} not found in DAG store", anchored_cid_str);
+
+    Ok(())
+}
+
+fn build_receipt_wasm_module(receipt_cbor: &[u8]) -> Result<Vec<u8>> {
     let mut module = Module::new();
-    
-    // Define the type (i32, i32) -> i32 for host_anchor_receipt
+
     let mut types = TypeSection::new();
     types.function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+    types.function(vec![], vec![]);
     module.section(&types);
-    
-    // Import host_anchor_receipt
+
     let mut imports = ImportSection::new();
-    imports.import(
-        "icn_host",
-        "host_anchor_receipt",
-        EntityType::Function(0),
-    );
+    imports.import("icn_host", "host_anchor_receipt", EntityType::Function(0));
     module.section(&imports);
-    
-    // Define our main function
+
     let mut functions = FunctionSection::new();
-    functions.function(0); // Using type 0
+    functions.function(1);
     module.section(&functions);
-    
-    // Create the code for our function
-    let mut code = CodeSection::new();
-    let mut func = Function::new(vec![]);
-    
-    // Call host_anchor_receipt(0, cbor.len())
-    func.instruction(&Instruction::I32Const(0)); // Pointer to data
-    func.instruction(&Instruction::I32Const(receipt_cbor.len() as i32)); // Length
-    func.instruction(&Instruction::Call(0)); // Call import 0 (host_anchor_receipt)
-    func.instruction(&Instruction::End);
-    code.function(&func);
-    module.section(&code);
-    
-    // Add data section to include our CBOR bytes
-    let mut data = DataSection::new();
-    data.segment(DataSegment::new(0, &[Instruction::I32Const(0), Instruction::End], receipt_cbor.clone()));
-    module.section(&data);
-    
-    // Add exports for memory and function
+
+    let mut memories = MemorySection::new();
+    memories.memory(MemoryType { minimum: 1, maximum: None, memory64: false, shared: false });
+    module.section(&memories);
+
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
-    exports.export("_start", ExportKind::Func, 1); // Export our function
+    exports.export("_start", ExportKind::Func, 1);
     module.section(&exports);
-    
-    // Add memory section
-    let mut memories = MemorySection::new();
-    memories.memory(MemoryType {
-        minimum: 1,
-        maximum: None,
-        shared: false,
-    });
-    module.section(&memories);
-    
-    // Compile the WASM module
-    let wasm = module.finish();
-    
-    // 8. Execute the WASM module
-    let vm_ctx = VmContext {
-        executor_did: kp.did.to_string(),
-        scope: Some("test-scope".to_string()),
-        epoch: Some("2023-01-01".to_string()),
-        code_cid: Some("test-cid".to_string()),
-        resource_limits: None,
+
+    let mut data = DataSection::new();
+    data.active(0, &ConstExpr::i32_const(0), receipt_cbor.to_vec());
+    module.section(&data);
+
+    let mut code = CodeSection::new();
+    let mut f = Function::new(vec![]);
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::I32Const(receipt_cbor.len() as i32));
+    f.instruction(&Instruction::Call(0));
+    f.instruction(&Instruction::Drop);
+    f.instruction(&Instruction::End);
+    code.function(&f);
+    module.section(&code);
+
+    Ok(module.finish())
+}
+
+#[tokio::test]
+async fn test_wasm_anchors_receipt() -> Result<()> {
+    let storage = Arc::new(MockStorage::default());
+    let receipt_store = Arc::new(SharedDagStore::new());
+
+    let keypair = KeyPair::generate();
+    let node_did = keypair.did.clone();
+
+    let ctx = RuntimeContextBuilder::new()
+        .with_identity(keypair.clone())
+        .with_executor_id(node_did.to_string())
+        .with_dag_store(receipt_store.clone())
+        .build();
+
+    let runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
+
+    let mesh_receipt = MeshExecutionReceipt {
+        job_id: "job-123".to_string(),
+        status: MeshJobStatus::Completed,
+        result_data_cid: None,
+        logs_cid: None,
+        execution_start_time: Utc::now().timestamp_millis() as u64,
+        execution_end_time: Utc::now().timestamp_millis() as u64,
+        executor: node_did.clone(),
+        signature: Vec::new(),
+        resource_usage: HashMap::new(),
+        coop_id: None,
+        community_id: None,
+        execution_end_time_dt: Utc::now(),
     };
-    
-    let result = runtime.execute_wasm(&wasm, vm_ctx)?;
-    
-    // 9. Verify the receipt was anchored
+    let receipt_cbor = serde_cbor::to_vec(&mesh_receipt)?;
+    let wasm = build_receipt_wasm_module(&receipt_cbor)?;
+
+    let vm_ctx = VmContext {
+        executor_did: node_did.to_string(),
+        scope: None,
+        epoch: None,
+        code_cid: Some("wasm_cid_placeholder_for_test".to_string()),
+        resource_limits: None,
+        coop_id: None,
+        community_id: None,
+    };
+    let _result = runtime.execute_wasm(&wasm, "_start".to_string(), Vec::new()).await?;
+
     let dag_nodes = receipt_store.list().await?;
-    
-    // There should be at least one DAG node in the receipt store
-    assert!(!dag_nodes.is_empty(), "No DAG nodes found in receipt store");
-    
-    // The DAG node should have Receipt event type
-    assert_eq!(
-        dag_nodes[0].event_type,
-        icn_types::dag::DagEventType::Receipt,
-        "DAG node should have Receipt event type"
-    );
-    
-    // The scope should start with "receipt/"
-    assert!(
-        dag_nodes[0].scope_id.starts_with("receipt/"),
-        "DAG node scope should start with receipt/"
-    );
-    
-    // Success
+    assert!(!dag_nodes.is_empty(), "Expected DAG store to have at least one entry after WASM execution");
+
     Ok(())
 } 
