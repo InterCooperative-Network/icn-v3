@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/intercooperative/icn-v3"
 
 [dependencies]
+anyhow = "1.0"
 chrono = { workspace = true }
 serde = { workspace = true }
 icn-economics = { path = "../icn-economics" }

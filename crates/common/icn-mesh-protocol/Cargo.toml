@@ -6,6 +6,7 @@ description = "Shared protocol types for ICN mesh networking"
 license = "Apache-2.0"
 
 [dependencies]
+cid = "0.10"
 anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
