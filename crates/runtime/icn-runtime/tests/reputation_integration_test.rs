@@ -14,6 +14,15 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::future::Future;
 use std::str::FromStr;
+use icn_identity::KeyPair as IcnKeyPair;
+use icn_types::mesh::MeshExecutionReceipt;
+use icn_types::receipt_verification::VerifiableReceipt;
+use bincode;
+use chrono::Utc;
+use httpmock::MockServer;
+use httpmock::Method::POST;
+use tempfile;
+use icn_runtime::config::RuntimeConfig;
 
 /// Mock storage implementation
 #[derive(Clone, Default)]
@@ -174,7 +183,6 @@ fn get_runtime_keypair(runtime: &Runtime) -> Result<IcnKeyPair> {
 fn sign_receipt(receipt: &mut RuntimeExecutionReceipt, keypair: &IcnKeyPair) -> Result<()> {
     // Placeholder: Ideally call the actual sign_runtime_receipt_in_place helper.
     // For now, mimic signing for test setup.
-    use bincode;
     let payload = receipt.signed_payload(); // Ensure this is public
     let bytes = bincode::serialize(&payload).unwrap();
     let signature = keypair.sign(&bytes); // Assumes KeyPair::sign exists
@@ -345,5 +353,66 @@ async fn test_noop_reputation_updater_ignores_submission() -> Result<()> {
     // setting up a mock server and asserting it *wasn't* hit, which feels 
     // brittle. Trusting the code path based on config is sufficient here.
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_mesh_receipt_signature_verification_and_submission() -> Result<()> {
+    // 1. Start mock reputation service
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/reputation"); // Adjusted path based on your config
+        then.status(200);
+    });
+
+    // 2. Setup runtime with mock URL
+    let storage_path = tempdir()?.path().to_path_buf();
+    let config = RuntimeConfig {
+        reputation_service_url: Some(server.url("/reputation")), // Ensure path matches mock
+        storage_path,
+        ..Default::default()
+    };
+    let runtime = Runtime::from_config(config).await?;
+
+    // 3. Generate keypair and create signed MeshExecutionReceipt
+    use icn_identity::IcnKeyPair;
+    use icn_types::mesh::{ExecutionReceipt as MeshExecutionReceipt, JobStatus as IcnJobStatus};
+    use icn_types::receipt_verification::VerifiableReceipt; // For get_payload_for_signing
+    use icn_economics::ResourceType; // For resource_usage HashMap key
+    use std::collections::HashMap; // For HashMap
+    use chrono::Utc;
+    use bincode; // For serialization
+
+    let keypair = IcnKeyPair::generate();
+    let now_dt = Utc::now();
+    let now_ts = now_dt.timestamp() as u64;
+    
+    let mut receipt = MeshExecutionReceipt {
+        job_id: "job-mesh-abc123".into(),
+        executor: keypair.did.clone(),
+        status: IcnJobStatus::Completed, // Fully initialize
+        result_data_cid: None,
+        logs_cid: None,
+        resource_usage: HashMap::new(), // Initialize with all fields
+        execution_start_time: now_ts.saturating_sub(1), 
+        execution_end_time: now_ts,
+        execution_end_time_dt: now_dt, 
+        signature: vec![], // Will be filled after signing
+        coop_id: None,
+        community_id: None,
+    };
+    
+    let payload = receipt.get_payload_for_signing()
+        .expect("Failed to get payload for MeshExecutionReceipt signing");
+    let bytes = bincode::serialize(&payload)
+        .expect("Failed to serialize MeshExecutionReceipt payload");
+    let sig = keypair.sign(&bytes);
+    receipt.signature = sig.to_bytes().to_vec();
+
+    // 4. Submit to anchor_mesh_receipt
+    runtime.anchor_mesh_receipt(&receipt).await?; // Pass by reference
+
+    // 5. Confirm the mock server was hit
+    mock.assert_hits(1);
     Ok(())
 } 

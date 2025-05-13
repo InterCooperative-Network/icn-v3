@@ -3,6 +3,7 @@ use thiserror::Error;
 use std::str::FromStr;
 use std::fmt;
 use serde::{Deserialize, Serialize};
+use anyhow::Context;
 
 // Ed25519 public key multicodec prefix
 const ED25519_MULTICODEC_PREFIX: u8 = 0xed;
@@ -66,6 +67,14 @@ impl Did {
         } else {
             Err(DidError::Malformed)
         }
+    }
+
+    /// Returns the Ed25519 verifying key embedded in the DID.
+    /// Only supports `did:key` using Ed25519 multicodec (0xED).
+    /// This maps the internal `to_ed25519` method and converts the error type.
+    pub fn verifying_key(&self) -> anyhow::Result<ed25519_dalek::VerifyingKey> {
+        self.to_ed25519()
+            .context("Failed to extract Ed25519 verifying key from DID")
     }
 }
 
