@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use icn_identity::Did;
 use sled::Db;
 use std::sync::Arc; // May not be needed directly here, but often with sled
+use std::str::FromStr; // Added for Did::from_str
 
 use crate::mana::{ManaLedger, ManaState};
 
@@ -143,10 +144,12 @@ mod tests {
         ledger.update_mana_state(&did2, state.clone()).await?;
 
         let mut all_dids_retrieved = ledger.all_dids().await?;
-        all_dids_retrieved.sort(); // Sort for consistent comparison
+        // Sort by string representation if Did does not implement Ord directly
+        all_dids_retrieved.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
         
         let mut expected_dids = vec![did1.clone(), did2.clone()];
-        expected_dids.sort();
+        // Sort by string representation
+        expected_dids.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
 
         assert_eq!(all_dids_retrieved, expected_dids);
         Ok(())

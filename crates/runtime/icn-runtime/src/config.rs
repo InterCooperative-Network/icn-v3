@@ -36,4 +36,13 @@ pub struct RuntimeConfig {
     /// If not provided, a default policy (e.g., FixedRatePerTick(10)) will be used.
     #[serde(default)]
     pub mana_regeneration_policy: Option<RegenerationPolicy>,
+
+    /// Optional interval in seconds for mana regeneration ticks.
+    /// Defaults to 30 seconds if not specified.
+    #[serde(default = "default_mana_tick_interval")]
+    pub mana_tick_interval_seconds: Option<u64>,
+}
+
+fn default_mana_tick_interval() -> Option<u64> {
+    Some(30)
 } 
