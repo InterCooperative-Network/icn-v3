@@ -15,8 +15,17 @@ use std::path::Path;
 use std::fs;
 use icn_identity::KeyPair;
 use serde_json::json;
+use serde::Serialize;
 
 use crate::metrics;
+
+lazy_static::lazy_static! {
+    static ref MANA_DEDUCTION_SUBMISSIONS_TOTAL: metrics::IntCounterVec = metrics::register_int_counter_vec!(
+        "icn_runtime_mana_deduction_submissions_total",
+        "Total mana deduction submissions attempted.",
+        &["executor_did", "coop_id", "community_id", "status"]
+    ).unwrap();
+}
 
 /// Configuration for reputation scoring parameters
 #[derive(Debug, Clone, Deserialize)]
@@ -72,6 +81,17 @@ impl Default for ReputationScoringConfig {
     }
 }
 
+/// Event representing an adjustment to an entity's mana.
+#[derive(Serialize, Debug)]
+struct ManaAdjustmentEvent {
+    subject_did: String,
+    mana_change: i64, // Negative for deduction
+    timestamp: u64,
+    cooperative_id: Option<String>,
+    community_id: Option<String>,
+    reason: String, // e.g., "JobExecutionCost"
+}
+
 /// This trait allows providing different implementations of reputation update
 /// logic for testing and production environments
 #[async_trait::async_trait]
@@ -83,6 +103,16 @@ pub trait ReputationUpdater: Send + Sync {
         is_successful: bool, // Verification/Execution success status
         coop_id: &str,       // Cooperative ID label
         community_id: &str,  // Community ID label
+    ) -> Result<()>;
+
+    /// Submit a direct mana deduction event for an executor.
+    /// This is used when mana is consumed, e.g., upon successful job execution.
+    async fn submit_mana_deduction(
+        &self,
+        executor_did: &Did,
+        amount: u64,
+        coop_id: &str,       // Cooperative ID scope for the deduction
+        community_id: &str,  // Community ID scope for the deduction
     ) -> Result<()>;
 }
 
@@ -283,6 +313,67 @@ impl ReputationUpdater for HttpReputationUpdater {
             anyhow::bail!("Failed to submit reputation record: HTTP Status {}", status_code)
         }
     }
+
+    async fn submit_mana_deduction(
+        &self,
+        executor_did: &Did,
+        amount: u64,
+        coop_id: &str,
+        community_id: &str,
+    ) -> Result<()> {
+        let event = ManaAdjustmentEvent {
+            subject_did: executor_did.to_string(),
+            mana_change: -(amount as i64), // Negative for deduction
+            timestamp: Utc::now().timestamp() as u64,
+            cooperative_id: if coop_id.is_empty() { None } else { Some(coop_id.to_string()) },
+            community_id: if community_id.is_empty() { None } else { Some(community_id.to_string()) },
+            reason: "JobExecutionCost".to_string(),
+        };
+
+        let endpoint_url = format!("{}/reputation/events", self.reputation_service_url.trim_end_matches('/'));
+
+        tracing::info!(
+            "Submitting mana deduction event to {}: {:?}",
+            endpoint_url,
+            event
+        );
+
+        match self.client.post(&endpoint_url).json(&event).send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    tracing::info!(
+                        "Successfully submitted mana deduction for {} ({} mana). Status: {}",
+                        executor_did, amount, status
+                    );
+                    MANA_DEDUCTION_SUBMISSIONS_TOTAL
+                        .with_label_values(&[executor_did.as_str(), coop_id, community_id, "success"])
+                        .inc();
+                    Ok(())
+                } else {
+                    let error_body = response.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
+                    tracing::error!(
+                        "Failed to submit mana deduction for {} ({} mana). Status: {}. Body: {}",
+                        executor_did, amount, status, error_body
+                    );
+                    MANA_DEDUCTION_SUBMISSIONS_TOTAL
+                        .with_label_values(&[executor_did.as_str(), coop_id, community_id, &status.as_str()])
+                        .inc();
+                    Err(anyhow::anyhow!("Reputation service returned error {} for mana deduction: {}", status, error_body))
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Client error submitting mana deduction for {} ({} mana): {}",
+                    executor_did, amount, e
+                );
+                MANA_DEDUCTION_SUBMISSIONS_TOTAL
+                    .with_label_values(&[executor_did.as_str(), coop_id, community_id, "client_error"])
+                    .inc();
+                Err(anyhow::anyhow!("Client error submitting mana deduction: {}", e))
+            }
+        }
+    }
 }
 
 /// A no-op implementation for testing or when reputation updates should be disabled
@@ -297,6 +388,20 @@ impl ReputationUpdater for NoopReputationUpdater {
         _coop_id: &str,       // Accept new parameter
         _community_id: &str,  // Accept new parameter
     ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn submit_mana_deduction(
+        &self,
+        _executor_did: &Did,
+        _amount: u64,
+        _coop_id: &str,       // Cooperative ID scope for the deduction
+        _community_id: &str,  // Community ID scope for the deduction
+    ) -> Result<()> {
+        tracing::debug!(
+            "NoopReputationUpdater: Faking mana deduction for DID: {}, Amount: {}, Coop: {}, Comm: {}",
+            _executor_did, _amount, _coop_id, _community_id
+        );
         Ok(())
     }
 }

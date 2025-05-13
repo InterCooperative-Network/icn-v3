@@ -1,12 +1,12 @@
-use prometheus::{IntCounter, register_int_counter, opts};
-use prometheus::{Histogram, register_histogram};
-use prometheus::{IntCounterVec, register_int_counter_vec};
-use prometheus::{HistogramVec, register_histogram_vec};
+pub use prometheus::{IntCounter, register_int_counter, opts};
+pub use prometheus::{Histogram, register_histogram};
+pub use prometheus::{IntCounterVec, register_int_counter_vec};
+pub use prometheus::{HistogramVec, register_histogram_vec};
+pub use prometheus::{GaugeVec, register_gauge_vec, Registry};
 use lazy_static::lazy_static;
 use std::sync::Arc;
 use icn_identity::ScopeKey;
 use icn_economics::mana::ManaMetricsHook;
-use prometheus::{GaugeVec, register_gauge_vec, Registry};
 
 // Define standard label names
 const LABEL_COOP_ID: &str = "coop_id";

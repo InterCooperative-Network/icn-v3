@@ -688,6 +688,54 @@ impl Runtime {
             tracing::info!(receipt_id = %receipt_to_anchor.id, "No reputation updater configured, skipping submission");
         }
         
+        // Perform Mana Deduction if applicable
+        if let Some(cost) = receipt_to_anchor.metrics.mana_cost {
+            if cost > 0 {
+                if let Some(updater) = &self.reputation_updater {
+                    match Did::from_str(&receipt_to_anchor.issuer) {
+                        Ok(executor_did_val) => {
+                            match updater.submit_mana_deduction(
+                                &executor_did_val, 
+                                cost, 
+                                coop_id_label, 
+                                community_id_label
+                            ).await {
+                                Ok(_) => tracing::info!(
+                                    receipt_id = %receipt_to_anchor.id, 
+                                    executor = %receipt_to_anchor.issuer,
+                                    mana_deducted = cost,
+                                    "Mana deduction submitted successfully."
+                                ),
+                                Err(e) => tracing::warn!(
+                                    receipt_id = %receipt_to_anchor.id, 
+                                    executor = %receipt_to_anchor.issuer,
+                                    "Failed to submit mana deduction: {}", e
+                                ),
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                receipt_id = %receipt_to_anchor.id, 
+                                issuer_did = %receipt_to_anchor.issuer,
+                                "Failed to parse issuer DID for mana deduction: {}. Skipping deduction.", e
+                            );
+                        }
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    receipt_id = %receipt_to_anchor.id,
+                    mana_cost = cost,
+                    "Mana cost is zero or not set for receipt, skipping deduction."
+                );
+            }
+        } else {
+             tracing::debug!(
+                receipt_id = %receipt_to_anchor.id,
+                "No mana cost found in receipt metrics, skipping deduction."
+            );
+        }
+        
         // 9. Record metrics
         let duration = start_time.elapsed();
         metrics::observe_anchor_receipt_duration(duration.as_secs_f64(), coop_id_label, community_id_label, issuer_did_label);
