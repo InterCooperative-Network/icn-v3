@@ -20,5 +20,5 @@ pub struct RuntimeExecutionReceipt {
     pub timestamp: u64,
     pub dag_epoch: Option<u64>,
     pub receipt_cid: Option<String>,
-    pub signature: Option<String>,
+    pub signature: Option<Vec<u8>>,
 } 
