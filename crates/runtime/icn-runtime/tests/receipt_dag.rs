@@ -115,9 +115,9 @@ async fn test_receipt_dag_anchoring() -> Result<()> {
         wasm_cid: "test-wasm-cid".to_string(),
         ccl_cid: "test-ccl-cid".to_string(),
         metrics: RuntimeExecutionMetrics {
-            fuel_used: 0,
             host_calls: 0,
             io_bytes: 0,
+            mana_cost: Some(0),
         },
         anchored_cids: vec![],
         resource_usage: vec![],
@@ -224,17 +224,18 @@ async fn test_wasm_anchors_receipt() -> Result<()> {
 
     let mesh_receipt = MeshExecutionReceipt {
         job_id: "job-123".to_string(),
+        executor: node_did.clone(),
         status: MeshJobStatus::Completed,
         result_data_cid: None,
         logs_cid: None,
-        execution_start_time: Utc::now().timestamp_millis() as u64,
-        execution_end_time: Utc::now().timestamp_millis() as u64,
-        executor: node_did.clone(),
-        signature: Vec::new(),
         resource_usage: HashMap::new(),
+        mana_cost: Some(0),
+        execution_start_time: Utc::now().timestamp() as u64,
+        execution_end_time: Utc::now().timestamp() as u64,
+        execution_end_time_dt: Utc::now(),
+        signature: Vec::new(),
         coop_id: None,
         community_id: None,
-        execution_end_time_dt: Utc::now(),
     };
     let receipt_cbor = serde_cbor::to_vec(&mesh_receipt)?;
     let wasm = build_receipt_wasm_module(&receipt_cbor)?;
@@ -257,6 +258,159 @@ async fn test_wasm_anchors_receipt() -> Result<()> {
         !dag_nodes.is_empty(),
         "Expected DAG store to have at least one entry after WASM execution"
     );
+
+    Ok(())
+}
+
+fn create_test_receipt_with_metrics(
+    id: &str,
+    issuer: &str,
+    mana_cost_val: Option<u64>,
+) -> RuntimeExecutionReceipt {
+    RuntimeExecutionReceipt {
+        id: id.to_string(),
+        issuer: issuer.to_string(),
+        proposal_id: "test_proposal".to_string(),
+        wasm_cid: "test_wasm_cid".to_string(),
+        ccl_cid: "test_ccl_cid".to_string(),
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 0,
+            io_bytes: 0,
+            mana_cost: mana_cost_val,
+        },
+        anchored_cids: Vec::new(),
+        resource_usage: Vec::new(),
+        timestamp: Utc::now().timestamp_millis() as u64,
+        dag_epoch: Some(1),
+        receipt_cid: None,
+        signature: None,
+    }
+}
+
+fn create_mesh_receipt(job_id_str: &str, job_id_param: &str, executor_did: &Did, mana: Option<u64>) -> MeshExecutionReceipt {
+    MeshExecutionReceipt {
+        job_id: job_id_param.to_string(),
+        executor: executor_did.clone(),
+        status: MeshJobStatus::Completed,
+        result_data_cid: Some(Cid::default().to_string()),
+        logs_cid: None,
+        resource_usage: HashMap::new(),
+        mana_cost: mana,
+        execution_start_time: Utc::now().timestamp() as u64,
+        execution_end_time: Utc::now().timestamp() as u64,
+        execution_end_time_dt: Utc::now(),
+        signature: Vec::new(),
+        coop_id: None,
+        community_id: None,
+    }
+}
+
+#[tokio::test]
+async fn test_store_and_retrieve_receipt() {
+    let storage = Arc::new(MockStorage::default());
+    let receipt_store = Arc::new(SharedDagStore::new());
+
+    let keypair = KeyPair::generate();
+    let node_did = keypair.did.clone();
+
+    let ctx = RuntimeContextBuilder::new()
+        .with_identity(keypair.clone())
+        .with_executor_id(node_did.to_string())
+        .with_dag_store(receipt_store.clone())
+        .build();
+
+    let mut runtime = Runtime::with_context(storage.clone(), Arc::new(ctx));
+
+    let executor_did1 = KeyPair::generate().did;
+    let executor_did2 = KeyPair::generate().did;
+
+    let mesh_receipt1 = MeshExecutionReceipt {
+        job_id: "job1".to_string(),
+        executor: executor_did1.clone(),
+        status: MeshJobStatus::Completed,
+        result_data_cid: Some("output_cid1".to_string()),
+        logs_cid: None,
+        resource_usage: HashMap::new(),
+        mana_cost: Some(50),
+        execution_start_time: Utc::now().timestamp() as u64,
+        execution_end_time: Utc::now().timestamp() as u64,
+        execution_end_time_dt: Utc::now(),
+        signature: Vec::new(),
+        coop_id: None,
+        community_id: None,
+    };
+    let mesh_receipt2 = MeshExecutionReceipt {
+        job_id: "job2".to_string(),
+        executor: executor_did2.clone(),
+        status: MeshJobStatus::Completed,
+        result_data_cid: Some("output_cid2".to_string()),
+        logs_cid: None,
+        resource_usage: HashMap::new(),
+        mana_cost: Some(75),
+        execution_start_time: Utc::now().timestamp() as u64,
+        execution_end_time: Utc::now().timestamp() as u64,
+        execution_end_time_dt: Utc::now(),
+        signature: Vec::new(),
+        coop_id: None,
+        community_id: None,
+    };
+
+    let receipt_cbor1 = serde_cbor::to_vec(&mesh_receipt1)?;
+    let wasm1 = build_receipt_wasm_module(&receipt_cbor1)?;
+    let receipt_cbor2 = serde_cbor::to_vec(&mesh_receipt2)?;
+    let wasm2 = build_receipt_wasm_module(&receipt_cbor2)?;
+
+    let vm_ctx1 = VmContext {
+        executor_did: "executor_did1".to_string(),
+        scope: None,
+        epoch: None,
+        code_cid: Some("wasm_cid_placeholder_for_test".to_string()),
+        resource_limits: None,
+        coop_id: None,
+        community_id: None,
+    };
+    let vm_ctx2 = VmContext {
+        executor_did: "executor_did2".to_string(),
+        scope: None,
+        epoch: None,
+        code_cid: Some("wasm_cid_placeholder_for_test".to_string()),
+        resource_limits: None,
+        coop_id: None,
+        community_id: None,
+    };
+
+    let _result1 = runtime
+        .execute_wasm(&wasm1, "_start".to_string(), Vec::new())
+        .await?;
+    let _result2 = runtime
+        .execute_wasm(&wasm2, "_start".to_string(), Vec::new())
+        .await?;
+
+    let dag_nodes = receipt_store.list().await?;
+    assert!(
+        !dag_nodes.is_empty(),
+        "Expected DAG store to have at least one entry after WASM execution"
+    );
+
+    // Test storing and retrieving MeshExecutionReceipt
+    receipt_store.store_mesh_receipt(&mesh_receipt1).await.unwrap();
+    receipt_store.store_mesh_receipt(&mesh_receipt2).await.unwrap();
+
+    let retrieved_mesh_receipt1 = receipt_store.get_mesh_receipt(&mesh_receipt1.job_id).await.unwrap().unwrap();
+    assert_eq!(retrieved_mesh_receipt1.job_id, "job1");
+    assert_eq!(retrieved_mesh_receipt1.mana_cost, Some(50));
+
+    let retrieved_mesh_receipts = receipt_store.get_mesh_receipts_by_job_id("job1").await.unwrap();
+    assert_eq!(retrieved_mesh_receipts.len(), 1);
+    assert_eq!(retrieved_mesh_receipts[0].job_id, "job1");
+    assert_eq!(retrieved_mesh_receipts[0].mana_cost, Some(50));
+
+    let all_mesh_receipts = receipt_store.get_all_mesh_receipts().await.unwrap();
+    assert_eq!(all_mesh_receipts.len(), 2);
+    let found1 = all_mesh_receipts.iter().find(|r| r.job_id == "job1").unwrap();
+    assert_eq!(found1.mana_cost, Some(50));
+    let found2 = all_mesh_receipts.iter().find(|r| r.job_id == "job2").unwrap();
+    assert_eq!(found2.mana_cost, Some(75));
 
     Ok(())
 }

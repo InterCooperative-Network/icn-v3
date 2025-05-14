@@ -1,5 +1,5 @@
 use icn_economics::mana::{ManaManager, ManaPool}; // Adjusted import for ManaManager
-use icn_economics::ScopeKey; // Added ScopeKey import
+use icn_identity::ScopeKey; // Corrected ScopeKey import
 use icn_runtime::metrics::PrometheusManaMetrics;
 use prometheus::{gather, Encoder, TextEncoder};
 use std::sync::Arc;

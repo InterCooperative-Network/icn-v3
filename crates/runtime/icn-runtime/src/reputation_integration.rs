@@ -505,6 +505,8 @@ mod tests {
     use httpmock::MockServer;
     use icn_types::runtime_receipt::RuntimeExecutionMetrics; // Keep if used
     use std::sync::{Arc, Mutex};
+    use icn_identity::KeyPair; // RE-ADD for tests
+    use serde_json::json; // RE-ADD for tests
 
     // Helper to calculate expected score delta for tests, mirroring the main logic
     fn calculate_expected_score_delta(
@@ -528,18 +530,67 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
+    #[allow(dead_code)] // Added to acknowledge it's unused for now
     struct MockReputationUpdater {
         submitted_items: Arc<Mutex<Vec<(RuntimeExecutionReceipt, bool, String, String)>>>,
-        // To inspect the record sent to the HTTP client, including the calculated score_delta
-        submitted_records_to_service: Arc<Mutex<Vec<ReputationRecord>>>,
+        // submitted_records_to_service: Arc<Mutex<Vec<ReputationRecord>>>,
     }
 
+    #[async_trait::async_trait]
+    impl ReputationUpdater for MockReputationUpdater {
+        async fn submit_receipt_based_reputation(
+            &self,
+            receipt: &RuntimeExecutionReceipt,
+            is_successful: bool,
+            coop_id: &str,
+            community_id: &str,
+        ) -> Result<()> {
+            // Log that the method was called with its parameters
+            // This helps confirm the trait method is being reached by the mock.
+            debug!(
+                "MockReputationUpdater::submit_receipt_based_reputation called with: receipt_id={}, is_successful={}, coop_id={}, community_id={}",
+                receipt.id,
+                is_successful,
+                coop_id,
+                community_id
+            );
+
+            // Store a tuple of the arguments for later inspection.
+            self.submitted_items.lock().unwrap().push((
+                receipt.clone(),
+                is_successful,
+                coop_id.to_string(),
+                community_id.to_string(),
+            ));
+            Ok(())
+        }
+
+        async fn submit_mana_deduction(
+            &self,
+            executor_did: &Did,
+            amount: u64,
+            coop_id: &str,
+            community_id: &str,
+        ) -> Result<()> {
+            // No-op for this specific test focus, or add basic logging if desired.
+            // This method is not the primary target of the E0599 error being addressed,
+            // but completing the trait implementation is good practice.
+            debug!(
+                "MockReputationUpdater::submit_mana_deduction called for DID: {}, Amount: {}, Coop: {}, Comm: {}",
+                executor_did, amount, coop_id, community_id
+            );
+            // Optionally, store mana deduction calls if needed for other tests:
+            // self.deductions.lock().unwrap().push((executor_did.clone(), amount, coop_id.to_string(), community_id.to_string()));
+            Ok(())
+        }
+    }
+
+    #[allow(dead_code)] // Added to acknowledge it's unused for now
     impl MockReputationUpdater {
         fn new() -> Self {
             Self {
                 submitted_items: Arc::new(Mutex::new(Vec::new())),
-                submitted_records_to_service: Arc::new(Mutex::new(Vec::new())),
+                // submitted_records_to_service: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -547,10 +598,9 @@ mod tests {
             self.submitted_items.lock().unwrap().clone()
         }
 
-        // Getter for the records that would have been sent
-        fn get_submitted_records_to_service(&self) -> Vec<ReputationRecord> {
-            self.submitted_records_to_service.lock().unwrap().clone()
-        }
+        // fn get_submitted_records_to_service(&self) -> Vec<ReputationRecord> {
+        // self.submitted_records_to_service.lock().unwrap().clone()
+        // }
     }
 
     // Mock HttpReputationUpdater to intercept the record before it would be sent
@@ -1339,3 +1389,4 @@ mod tests {
         );
     }
 }
+

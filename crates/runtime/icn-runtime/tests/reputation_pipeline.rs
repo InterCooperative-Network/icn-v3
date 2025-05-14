@@ -17,7 +17,6 @@ use icn_types::dag_store::SharedDagStore;
 use icn_types::VerifiableReceipt;
 use serde_json::json;
 use std::str::FromStr;
-use tempfile::TempDir;
 use url::Url;
 
 // Helper function to create a basic, signed RuntimeExecutionReceipt
@@ -59,30 +58,6 @@ fn sign_receipt(receipt: &mut RuntimeExecutionReceipt, keypair: &KeyPair) {
     receipt.signature = Some(signature.to_bytes().to_vec());
 }
 
-// Define a custom predicate for matching the request body
-struct ReputationSubmissionBodyPredicate {
-    expected_subject_did: String,
-}
-
-// Explicitly qualify Predicate and Request with httpmock::
-impl httpmock::Predicate for ReputationSubmissionBodyPredicate {
-    fn matches(&self, request: &httpmock::Request) -> bool {
-        // Assuming serde_json is available in this scope, or use ::serde_json if necessary
-        match serde_json::from_slice::<serde_json::Value>(&request.body) {
-            Ok(submitted_data) => {
-                let subject_ok =
-                    submitted_data["subject"].as_str() == Some(self.expected_subject_did.as_str());
-                let success_ok = submitted_data["success"].as_bool() == Some(true);
-                subject_ok && success_ok
-            }
-            Err(e) => {
-                eprintln!("Predicate: Failed to deserialize mock request body: {}", e);
-                false
-            }
-        }
-    }
-}
-
 #[tokio::test]
 async fn test_anchor_receipt_triggers_reputation_submission_success() -> Result<()> {
     let server = MockServer::start_async().await;
@@ -110,16 +85,16 @@ async fn test_anchor_receipt_triggers_reputation_submission_success() -> Result<
     let runtime = Runtime::with_context(Arc::new(MemStorage::default()), Arc::new(context))
         .with_reputation_updater(http_reputation_updater.clone());
 
-    // Instantiate predicate with the DID string
-    let predicate = ReputationSubmissionBodyPredicate {
-        expected_subject_did: issuer_did_str.clone(),
-    };
+    let expected_partial_body = json!({
+        "subject": issuer_did_str,
+        "success": true
+    });
 
     let rep_submission_mock = server
         .mock_async(move |when, then| {
             when.method(httpmock::Method::POST) // Method::POST is from the use line
                 .path("/")
-                .matches(predicate); // Use the custom predicate
+                .json_body_partial(expected_partial_body.to_string()); // Use json_body_partial
             then.status(200).body("{ \"status\": \"ok\" }");
         })
         .await;

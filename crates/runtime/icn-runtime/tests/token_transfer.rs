@@ -1,18 +1,15 @@
 #![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use icn_economics::{LedgerKey, ResourceType};
+use icn_economics::mana::{InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
 use icn_identity::{Did, KeyPair, ScopeKey};
 use icn_runtime::{
-    Proposal, ProposalState, QuorumStatus, Runtime, RuntimeContext, RuntimeContextBuilder,
-    RuntimeStorage, VmContext,
+    Proposal,
+    Runtime, RuntimeContextBuilder, RuntimeStorage, MemStorage, VmContext,
 };
-use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
+use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
 use wasm_encoder::{
     CodeSection, ConstExpr, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
     Instruction, Module, TypeSection, ValType,
@@ -85,15 +82,15 @@ impl RuntimeStorage for MockRuntimeStorage {
 }
 
 #[tokio::test]
-async fn test_transfer_tokens_wasm() -> Result<()> {
-    let sender_keypair = KeyPair::generate();
-    let sender_did = sender_keypair.did.clone();
-    let receiver_keypair = KeyPair::generate();
-    let receiver_did = receiver_keypair.did.clone();
-
-    let storage = Arc::new(MockRuntimeStorage::default());
-    let mut runtime =
+async fn test_transfer_tokens_success() -> Result<()> {
+    let storage = Arc::new(MemStorage::new());
+    let mut runtime: Runtime<InMemoryManaLedger> =
         Runtime::new(storage.clone()).expect("Failed to create runtime in token_transfer test");
+
+    let sender_kp = KeyPair::generate();
+    let sender_did = sender_kp.did.clone();
+    let receiver_kp = KeyPair::generate();
+    let receiver_did = receiver_kp.did.clone();
 
     let context = RuntimeContextBuilder::new()
         .with_executor_id(sender_did.to_string())

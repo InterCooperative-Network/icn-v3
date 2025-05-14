@@ -18,6 +18,17 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use wat::parse_str;
+use icn_identity::{Did, KeyPair};
+use icn_runtime::{
+    MemStorage,
+    Runtime,
+    RuntimeContext,
+    RuntimeContextBuilder,
+    RuntimeError,
+    RuntimeStorage,
+};
+use icn_runtime::{Runtime, RuntimeContextBuilder, VmContext};
+use icn_runtime::{InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
 
 /// Mock storage for testing
 #[derive(Clone, Default)]
@@ -237,4 +248,30 @@ async fn test_resource_enforcement() -> Result<()> {
     };
 
     Ok(())
+}
+
+fn setup_runtime_with_mana_ledger() -> (Arc<Runtime>, Arc<InMemoryManaLedger>) {
+    let storage = Arc::new(MemStorage::new());
+    let node_keypair = KeyPair::generate();
+    let node_did = node_keypair.did.clone();
+
+    // Create a ManaLedger (InMemoryManaLedger for testing)
+    let mana_ledger = Arc::new(InMemoryManaLedger::new());
+
+    // Policy for regeneration (example: 1 mana per second)
+    let policy = RegenerationPolicy::new(1, 1.0); // 1 mana per 1 unit of time (e.g. second)
+
+    // Create ManaRegenerator
+    let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
+
+    let context = Arc::new(
+        RuntimeContextBuilder::<InMemoryManaLedger>::new() // Add generic type here
+            .with_identity(node_keypair.clone())
+            .with_executor_id(node_did.to_string())
+            .with_mana_regenerator(mana_regenerator.clone()) // Add ManaRegenerator
+            .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new())) // Add DagStore
+            .build(),
+    );
+
+    (Runtime::with_context(storage, context), mana_ledger)
 }

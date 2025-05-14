@@ -94,15 +94,17 @@ fn create_test_runtime_with_mock_updater() -> (Runtime<InMemoryManaLedger>, Arc<
     // Create a default identity for the runtime itself
     let runtime_keypair = IcnKeyPair::generate();
     let runtime_did_str = runtime_keypair.did.to_string();
+    let mana_ledger = Arc::new(InMemoryManaLedger::new());
+    let policy = RegenerationPolicy::new(1,1.0);
+    let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
     let context = Arc::new(
-        RuntimeContextBuilder::new()
+        RuntimeContextBuilder::<InMemoryManaLedger>::new()
             .with_identity(runtime_keypair) // Runtime's own identity
             .with_executor_id(runtime_did_str) // Runtime's DID as executor (can be overridden in VmContext if needed)
             .with_federation_id("test-federation-for-scope".to_string()) // Used for coop/community labels for now
-            // .with_dag_store(...) // RuntimeContextBuilder might need a DagStore
-            // If SharedDagStore::new() is available and takes no args:
             .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new()))
+            .with_mana_regenerator(mana_regenerator)
             .build(),
     );
 
@@ -196,10 +198,10 @@ async fn test_anchor_receipt_with_positive_mana_cost_deducts_mana() {
     assert_eq!(deductions.len(), 1, "Expected one mana deduction call");
 
     let deduction = &deductions[0];
-    assert_eq!(deduction.executor_did, executor_did);
-    assert_eq!(deduction.amount, 100);
-    assert_eq!(deduction.coop_id, "test-federation-for-scope"); // From RuntimeContext federation_id
-    assert_eq!(deduction.community_id, "test-federation-for-scope"); // From RuntimeContext federation_id
+    assert_eq!(deduction.0, executor_did);
+    assert_eq!(deduction.1, 100);
+    assert_eq!(deduction.2, "test-federation-for-scope");
+    assert_eq!(deduction.3, "test-federation-for-scope");
 }
 
 #[tokio::test]
