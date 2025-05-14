@@ -1,9 +1,7 @@
 // use crate::config::RuntimeConfig; // Removed unused import
-use crate::mana::ManaLedgerService;
 // use icn_core_vm::{HostContext, ResourceLimits}; // Removed HostContext, ResourceLimits. If VmType is used, it's on a different line or this import is now empty.
-use icn_core_vm::VmType; // Assuming this is a separate, used import.
 use icn_identity::{KeyPair, TrustValidator}; // Removed Did, KeyPair as IcnKeyPair, TrustBundle
-use icn_metrics::runtime::RuntimeMetrics;
+// use icn_metrics::runtime::RuntimeMetrics;
 // use icn_reputation_integration::{HttpReputationUpdater, ReputationUpdater}; // Removed as per clippy
 // use icn_mesh_protocol::MeshJobServiceConfig; // Removed as per clippy (grep showed only import line)
 use icn_economics::{Economics, LedgerKey, mana::ManaManager, ResourceAuthorizationPolicy}; // ResourceType removed

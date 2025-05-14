@@ -11,11 +11,12 @@ use std::sync::Arc;
 // Define standard label names
 const LABEL_COOP_ID: &str = "coop_id";
 const LABEL_COMMUNITY_ID: &str = "community_id";
+// pub const LABEL_ERROR_TYPE: &str = "error_type"; // COMMENTED OUT
 const LABEL_ISSUER_DID: &str = "issuer_did";
 const LABEL_EXECUTOR_DID: &str = "executor_did";
 const LABEL_RESULT: &str = "result";
 const LABEL_SUCCESS: &str = "success";
-const LABEL_ERROR_TYPE: &str = "error_type";
+// const LABEL_VERIFICATION_OUTCOME: &str = "outcome"; // COMMENTED OUT
 
 // Example buckets for score deltas, adjust as needed
 const SCORE_DELTA_BUCKETS: &[f64] = &[

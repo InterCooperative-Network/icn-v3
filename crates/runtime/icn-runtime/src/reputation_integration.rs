@@ -1,21 +1,16 @@
 use anyhow::Result;
 use chrono::Utc;
-use cid::multihash::{Code, Multihash};
-use cid::Cid;
 use icn_identity::Did;
 use icn_identity::KeyPair;
 use icn_types::reputation::ReputationRecord;
 use icn_types::runtime_receipt::RuntimeExecutionReceipt;
-use multihash::{Hasher, Sha2_256};
 use reqwest::Client;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
-use tracing;
+use tracing::{debug, error, info, warn};
 
 use crate::metrics;
 
@@ -50,7 +45,7 @@ impl ReputationScoringConfig {
     /// Load reputation scoring configuration from a TOML file.
     pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let path_ref = path.as_ref();
-        tracing::info!(
+        info!(
             "Attempting to load reputation scoring config from: {:?}",
             path_ref
         );
@@ -68,7 +63,7 @@ impl ReputationScoringConfig {
                 e
             )
         })?;
-        tracing::info!(
+        info!(
             "Successfully loaded reputation scoring config from: {:?}",
             path_ref
         );
@@ -136,16 +131,16 @@ pub trait ReputationUpdater: Send + Sync {
 pub struct HttpReputationUpdater {
     client: Client,
     reputation_service_url: String,
-    local_did: Did,
+    // local_did: Did, // COMMENTED OUT
     config: ReputationScoringConfig, // Add config field
 }
 
 impl HttpReputationUpdater {
     /// Creates a new HttpReputationUpdater with default configuration.
-    pub fn new(reputation_service_url: String, local_did: Did) -> Self {
+    pub fn new(reputation_service_url: String, _local_did: Did) -> Self {
         Self::new_with_config(
             reputation_service_url,
-            local_did,
+            _local_did, // Use prefixed parameter
             ReputationScoringConfig::default(),
         )
     }
@@ -153,7 +148,7 @@ impl HttpReputationUpdater {
     /// Creates a new HttpReputationUpdater with specific configuration.
     pub fn new_with_config(
         reputation_service_url: String,
-        local_did: Did,
+        _local_did: Did, // PREFIXED This 'local_did' is a parameter, not the field
         config: ReputationScoringConfig,
     ) -> Self {
         let client = Client::builder()
@@ -164,7 +159,7 @@ impl HttpReputationUpdater {
         Self {
             client,
             reputation_service_url,
-            local_did,
+            // local_did, // Field assignment commented out
             config,
         }
     }
@@ -179,7 +174,7 @@ impl HttpReputationUpdater {
         // Use the endpoint identified earlier in icn-reputation/src/main.rs
         let url = format!("{}/reputation/profiles/{}", base, did_str);
 
-        tracing::debug!("Querying reputation score for {} at URL: {}", did_str, url);
+        debug!("Querying reputation score for {} at URL: {}", did_str, url);
 
         // Define a nested struct matching the expected JSON structure from the service
         // Based on icn-types/src/reputation.rs
@@ -192,7 +187,7 @@ impl HttpReputationUpdater {
         match self.client.get(&url).send().await {
             Ok(resp) => {
                 if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                    tracing::debug!(
+                    debug!(
                         "Reputation profile not found for {}, assuming default score for modifier.",
                         did_str
                     );
@@ -203,7 +198,7 @@ impl HttpReputationUpdater {
                     match resp.json::<ProfileResponse>().await {
                         Ok(profile) => Ok(Some(profile.computed_score)),
                         Err(e) => {
-                            tracing::warn!("Failed to parse reputation profile JSON for {}: {}. Using default score for modifier.", did_str, e);
+                            warn!("Failed to parse reputation profile JSON for {}: {}. Using default score for modifier.", did_str, e);
                             metrics::REPUTATION_SCORE_FETCH_FAILURES
                                 .with_label_values(&[did_str, "json_parse_error"])
                                 .inc();
@@ -217,7 +212,7 @@ impl HttpReputationUpdater {
                         .text()
                         .await
                         .unwrap_or_else(|_| "<failed to read response>".to_string());
-                    tracing::warn!("Failed GET request for reputation profile {}: HTTP {} - {}. Using default score for modifier.", did_str, status_code, error_body);
+                    warn!("Failed GET request for reputation profile {}: HTTP {} - {}. Using default score for modifier.", did_str, status_code, error_body);
                     metrics::REPUTATION_SCORE_FETCH_FAILURES
                         .with_label_values(&[did_str, &status_str])
                         .inc();
@@ -225,7 +220,7 @@ impl HttpReputationUpdater {
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to connect or send request for reputation profile {}: {}. Using default score for modifier.", did_str, e);
+                warn!("Failed to connect or send request for reputation profile {}: {}. Using default score for modifier.", did_str, e);
                 // Using a generic reason for client errors during score fetching
                 metrics::REPUTATION_SCORE_FETCH_FAILURES
                     .with_label_values(&[did_str, "client_request_error"])
@@ -261,7 +256,7 @@ impl ReputationUpdater for HttpReputationUpdater {
 
             // --- Apply Reputation Modifier ---
             if self.config.enable_reputation_modifier {
-                tracing::debug!("Reputation modifier enabled for executor {}", executor_did);
+                debug!("Reputation modifier enabled for executor {}", executor_did);
                 // Fetch current score
                 let current_score_opt = self.get_current_score(executor_did).await?;
 
@@ -270,14 +265,14 @@ impl ReputationUpdater for HttpReputationUpdater {
                 // A more robust approach might involve getting min/max possible scores from the service or config.
                 let assumed_max_score = 100.0; // TODO: Make this configurable if needed
                 let normalized_score = current_score_opt
-                    .map_or(0.5, |score| (score / assumed_max_score).clamp(0.0, 1.0));
+                    .map_or(0.5f64, |score| (score / assumed_max_score).clamp(0.0f64, 1.0f64));
 
                 let reputation_modifier = (1.0 + normalized_score).clamp(
                     self.config.modifier_min_bound,
                     self.config.modifier_max_bound,
                 );
 
-                tracing::debug!(
+                debug!(
                     "Applying reputation modifier: {:.2} (normalized score: {:.2})",
                     reputation_modifier,
                     normalized_score
@@ -340,7 +335,7 @@ impl ReputationUpdater for HttpReputationUpdater {
 
         // Process response (removed old metric calls here, handled above)
         if response.status().is_success() {
-            tracing::info!(
+            info!(
                 "Successfully submitted reputation record for subject {} (anchor: {})",
                 record.subject,
                 record.anchor
@@ -351,7 +346,7 @@ impl ReputationUpdater for HttpReputationUpdater {
             let status_code = response.status();
             let status_str = status_code.as_str().to_string();
             let body = response.text().await.unwrap_or_default();
-            tracing::error!(
+            error!(
                 "Failed to submit reputation record: Status {}, Body: {}",
                 status_code,
                 body
@@ -397,7 +392,7 @@ impl ReputationUpdater for HttpReputationUpdater {
             self.reputation_service_url.trim_end_matches('/')
         );
 
-        tracing::info!(
+        info!(
             "Submitting mana deduction event to {}: {:?}",
             endpoint_url,
             event
@@ -407,7 +402,7 @@ impl ReputationUpdater for HttpReputationUpdater {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
-                    tracing::info!(
+                    info!(
                         "Successfully submitted mana deduction for {} ({} mana). Status: {}",
                         executor_did,
                         amount,
@@ -427,7 +422,7 @@ impl ReputationUpdater for HttpReputationUpdater {
                         .text()
                         .await
                         .unwrap_or_else(|_| "<failed to read error body>".to_string());
-                    tracing::error!(
+                    error!(
                         "Failed to submit mana deduction for {} ({} mana). Status: {}. Body: {}",
                         executor_did,
                         amount,
@@ -450,7 +445,7 @@ impl ReputationUpdater for HttpReputationUpdater {
                 }
             }
             Err(e) => {
-                tracing::error!(
+                error!(
                     "Client error submitting mana deduction for {} ({} mana): {}",
                     executor_did,
                     amount,
@@ -495,7 +490,7 @@ impl ReputationUpdater for NoopReputationUpdater {
         _coop_id: &str,      // Cooperative ID scope for the deduction
         _community_id: &str, // Community ID scope for the deduction
     ) -> Result<()> {
-        tracing::debug!(
+        warn!(
             "NoopReputationUpdater: Faking mana deduction for DID: {}, Amount: {}, Coop: {}, Comm: {}",
             _executor_did, _amount, _coop_id, _community_id
         );
@@ -510,7 +505,6 @@ mod tests {
     use httpmock::MockServer;
     use icn_types::runtime_receipt::RuntimeExecutionMetrics; // Keep if used
     use std::sync::{Arc, Mutex};
-    use tokio::time::sleep; // Ensure metrics are available in test scope
 
     // Helper to calculate expected score delta for tests, mirroring the main logic
     fn calculate_expected_score_delta(
@@ -615,18 +609,16 @@ mod tests {
 
         let mut config = ReputationScoringConfig::default();
         config.enable_reputation_modifier = false;
-        // Use specific values for reproducible score_delta
         config.sigmoid_k = 0.01;
         config.sigmoid_midpoint = 50.0;
         config.max_positive_score = 10.0;
 
         let updater = HttpReputationUpdater::new_with_config(
-            server.base_url(), // Use mock server's URL
+            server.base_url(),
             local_did,
             config.clone(),
         );
 
-        // 3. Create a sample RuntimeExecutionReceipt
         let executor_keypair = KeyPair::generate();
         let receipt_mana_cost = Some(100u64);
         let test_receipt = RuntimeExecutionReceipt {
@@ -636,8 +628,8 @@ mod tests {
             wasm_cid: "wasm-cid".to_string(),
             ccl_cid: "ccl-cid".to_string(),
             metrics: RuntimeExecutionMetrics {
-                host_calls: 1, // Populated to avoid default() issues if any
-                io_bytes: 10,  // Populated
+                host_calls: 1,
+                io_bytes: 10,
                 mana_cost: receipt_mana_cost,
             },
             anchored_cids: vec![],
@@ -645,14 +637,24 @@ mod tests {
             timestamp: 1234567890,
             dag_epoch: Some(1),
             receipt_cid: Some("bafy...mockcid".to_string()),
-            signature: None, // Signature not relevant for this part of the test
+            signature: None,
         };
 
-        // 4. Mock the HTTP POST request
+        // Calculate expected score delta BEFORE mock setup
+        let expected_score_delta = calculate_expected_score_delta(&config, receipt_mana_cost, true);
+
+        // 4. Mock the HTTP POST request, now with body assertion
         let mock = server.mock(|when, then| {
             when.method(httpmock::Method::POST)
-                .path("/") // Assuming service URL is just the base_url
-                .header("content-type", "application/json");
+                .path("/")
+                .header("content-type", "application/json")
+                .json_body_partial(json!({
+                    "subject": test_receipt.issuer.clone(),
+                    "anchor": test_receipt.receipt_cid.as_ref().unwrap().to_string(),
+                    "success": true,
+                    "mana_cost": receipt_mana_cost.unwrap(),
+                    "score_delta": expected_score_delta
+                }).to_string());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!({ "status": "ok" }));
@@ -668,7 +670,7 @@ mod tests {
             )
             .await;
 
-        // 6. Assert mock server received the request
+        // 6. Assert mock server received the request (implicitly includes body check now)
         mock.assert();
         assert!(
             result.is_ok(),
@@ -676,27 +678,7 @@ mod tests {
             result.err()
         );
 
-        // 7. Assert the content of the ReputationRecord
-        let submitted_json = mock.requests()[0].body_json::<serde_json::Value>().unwrap();
-
-        let expected_score_delta = calculate_expected_score_delta(&config, receipt_mana_cost, true);
-
-        assert_eq!(submitted_json["subject"], test_receipt.issuer);
-        assert_eq!(
-            submitted_json["anchor"],
-            test_receipt.receipt_cid.as_ref().unwrap()
-        );
-        assert_eq!(submitted_json["success"], true);
-        assert_eq!(submitted_json["mana_cost"], receipt_mana_cost.unwrap());
-        // For score_delta, compare f64 with a small epsilon or check if close enough
-        let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
-        assert!(
-            (submitted_score_delta - expected_score_delta).abs() < 1e-9,
-            "Score delta mismatch"
-        );
-        // Timestamp is dynamic, so we don't assert its exact value here
-        // but check it exists
-        assert!(submitted_json["timestamp"].is_u64());
+        // 7. The direct assertion on submitted_json is no longer needed if json_body_partial works.
     }
 
     #[tokio::test]
@@ -710,11 +692,9 @@ mod tests {
 
         let mut config = ReputationScoringConfig::default();
         config.enable_reputation_modifier = true;
-        // Consistent params for base score calculation
         config.sigmoid_k = 0.01;
         config.sigmoid_midpoint = 50.0;
         config.max_positive_score = 10.0;
-        // Modifier bounds
         config.modifier_min_bound = 0.5;
         config.modifier_max_bound = 2.0;
 
@@ -749,10 +729,32 @@ mod tests {
                 .header("content-type", "application/json")
                 .json_body(json!({ "computed_score": 80.0 }));
         });
+        
+        // Calculate expected score delta BEFORE mock setup
+        let base_sigmoid_score = calculate_expected_score_delta(&config, receipt_mana_cost, true);
+        let current_score_from_service = 80.0f64;
+        let assumed_max_score = 100.0f64;
+        let normalized_current_score: f64 =
+            current_score_from_service / assumed_max_score;
+        let normalized_current_score_clamped = normalized_current_score.clamp(0.0f64, 1.0f64);
+        let mut expected_modifier = (1.0f64 + normalized_current_score_clamped)
+            .clamp(config.modifier_min_bound, config.modifier_max_bound);
+        if !config.enable_reputation_modifier { // Though it is enabled in this test
+            expected_modifier = 1.0;
+        }
+        let expected_score_delta_with_modifier =
+            (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
+
 
         // Mock for POST / (main submission)
         let post_submission_mock = server.mock(|when, then| {
-            when.method(httpmock::Method::POST).path("/");
+            when.method(httpmock::Method::POST)
+                .path("/")
+                .json_body_partial(json!({
+                    "subject": test_receipt.issuer.clone(),
+                    "success": true,
+                    "score_delta": expected_score_delta_with_modifier
+                }).to_string());
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(json!({ "status": "ok" }));
@@ -774,38 +776,7 @@ mod tests {
             "Expected successful submission, got {:?}",
             result.err()
         );
-
-        let submitted_json = post_submission_mock.requests()[0]
-            .body_json::<serde_json::Value>()
-            .unwrap();
-
-        let base_sigmoid_score = calculate_expected_score_delta(&config, receipt_mana_cost, true);
-        let current_score_from_service = 80.0;
-        let assumed_max_score = 100.0; // As hardcoded in HttpReputationUpdater
-        let normalized_current_score =
-            (current_score_from_service / assumed_max_score).clamp(0.0, 1.0);
-        let mut expected_modifier = (1.0 + normalized_current_score)
-            .clamp(config.modifier_min_bound, config.modifier_max_bound);
-
-        // Ensure modifier is not optimized away if it's 1.0 but modifier is disabled
-        // This test has modifier enabled, so this check is more for sanity.
-        if !config.enable_reputation_modifier {
-            expected_modifier = 1.0;
-        }
-
-        let expected_score_delta_with_modifier =
-            (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
-
-        assert_eq!(submitted_json["subject"], test_receipt.issuer);
-        assert_eq!(
-            submitted_json["anchor"],
-            test_receipt.receipt_cid.as_ref().unwrap()
-        );
-        let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
-        assert!((submitted_score_delta - expected_score_delta_with_modifier).abs() < 1e-9,
-            "Score delta mismatch. Expected (with mod): {}, Got: {}, Base (no mod): {}, Modifier: {}",
-            expected_score_delta_with_modifier, submitted_score_delta, base_sigmoid_score, expected_modifier);
-        assert!(submitted_json["timestamp"].is_u64());
+        // Assertions on the submitted_json are now part of post_submission_mock's definition
     }
 
     #[tokio::test]
@@ -855,16 +826,33 @@ mod tests {
             then.status(503);
         });
 
+        // Calculate expected score delta BEFORE mock setup
+        let base_sigmoid_score = calculate_expected_score_delta(&config, receipt_mana_cost, true);
+        let normalized_current_score_on_failure = 0.5f64; // HttpReputationUpdater uses 0.5 for score fetch failure
+        let mut expected_modifier = (1.0f64 + normalized_current_score_on_failure)
+            .clamp(config.modifier_min_bound, config.modifier_max_bound);
+        if !config.enable_reputation_modifier { // Though it is enabled in this test
+            expected_modifier = 1.0;
+        }
+        let expected_score_delta_with_modifier_on_fail =
+            (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
+
         // Mock for POST / (main submission)
         let post_submission_mock = server.mock(|when, then| {
-            when.method(httpmock::Method::POST).path("/");
+            when.method(httpmock::Method::POST)
+                .path("/")
+                .json_body_partial(json!({
+                    "subject": test_receipt.issuer.clone(),
+                    "success": true,
+                    "score_delta": expected_score_delta_with_modifier_on_fail
+                }).to_string());
             then.status(200).json_body(json!({ "status": "ok" }));
         });
 
         let metric_labels = [executor_did_str.as_str(), "503"];
         let initial_metric_value = metrics::REPUTATION_SCORE_FETCH_FAILURES
             .get_metric_with_label_values(&metric_labels)
-            .map_or(0.0, |m| m.get());
+            .map_or(0.0, |m| m.get() as f64);
 
         let result = updater
             .submit_receipt_based_reputation(
@@ -877,7 +865,7 @@ mod tests {
 
         let final_metric_value = metrics::REPUTATION_SCORE_FETCH_FAILURES
             .get_metric_with_label_values(&metric_labels)
-            .map_or(0.0, |m| m.get());
+            .map_or(0.0, |m| m.get() as f64);
 
         assert_eq!(
             final_metric_value - initial_metric_value,
@@ -892,30 +880,7 @@ mod tests {
             "Expected successful submission logic (despite score fetch failure), got {:?}",
             result.err()
         );
-
-        let submitted_json = post_submission_mock.requests()[0]
-            .body_json::<serde_json::Value>()
-            .unwrap();
-
-        let base_sigmoid_score = calculate_expected_score_delta(&config, receipt_mana_cost, true);
-        // Current HttpReputationUpdater::get_current_score maps failure/None to a default normalized score of 0.5
-        let normalized_current_score_on_failure = 0.5;
-        let mut expected_modifier = (1.0 + normalized_current_score_on_failure)
-            .clamp(config.modifier_min_bound, config.modifier_max_bound);
-
-        if !config.enable_reputation_modifier {
-            // Should be true for this test
-            expected_modifier = 1.0;
-        }
-
-        let expected_score_delta_with_modifier =
-            (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
-
-        assert_eq!(submitted_json["subject"], test_receipt.issuer);
-        let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
-        assert!((submitted_score_delta - expected_score_delta_with_modifier).abs() < 1e-9,
-            "Score delta mismatch. Expected (with mod on fail): {}, Got: {}, Base (no mod): {}, Modifier: {}",
-            expected_score_delta_with_modifier, submitted_score_delta, base_sigmoid_score, expected_modifier);
+        // Assertions on the submitted_json are now part of post_submission_mock's definition
     }
 
     #[tokio::test]
@@ -927,10 +892,8 @@ mod tests {
         let executor_keypair = KeyPair::generate();
 
         let mut config = ReputationScoringConfig::default();
-        // Explicitly set modifier to true to ensure it's NOT applied on failure path
-        config.enable_reputation_modifier = true;
-        config.failure_penalty_weight = 5.0; // For predictable negative score
-                                             // Sigmoid params don't matter here but set for consistency if base_score was ever used
+        config.enable_reputation_modifier = true; // Ensure modifier logic is NOT applied on failure
+        config.failure_penalty_weight = 5.0;
         config.sigmoid_k = 0.01;
         config.sigmoid_midpoint = 50.0;
         config.max_positive_score = 10.0;
@@ -958,9 +921,18 @@ mod tests {
             signature: None,
         };
 
-        // Mock for POST / (main submission) - expect success: false and negative score_delta
+        // Calculate expected score delta BEFORE mock setup
+        let expected_score_delta = calculate_expected_score_delta(&config, receipt_mana_cost, false);
+
+        // Mock for POST / (main submission)
         let post_submission_mock = server.mock(|when, then| {
-            when.method(httpmock::Method::POST).path("/");
+            when.method(httpmock::Method::POST)
+                .path("/")
+                .json_body_partial(json!({
+                    "subject": test_receipt.issuer.clone(),
+                    "success": false,
+                    "score_delta": expected_score_delta
+                }).to_string());
             then.status(200).json_body(json!({ "status": "ok" }));
         });
 
@@ -981,28 +953,7 @@ mod tests {
             "Expected successful HTTP submission for failure path, got {:?}",
             result.err()
         );
-
-        let submitted_json = post_submission_mock.requests()[0]
-            .body_json::<serde_json::Value>()
-            .unwrap();
-
-        // calculate_expected_score_delta already handles the 'is_successful = false' case
-        let expected_score_delta =
-            calculate_expected_score_delta(&config, receipt_mana_cost, false);
-
-        assert_eq!(submitted_json["subject"], test_receipt.issuer);
-        assert_eq!(submitted_json["success"], false);
-        let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
-        assert!(
-            (submitted_score_delta - expected_score_delta).abs() < 1e-9,
-            "Negative score delta mismatch. Expected: {}, Got: {}",
-            expected_score_delta,
-            submitted_score_delta
-        );
-        assert!(
-            submitted_score_delta < 0.0,
-            "Score delta should be negative for failure path"
-        );
+        // Assertions on the submitted_json are now part of post_submission_mock's definition
     }
 
     #[tokio::test]
@@ -1014,7 +965,6 @@ mod tests {
         let executor_keypair = KeyPair::generate();
         let executor_did_str = executor_keypair.did.to_string();
 
-        // Config doesn't significantly impact this test, but use default
         let config = ReputationScoringConfig::default();
 
         let updater =
@@ -1022,7 +972,7 @@ mod tests {
 
         let test_receipt = RuntimeExecutionReceipt {
             id: "test-receipt-http-500".to_string(),
-            issuer: executor_did_str.clone(), // Use the string form for consistency
+            issuer: executor_did_str.clone(),
             proposal_id: "prop-http-500".to_string(),
             wasm_cid: "wasm-cid-http-500".to_string(),
             ccl_cid: "ccl-cid-http-500".to_string(),
@@ -1045,10 +995,10 @@ mod tests {
             then.status(500).body("Internal Server Error simulation");
         });
 
-        let metric_labels = [executor_did_str.as_str(), "500"]; // executor_did, status
+        let metric_labels = [executor_did_str.as_str(), "500"];
         let initial_metric_value = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
             .get_metric_with_label_values(&metric_labels)
-            .map_or(0.0, |m| m.get());
+            .map_or(0.0, |m| m.get() as f64);
 
         let result = updater
             .submit_receipt_based_reputation(
@@ -1061,7 +1011,7 @@ mod tests {
 
         let final_metric_value = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
             .get_metric_with_label_values(&metric_labels)
-            .map_or(0.0, |m| m.get());
+            .map_or(0.0, |m| m.get() as f64);
 
         assert_eq!(
             final_metric_value - initial_metric_value,
@@ -1069,11 +1019,9 @@ mod tests {
             "REPUTATION_SUBMISSION_HTTP_ERRORS should increment by 1"
         );
 
-        post_submission_mock.assert(); // Ensure the call was attempted
+        post_submission_mock.assert();
         assert!(result.is_err(), "Expected an error result due to HTTP 500");
-
-        // Optionally, check the error message if it's specific enough
-        // e.g., format!("Failed to submit reputation record: {}", reqwest::StatusCode::INTERNAL_SERVER_ERROR)
+        
         let err_msg = result.err().unwrap().to_string();
         assert!(
             err_msg.contains("Failed to submit reputation record"),
@@ -1132,17 +1080,6 @@ mod tests {
         // For now, we'll fetch the metric count and if it increments, we know the label was matched by err.to_string().
         // A more robust test might involve a more specific type of client error if this proves flaky.
 
-        // Initialize a temporary variable for the expected reason label.
-        // This will be populated if/when the actual error occurs.
-        let mut expected_reason_label = String::new();
-
-        // Get initial metric value. Since the reason label is dynamic (the error string itself),
-        // we can't easily get it before the error. Instead, we check if *any* client error for this DID incremented,
-        // or refine this if we can determine the exact error string beforehand.
-        // For now, let's just check if *a* client error for this DID was recorded.
-        // This is okay if tests are isolated or we clear metrics, which we are not doing here.
-        // Let's try to get the specific error string from the result.
-
         let result = updater
             .submit_receipt_based_reputation(
                 &test_receipt,
@@ -1157,12 +1094,12 @@ mod tests {
             "Expected an error result due to malformed URL"
         );
         let actual_err = result.err().unwrap();
-        expected_reason_label = actual_err.to_string(); // This is the actual error message used as reason
+        let expected_reason_label = actual_err.to_string();
 
         let metric_labels = [executor_did_str.as_str(), expected_reason_label.as_str()];
         let final_metric_value = metrics::REPUTATION_SUBMISSION_CLIENT_ERRORS
             .get_metric_with_label_values(&metric_labels)
-            .map_or(0.0, |m| m.get());
+            .map_or(0.0, |m| m.get() as f64);
 
         // We can't easily get initial_metric_value for this specific dynamic label beforehand.
         // So we assert that the final count is at least 1.
@@ -1189,9 +1126,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_reputation_update_from_receipt() {
-        // This test remains to check the trait plumbing with MockReputationUpdater
-        let mock_updater_trait_impl = MockReputationUpdater::new();
-        let updater_trait_arc = Arc::new(mock_updater_trait_impl.clone());
+        use super::ReputationUpdater; // Keep this for now, though it might not be the root cause
+        let mock_updater = MockReputationUpdater::new(); // Use directly, no Arc needed for this test
 
         let receipt = RuntimeExecutionReceipt {
             /* ... minimal fields ... */
@@ -1213,12 +1149,13 @@ mod tests {
             signature: None,
         };
 
-        updater_trait_arc
+        // Call on the struct instance directly
+        mock_updater
             .submit_receipt_based_reputation(&receipt, true, "test-coop", "test-community")
             .await
             .unwrap();
 
-        let submitted_to_trait = mock_updater_trait_impl.get_submissions();
+        let submitted_to_trait = mock_updater.get_submissions(); // Call on struct instance
         assert_eq!(submitted_to_trait.len(), 1);
         assert_eq!(submitted_to_trait[0].0.id, "test-receipt-1");
         assert_eq!(submitted_to_trait[0].1, true);

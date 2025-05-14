@@ -1,30 +1,13 @@
 use anyhow::{anyhow, Result};
-// use once_cell::sync::Lazy; // Removed
-// use serde::{Deserialize, Serialize};
-// use std::collections::HashMap; // Removed
 use std::path::Path;
-// use std::process::Command; // To be removed if compile_dsl_to_wasm is removed
-use tempfile::TempDir; // Keeping TempDir for now
+use tempfile::TempDir;
 use thiserror::Error;
-// use icn_ccl_dsl::{ActionStep, ResourceType}; // This line removed
-// wasm_encoder imports might be removable if generate_wasm_from_dsl_opcodes is removed
-/* // Commenting out wasm_encoder imports for now, will be removed if generate_wasm_from_dsl_opcodes is removed
-use wasm_encoder::{
-    CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType, BlockType,
-};
-*/
-
-use std::error::Error;
-use std::fs;
-use std::io::{self, Read};
-
-use pest::Parser;
-use pest_derive::Parser;
+use serde_json; // For compile_to_dsl_string
+use icn_ccl_dsl; // For lower_ccl_to_dsl_ast and compile_to_wasm
+use icn_ccl_wasm_codegen; // For compile_to_wasm
+use log::error; // Only error was not flagged as unused
 
 pub mod lower;
-
-mod parser;
 
 /// Error types specific to the CCL compiler
 #[derive(Error, Debug)]

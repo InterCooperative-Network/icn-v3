@@ -2,13 +2,12 @@ use crate::RuntimeStorage;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use bincode;
-use sled::{Db, IVec};
+use sled::Db;
 use std::path::Path;
-use std::sync::Arc;
-
-// Import necessary types used by the trait methods
-use crate::{MeshExecutionReceipt, Proposal}; // Using crate::Proposal now
-use icn_types::runtime_receipt::RuntimeExecutionReceipt;
+use crate::{
+    Proposal,
+    RuntimeExecutionReceipt,
+};
 
 /// A persistent storage backend using Sled embedded database.
 pub struct SledStorage {

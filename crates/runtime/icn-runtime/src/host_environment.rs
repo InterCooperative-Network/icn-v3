@@ -1,10 +1,8 @@
 use crate::context::RuntimeContext;
 use crate::job_execution_context::JobExecutionContext;
 use anyhow::{anyhow, Result};
-use icn_core_vm::HostContext as CoreVmHostContext;
 use icn_economics::ResourceType;
 use icn_identity::Did;
-use icn_identity::ScopeKey;
 use host_abi::{
     HostAbiError, LogLevel, MeshHostAbi,
 };
@@ -65,22 +63,22 @@ impl ConcreteHostEnvironment {
         self
     }
 
-    /// Determine the accounting scope key for mana operations.
-    fn scope_key(&self) -> ScopeKey {
-        // 1) If explicit coop/community overrides exist, honour them first.
-        if let Some(coop) = &self.coop_id {
-            ScopeKey::Cooperative(coop.to_string())
-        } else if let Some(comm) = &self.community_id {
-            ScopeKey::Community(comm.to_string())
-        } else if let Some(index) = &self.rt.identity_index {
-            index.resolve_scope_key(&self.caller_did)
-        } else if let Some(fid) = &self.rt.federation_id {
-            // Fallback to federation scope if runtime context specifies it explicitly
-            ScopeKey::Federation(fid.to_string())
-        } else {
-            ScopeKey::Individual(self.caller_did.to_string())
-        }
-    }
+    // /// Determine the accounting scope key for mana operations.
+    // fn scope_key(&self) -> ScopeKey { // COMMENTED OUT
+    //     // 1) If explicit coop/community overrides exist, honour them first.
+    //     if let Some(coop) = &self.coop_id {
+    //         ScopeKey::Cooperative(coop.to_string())
+    //     } else if let Some(comm) = &self.community_id {
+    //         ScopeKey::Community(comm.to_string())
+    //     } else if let Some(index) = &self.rt.identity_index {
+    //         index.resolve_scope_key(&self.caller_did)
+    //     } else if let Some(fid) = &self.rt.federation_id {
+    //         // Fallback to federation scope if runtime context specifies it explicitly
+    //         ScopeKey::Federation(fid.to_string())
+    //     } else {
+    //         ScopeKey::Individual(self.caller_did.to_string())
+    //     }
+    // }
 
     pub fn check_resource_authorization(&self, _rt_type: ResourceType, _amt: u64) -> i32 {
         // TODO: Implement actual resource authorization logic
@@ -466,7 +464,8 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         did_len: u32,
     ) -> Result<i64, anyhow::Error> {
         let scope_key_val = if did_len == 0 {
-            self.scope_key()
+            // self.scope_key()
+            ScopeKey::Individual(self.caller_did.to_string())
         } else {
             let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
             ScopeKey::Individual(did_str)
@@ -489,7 +488,8 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         amount: u64,
     ) -> Result<i32, anyhow::Error> {
         let scope_key_val = if did_len == 0 {
-            self.scope_key()
+            // self.scope_key()
+            ScopeKey::Individual(self.caller_did.to_string())
         } else {
             let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
             ScopeKey::Individual(did_str)
@@ -635,8 +635,4 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         _did_len: u32,
         _amount: u64,
     ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_get_abi_version(&self) -> Result<i32, anyhow::Error> {
-        Ok(host_abi::ICN_HOST_ABI_VERSION)
-    }
 }

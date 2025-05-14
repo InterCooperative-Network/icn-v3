@@ -19,6 +19,7 @@ use icn_types::{
 use serde_cbor;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use icn_economics::mana::{InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
 
 // --- Mock Reputation Updater for Mana Deduction ---
 
@@ -32,18 +33,18 @@ struct ManaDeductionCall {
 
 #[derive(Clone, Debug, Default)]
 struct MockManaReputationUpdater {
-    mana_deductions: Arc<Mutex<Vec<ManaDeductionCall>>>,
+    deductions: Arc<Mutex<Vec<(Did, u64, String, String)>>>,
     // We can add tracking for submit_receipt_based_reputation if needed by other tests
     // For now, focusing on mana deduction.
 }
 
 impl MockManaReputationUpdater {
     fn new() -> Self {
-        Default::default()
+        Self { deductions: Arc::new(Mutex::new(Vec::new())) }
     }
 
-    fn get_mana_deductions(&self) -> Vec<ManaDeductionCall> {
-        self.mana_deductions.lock().unwrap().clone()
+    fn get_mana_deductions(&self) -> Vec<(Did, u64, String, String)> {
+        self.deductions.lock().unwrap().clone()
     }
 }
 
@@ -74,22 +75,19 @@ impl ReputationUpdater for MockManaReputationUpdater {
             "[MockManaReputationUpdater] submit_mana_deduction called for DID: {}, Amount: {}, Coop: {}, Comm: {}",
             executor_did, amount, coop_id, community_id
         );
-        self.mana_deductions
-            .lock()
-            .unwrap()
-            .push(ManaDeductionCall {
-                executor_did: executor_did.clone(),
-                amount,
-                coop_id: coop_id.to_string(),
-                community_id: community_id.to_string(),
-            });
+        self.deductions.lock().unwrap().push((
+            executor_did.clone(),
+            amount,
+            coop_id.to_string(),
+            community_id.to_string(),
+        ));
         Ok(())
     }
 }
 
 // --- Test Helper for Runtime Setup ---
 
-fn create_test_runtime_with_mock_updater() -> (Runtime, Arc<MockManaReputationUpdater>) {
+fn create_test_runtime_with_mock_updater() -> (Runtime<InMemoryManaLedger>, Arc<MockManaReputationUpdater>) {
     let storage = Arc::new(MemStorage::new());
     let mock_updater = Arc::new(MockManaReputationUpdater::new());
 

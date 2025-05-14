@@ -6,9 +6,7 @@ use host_abi::LogLevel;
 use icn_identity::Did;
 use icn_mesh_protocol::{JobInteractiveInputV1, P2PJobStatus};
 use icn_types::mesh::MeshJobParams;
-
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 
 // Conceptual internal representation of job permissions/capabilities.
 // This would be more complex in a real system, potentially derived from tokens or policies.

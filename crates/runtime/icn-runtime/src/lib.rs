@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use ed25519_dalek::VerifyingKey;
-use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
+use icn_core_vm::{ExecutionMetrics as CoreVmExecutionMetrics, ResourceLimits};
 use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, RegenerationPolicy};
 use icn_economics::ResourceType;
 use icn_identity::{Did, DidError, KeyPair as IcnKeyPair, TrustBundle, TrustValidationError};
@@ -15,7 +15,6 @@ use icn_types::mesh::{JobStatus as IcnJobStatus, MeshJob, MeshJobParams};
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use icn_types::VerifiableReceipt;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -27,22 +26,26 @@ use wasmtime::{
     Engine, Linker, Module, Store, Val,
 };
 
+use std::str::FromStr;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+
 use crate::config::RuntimeConfig;
 
 // Import the context module
-mod context;
+pub mod context;
 pub use context::RuntimeContext;
 pub use context::RuntimeContextBuilder;
 
 // Import the host environment module
-mod host_environment;
+pub mod host_environment;
 pub use host_environment::ConcreteHostEnvironment;
 
 // Import the job execution context module
 pub mod job_execution_context;
 
 // Import the wasm module
-mod wasm;
+pub mod wasm;
 pub use wasm::register_host_functions;
 
 // Import metrics module
@@ -58,7 +61,7 @@ use reputation_integration::{
 pub mod distribution_worker;
 
 // Import sled_storage module and type
-mod sled_storage;
+pub mod sled_storage;
 // use sled_storage::SledStorage;
 
 // Add imports for keypair loading/saving
@@ -344,9 +347,6 @@ pub struct Runtime<L: ManaLedger + Send + Sync + 'static> {
     /// Runtime configuration
     config: RuntimeConfig,
 
-    /// CoVM instance for executing WASM
-    vm: CoVm,
-
     /// Storage backend
     storage: Arc<dyn RuntimeStorage>,
 
@@ -358,9 +358,6 @@ pub struct Runtime<L: ManaLedger + Send + Sync + 'static> {
 
     /// Wasmtime linker
     linker: Linker<wasm::StoreData>,
-
-    /// Module cache
-    module_cache: Option<Arc<dyn ModuleCache>>,
 
     /// Host environment
     host_env: Option<Arc<Mutex<ConcreteHostEnvironment>>>,
@@ -382,7 +379,6 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         runtime_config.node_did = default_did.to_string();
 
         let engine = Engine::default();
-        let vm = CoVm::new(ResourceLimits::default());
         let linker = Linker::new(&engine);
 
         let ledger = Arc::new(L::default()); // Create default ledger
@@ -400,12 +396,10 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
         Ok(Self {
             config: runtime_config,
-            vm,
             storage,
             context,
             engine,
             linker,
-            module_cache: None,
             host_env: None,
             reputation_updater: None,
         })
@@ -849,24 +843,6 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         Ok(actual_receipt_cid.to_string())
     }
 
-    /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
-    fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
-        let mut host_context = HostContext::default();
-
-        let coop_id = vm_context
-            .coop_id
-            .map(|id| icn_types::org::CooperativeId::new(id));
-        let community_id = vm_context
-            .community_id
-            .map(|id| icn_types::org::CommunityId::new(id));
-
-        if coop_id.is_some() || community_id.is_some() {
-            host_context = host_context.with_organization(coop_id, community_id);
-        }
-
-        host_context
-    }
-
     /// Verify a trust bundle using the configured trust validator
     pub fn verify_trust_bundle(&self, bundle: &TrustBundle) -> Result<(), RuntimeError> {
         let validator = self
@@ -975,17 +951,14 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         };
 
         let engine = Engine::default();
-        let vm = CoVm::new(ResourceLimits::default()); // Or from config/context
         let linker = Linker::new(&engine);
 
         Self {
             config,
-            vm,
             storage,
             context,
             engine,
             linker,
-            module_cache: None,
             host_env: None,
             reputation_updater: None, // Can be set later via with_reputation_updater
         }
@@ -1049,60 +1022,26 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
     ) -> Result<MeshExecutionReceipt> {
         info!("Processing polled job ID: {:?}", job.job_id);
 
-        // Ensure wasm_bytes are loaded correctly for the job.
-        // This might involve fetching from IPFS via job.job_params.wasm_cid or similar.
-        // For now, this is a simplified path.
+        let cid_string = &job.params.wasm_cid;
+        let _wasm_bytes = self.storage.load_wasm(cid_string.as_str()).await.map_err(|e| {
+            anyhow!(
+                "Failed to load WASM for job {} (CID: {}): {}",
+                job.job_id.as_str(),
+                cid_string,
+                e
+            )
+        })?;
 
-        // Placeholder: assume wasm_bytes are part of job or fetched.
-        // let wasm_bytes = fetch_wasm_for_job(&job).await?; // You'd need a helper for this.
-        // For demonstration, if job.job_params.wasm_cid exists, try to load from storage:
-        let wasm_bytes = if let Some(cid_string) = &job.params.wasm_cid { // Get Option<&String>
-            self.storage.load_wasm(cid_string.as_str()).await.map_err(|e| { // Pass &str to load_wasm
-                anyhow!(
-                    "Failed to load WASM for job {}: {}",
-                    job.job_id.as_str(),
-                    e
-                )
-            })?
-        } else {
-            return Err(anyhow!("Job {:?} has no WASM CID specified", job.job_id));
-        };
-
-        // Using a mutable clone of self or restructuring execute_mesh_job call
-        // Since execute_mesh_job is a free function now (or should be), we pass necessary parts of self.
         let local_keypair = self
             .context
             .identity()
             .ok_or_else(|| anyhow!("Runtime identity not set for job processing"))?;
 
-        // Call the standalone execute_mesh_job function
-        // Note: execute_mesh_job takes Arc<RuntimeContext<InMemoryManaLedger>>
-        // If process_polled_job is part of Runtime<L>, then self.context is Arc<RuntimeContext<L>>.
-        // This implies execute_mesh_job also needs to be generic or handle different L.
-        // For now, if L can be InMemoryManaLedger, this might work, but it's a type mismatch risk.
-        // Let's assume execute_mesh_job should be adapted or RuntimeContext made compatible.
-        // ---
-        // Revisit this: execute_mesh_job might need to take self.context.clone() directly if it's made generic.
-        // For the current structure, this part is problematic if L is not InMemoryManaLedger.
-        // We'll assume execute_mesh_job has been updated to be generic over L for RuntimeContext.
-        // If not, this is a compile error waiting to happen.
-        // The provided execute_mesh_job takes Arc<RuntimeContext<InMemoryManaLedger>>.
-        // This needs to be reconciled.
-        // For now, let's assume we'd call a method on self that handles this, or make execute_mesh_job generic.
-        // Simplification: let's call a hypothetical generic version or a method on self.
-        // For the purpose of this edit, I will assume this internal call is managed.
-
-        // To proceed, let's use a placeholder for job execution that matches the method signature.
-        // This highlights a deeper integration point for execute_mesh_job's genericity.
         let originator_did_str = job.originator_did.as_str();
-        let originator_did = Did::from_str(originator_did_str)?;
+        let _originator_did = Did::from_str(originator_did_str)?;
 
-        // This is a simplification. execute_mesh_job logic should be here or called.
-        // The previous version of execute_mesh_job was a free function.
-        // Let's assume there's a method like self.execute_job_internal
         let receipt = execute_mesh_job(job, local_keypair, self.context.clone()).await?;
 
-        // Anchor the receipt (if successful)
         if receipt.status == IcnJobStatus::Completed {
             self.anchor_mesh_receipt(&receipt).await?;
         }
@@ -1185,7 +1124,7 @@ pub mod dsl {
     }
 }
 
-fn load_or_generate_keypair(key_path: Option<&Path>) -> Result<IcnKeyPair> {
+pub fn load_or_generate_keypair(key_path: Option<&Path>) -> Result<IcnKeyPair> {
     match key_path {
         Some(path) => {
             if path.exists() {
