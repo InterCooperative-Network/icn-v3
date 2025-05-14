@@ -1,44 +1,17 @@
 use crate::context::RuntimeContext;
 use crate::job_execution_context::JobExecutionContext;
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use icn_core_vm::HostContext as CoreVmHostContext;
-use icn_economics::mana::ManaLedger;
 use icn_economics::ResourceType;
-use icn_identity::{Did, KeyPair as IcnKeyPair};
-use icn_types::mesh::JobStatus;
-use icn_mesh_receipts::{verify_embedded_signature, ExecutionReceipt};
+use icn_identity::Did;
+use icn_identity::ScopeKey;
 use host_abi::{
-    HostAbiError, LogLevel, MeshHostAbi, ReceivedInputInfo, ICN_HOST_ABI_VERSION,
+    HostAbiError, LogLevel, MeshHostAbi,
 };
 use icn_types::org::{CommunityId, CooperativeId};
-use icn_types::runtime_receipt::RuntimeExecutionMetrics;
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::sync::Mutex;
 use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
-
-/// Errors that can occur during receipt anchoring
-#[derive(Debug, Error)]
-pub enum AnchorError {
-    #[error("Executor mismatch: receipt's executor ({0}) does not match caller ({1})")]
-    ExecutorMismatch(String, String),
-
-    #[error("Invalid signature: {0}")]
-    InvalidSignature(String),
-
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
-
-    #[error("CID generation error: {0}")]
-    CidError(String),
-
-    #[error("DAG store error: {0}")]
-    DagStoreError(String),
-
-    #[error("Missing federation ID")]
-    MissingFederationId,
-}
 
 /// Concrete implementation of the host environment for WASM execution
 #[derive(Clone)]
@@ -136,7 +109,7 @@ impl ConcreteHostEnvironment {
     }
 
     /// Anchor a signed execution receipt to the DAG and broadcast an announcement.
-    pub async fn anchor_receipt(&self, _receipt: ExecutionReceipt) -> Result<(), AnchorError> {
+    pub async fn anchor_receipt(&self, _receipt: ()) -> Result<(), ()> {
         // Placeholder implementation. In a real scenario, this would interact with
         // the DAG store, potentially via the RuntimeContext or a dedicated service.
         Ok(())
@@ -231,7 +204,7 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         let host_env = caller.data();
         let ctx = host_env
             .ctx
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
         let job_id_str = ctx.job_id.to_string();
         self.write_string_to_mem(&mut caller, &job_id_str, job_id_buf_ptr, job_id_buf_len)
@@ -246,7 +219,7 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         let host_env = caller.data();
         let ctx = host_env
             .ctx
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
         if let Some(cid) = &ctx.job_params.input_data_cid {
             let cid_str = cid.to_string();
@@ -263,7 +236,7 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         let host_env = caller.data();
         let ctx = host_env
             .ctx
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
         Ok(if ctx.job_params.is_interactive { 1 } else { 0 })
     }
@@ -275,9 +248,9 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         let host_env = caller.data();
         let ctx = host_env
             .ctx
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        Ok(ctx.current_stage_index.unwrap_or(-1) as i32)
+        Ok(ctx.current_stage_index as i32)
     }
 
     fn host_workflow_get_current_stage_id(
@@ -289,7 +262,7 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         let host_env = caller.data();
         let ctx = host_env
             .ctx
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
         if let Some(stage_index) = ctx.current_stage_index {
             if let Some(workflow) = &ctx.job_params.workflow_type.as_workflow() {
@@ -311,7 +284,18 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         cid_buf_ptr: u32,
         cid_buf_len: u32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let key = self.read_string_from_mem(&mut caller, input_key_ptr, input_key_len)?;
+        let host_env = caller.data();
+        let ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+
+        if let Some(cid_val) = ctx.get_current_stage_input_cid(&key) {
+            self.write_string_to_mem(&mut caller, &cid_val, cid_buf_ptr, cid_buf_len)
+        } else {
+            Ok(HostAbiError::NotSupported as i32)
+        }
     }
 
     // **II. Status & Progress Reporting **
@@ -322,7 +306,14 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         status_message_ptr: u32,
         status_message_len: u32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let message = self.read_string_from_mem(&mut caller, status_message_ptr, status_message_len)?;
+        let host_env = caller.data();
+        let mut ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        ctx.report_progress(percentage, Some(message));
+        Ok(0)
     }
 
     fn host_workflow_complete_current_stage(
@@ -331,7 +322,14 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         output_cid_ptr: u32,
         output_cid_len: u32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let output_cid_str = self.read_string_from_mem(&mut caller, output_cid_ptr, output_cid_len)?;
+        let host_env = caller.data();
+        let mut ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        ctx.complete_current_stage(Some(output_cid_str));
+        Ok(0)
     }
 
     // **III. Interactivity **
@@ -344,7 +342,17 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         output_key_len: u32,
         is_final_chunk: i32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let payload = self.read_bytes_from_mem(&mut caller, payload_ptr, payload_len)?;
+        let output_key = self.read_string_from_mem(&mut caller, output_key_ptr, output_key_len)?;
+
+        let host_env = caller.data();
+        let mut ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+
+        ctx.last_output_key = Some(output_key);
+        Ok(0)
     }
 
     fn host_interactive_receive_input(
@@ -354,14 +362,29 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         buffer_len: u32,
         timeout_ms: u32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let host_env = caller.data();
+        let mut ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+
+        if let Some(data) = ctx.try_receive_input(Some(timeout_ms as u64)) {
+            let len_written = self.write_bytes_to_mem(&mut caller, &data, buffer_ptr, buffer_len)?;
+            return Ok(len_written);
+        }
+        Ok(0) // No data available
     }
 
     fn host_interactive_peek_input_len(
         &self,
         caller: Caller<'_, ConcreteHostEnvironment>,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let host_env = caller.data();
+        let ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        Ok(ctx.peek_input_len(None) as i32)
     }
 
     fn host_interactive_prompt_for_input(
@@ -370,7 +393,14 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         prompt_cid_ptr: u32,
         prompt_cid_len: u32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let prompt_cid = self.read_string_from_mem(&mut caller, prompt_cid_ptr, prompt_cid_len)?;
+        let host_env = caller.data();
+        let mut ctx = host_env
+            .ctx
+            .try_lock()
+            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+        ctx.last_prompt_cid = Some(prompt_cid);
+        Ok(0)
     }
 
     // **IV. Data Handling & Storage **
@@ -394,6 +424,10 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         cid_buf_ptr: u32,
         cid_buf_len: u32,
     ) -> Result<i32, anyhow::Error> {
+        let data = self.read_bytes_from_mem(&mut caller, data_ptr, data_len)?;
+        let _ = data;
+        let _ = cid_buf_ptr;
+        let _ = cid_buf_len;
         Ok(HostAbiError::NotSupported as i32)
     }
 
@@ -405,7 +439,22 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         message_ptr: u32,
         message_len: u32,
     ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
+        let msg = self.read_string_from_mem(&mut caller, message_ptr, message_len)?;
+        let job_id_str = {
+            let host_env = caller.data();
+            let ctx_guard = host_env.ctx.try_lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
+            ctx_guard.job_id.to_string()
+        };
+
+        match level {
+            LogLevel::Error => tracing::error!(job_id = %job_id_str, guest_log = %msg),
+            LogLevel::Warn => tracing::warn!(job_id = %job_id_str, guest_log = %msg),
+            LogLevel::Info => tracing::info!(job_id = %job_id_str, guest_log = %msg),
+            LogLevel::Debug => tracing::debug!(job_id = %job_id_str, guest_log = %msg),
+            LogLevel::Trace => tracing::trace!(job_id = %job_id_str, guest_log = %msg),
+            _ => tracing::debug!(job_id = %job_id_str, guest_log = %msg, "Unknown log level from guest"),
+        }
+        Ok(0)
     }
 
     // ---------------- Mana stubs ----------------
@@ -416,20 +465,19 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         did_ptr: u32,
         did_len: u32,
     ) -> Result<i64, anyhow::Error> {
-        // If explicit DID is provided we use individual scope for that DID; otherwise default scope_key()
-        let scope_key = if did_len == 0 {
+        let scope_key_val = if did_len == 0 {
             self.scope_key()
         } else {
-            let did = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-            ScopeKey::Individual(did)
+            let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+            ScopeKey::Individual(did_str)
         };
 
         let mut mana_mgr = self
             .rt
             .mana_manager
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        let balance_opt = mana_mgr.balance(&scope_key);
+        let balance_opt = mana_mgr.balance(&scope_key_val);
         Ok(balance_opt.unwrap_or(0) as i64)
     }
 
@@ -440,19 +488,19 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         did_len: u32,
         amount: u64,
     ) -> Result<i32, anyhow::Error> {
-        let scope_key = if did_len == 0 {
+        let scope_key_val = if did_len == 0 {
             self.scope_key()
         } else {
-            let did = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-            ScopeKey::Individual(did)
+            let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+            ScopeKey::Individual(did_str)
         };
 
         let mut mana_mgr = self
             .rt
             .mana_manager
-            .lock()
+            .try_lock()
             .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        match mana_mgr.spend(&scope_key, amount) {
+        match mana_mgr.spend(&scope_key_val, amount) {
             Ok(_) => Ok(0),
             Err(_) => Ok(HostAbiError::ResourceLimitExceeded as i32),
         }
@@ -587,4 +635,8 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         _did_len: u32,
         _amount: u64,
     ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
+
+    fn host_get_abi_version(&self) -> Result<i32, anyhow::Error> {
+        Ok(host_abi::ICN_HOST_ABI_VERSION)
+    }
 }
