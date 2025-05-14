@@ -106,10 +106,8 @@ impl VerifiableReceipt for ExecutionReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use icn_economics::ResourceType;
     use icn_identity::KeyPair;
-    use serde_cbor;
-    use serde_json;
+    use icn_types::mesh::JobStatus;
 
     #[test]
     fn test_json_roundtrip() {

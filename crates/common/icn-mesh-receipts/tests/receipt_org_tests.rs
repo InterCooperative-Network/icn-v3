@@ -1,11 +1,9 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use icn_economics::ResourceType;
 use icn_identity::KeyPair;
 use icn_mesh_receipts::ExecutionReceipt;
 use icn_types::mesh::JobStatus;
 use icn_types::org::{CommunityId, CooperativeId};
-use serde_cbor;
-use serde_json;
 use std::collections::HashMap;
 
 #[test]
@@ -24,8 +22,7 @@ fn test_receipt_with_org_identifiers() {
     // Fixed timestamps for deterministic testing
     let start_time = 1_672_502_400u64; // 2023-01-01 00:00:00 UTC
     let end_time = 1_672_506_000u64; // 2023-01-01 01:00:00 UTC
-    let end_dt: DateTime<Utc> =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(end_time as i64, 0), Utc);
+    let end_dt: DateTime<Utc> = DateTime::from_timestamp(end_time as i64, 0).expect("Invalid timestamp");
 
     // Create a receipt with organization identifiers
     let receipt = ExecutionReceipt {
@@ -41,6 +38,7 @@ fn test_receipt_with_org_identifiers() {
         signature: vec![1, 2, 3, 4],
         coop_id: Some(coop_id.clone()),
         community_id: Some(community_id.clone()),
+        mana_cost: None,
     };
 
     // Check that the organization IDs are stored correctly
@@ -77,8 +75,7 @@ fn test_cid_changes_with_different_orgs() {
     // Fixed timestamps
     let start_time = 1_672_502_400u64;
     let end_time = 1_672_506_000u64;
-    let end_dt: DateTime<Utc> =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(end_time as i64, 0), Utc);
+    let end_dt: DateTime<Utc> = DateTime::from_timestamp(end_time as i64, 0).expect("Invalid timestamp");
 
     // Create a receipt with no org IDs
     let receipt1 = ExecutionReceipt {
@@ -94,6 +91,7 @@ fn test_cid_changes_with_different_orgs() {
         signature: vec![1, 2, 3, 4],
         coop_id: None,
         community_id: None,
+        mana_cost: None,
     };
 
     // Create an identical receipt but with coop ID

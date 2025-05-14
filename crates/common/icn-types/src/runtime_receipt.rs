@@ -200,7 +200,7 @@ mod tests {
         let keypair = KeyPair::generate();
         let did_string = keypair.did.to_string();
 
-        let receipt_no_id = RuntimeExecutionReceipt {
+        let _receipt_no_id = RuntimeExecutionReceipt {
             id: "".into(), // Empty ID
             issuer: did_string.clone(),
             proposal_id: "proposal-ghi".into(),

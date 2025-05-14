@@ -15,11 +15,9 @@ use icn_types::mesh::{JobStatus as IcnJobStatus, MeshJob, MeshJobParams};
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use icn_types::VerifiableReceipt;
 use serde::{Deserialize, Serialize};
-use serde_cbor;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::time::{sleep, Duration};
@@ -61,12 +59,12 @@ pub mod distribution_worker;
 
 // Import sled_storage module and type
 mod sled_storage;
-use sled_storage::SledStorage;
+// use sled_storage::SledStorage;
 
 // Add imports for keypair loading/saving
-use bincode;
-use std::fs::{self, File};
-use std::io::{Read, Write};
+// use bincode;
+// use std::fs::{self, File};
+// use std::io::{Read, Write};
 
 // Add at the top with other constants
 const DEFAULT_MANA_COST: u64 = 100;
