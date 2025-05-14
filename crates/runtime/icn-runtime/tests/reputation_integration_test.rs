@@ -1,32 +1,32 @@
 #![allow(dead_code)]
 
-use std::sync::{Arc, Mutex};
-use anyhow::{Result, anyhow, Context};
-use icn_runtime::{
-    RuntimeStorage, Runtime, RuntimeContext, RuntimeContextBuilder,
-    reputation_integration::{ReputationUpdater, HttpReputationUpdater}
-};
-use icn_identity::{KeyPair, Did};
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-use uuid::Uuid;
-use async_trait::async_trait;
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::future::Future;
-use std::str::FromStr;
-use icn_identity::KeyPair as IcnKeyPair;
-use icn_types::mesh::MeshExecutionReceipt;
-use icn_types::receipt_verification::VerifiableReceipt;
-use bincode;
-use chrono::Utc;
-use httpmock::MockServer;
-use httpmock::Method::POST;
-use tempfile;
-use icn_runtime::config::RuntimeConfig;
 use crate::metrics;
 use crate::reputation_integration::{HttpReputationUpdater, ReputationScoringConfig};
-use icn_types::reputation::ReputationRecord;
+use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
+use bincode;
+use chrono::Utc;
 use httpmock::prelude::*;
+use httpmock::Method::POST;
+use httpmock::MockServer;
+use icn_identity::KeyPair as IcnKeyPair;
+use icn_identity::{Did, KeyPair};
+use icn_runtime::config::RuntimeConfig;
+use icn_runtime::{
+    reputation_integration::{HttpReputationUpdater, ReputationUpdater},
+    Runtime, RuntimeContext, RuntimeContextBuilder, RuntimeStorage,
+};
+use icn_types::mesh::MeshExecutionReceipt;
+use icn_types::receipt_verification::VerifiableReceipt;
+use icn_types::reputation::ReputationRecord;
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use tempfile;
+use uuid::Uuid;
 
 /// Mock storage implementation
 #[derive(Clone, Default)]
@@ -53,17 +53,28 @@ impl RuntimeStorage for MockStorage {
 
     async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
         let receipt_id = receipt.id.clone();
-        self.receipts.lock().unwrap().insert(receipt_id.clone(), receipt.clone());
+        self.receipts
+            .lock()
+            .unwrap()
+            .insert(receipt_id.clone(), receipt.clone());
         Ok(receipt_id)
     }
 
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
-        self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .insert(cid.to_string(), bytes.to_vec());
         Ok(())
     }
 
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
-        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt not found"))
+        self.receipts
+            .lock()
+            .unwrap()
+            .get(receipt_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Receipt not found"))
     }
 
     async fn anchor_to_dag(&self, _cid: &str) -> Result<String> {
@@ -88,8 +99,8 @@ async fn test_reputation_submission_on_anchor() -> Result<()> {
         .with_executor_id(identity_did_str.clone())
         .build();
 
-    let runtime = Runtime::with_context(storage.clone(), Arc::new(context))
-        .with_reputation_updater(updater);
+    let runtime =
+        Runtime::with_context(storage.clone(), Arc::new(context)).with_reputation_updater(updater);
 
     let receipt = RuntimeExecutionReceipt {
         id: "mock-receipt-id".to_string(),
@@ -156,16 +167,16 @@ async fn test_reputation_submission_skipped_if_no_updater() -> Result<()> {
     Ok(())
 }
 
-use icn_runtime::{Runtime, config::RuntimeConfig, reputation_integration::ReputationUpdater};
-use icn_runtime::reputation_integration::{HttpReputationUpdater, NoopReputationUpdater};
-use icn_identity::{KeyPair as IcnKeyPair, Did};
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-use std::sync::Arc;
-use icn_runtime::MemStorage; // Assuming MemStorage is pub or accessible via pub mod storage
-use httpmock::MockServer;
-use httpmock::Method::POST;
-use tempfile;
 use chrono::Utc;
+use httpmock::Method::POST;
+use httpmock::MockServer;
+use icn_identity::{Did, KeyPair as IcnKeyPair};
+use icn_runtime::reputation_integration::{HttpReputationUpdater, NoopReputationUpdater};
+use icn_runtime::MemStorage; // Assuming MemStorage is pub or accessible via pub mod storage
+use icn_runtime::{config::RuntimeConfig, reputation_integration::ReputationUpdater, Runtime};
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
+use std::sync::Arc;
+use tempfile;
 
 // Import the signing helper if it's made public or accessible
 // For now, assuming it's defined locally or accessible within the tests
@@ -177,7 +188,9 @@ use chrono::Utc;
 
 // Helper to get runtime identity keypair (assumes runtime has identity)
 fn get_runtime_keypair(runtime: &Runtime) -> Result<IcnKeyPair> {
-    runtime.context().identity()
+    runtime
+        .context()
+        .identity()
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("Runtime context has no identity keypair for test"))
 }
@@ -218,9 +231,9 @@ fn generate_and_sign_dummy_receipt(keypair: &IcnKeyPair) -> Result<RuntimeExecut
     };
 
     let payload = receipt.signed_payload(); // RuntimeExecutionReceipt::signed_payload must be pub
-    let bytes = bincode::serialize(&payload)
-        .context("Failed to serialize payload in test helper")?;
-    
+    let bytes =
+        bincode::serialize(&payload).context("Failed to serialize payload in test helper")?;
+
     // Assumes KeyPair::sign exists
     let signature = keypair.sign(&bytes);
     receipt.signature = Some(signature.to_bytes().to_vec());
@@ -254,7 +267,9 @@ async fn test_valid_receipt_sends_to_http_reputation_service() -> Result<()> {
         signature: Some(vec![1, 2, 3]),
     };
     let updater = HttpReputationUpdater::new(server.url(""), did.clone());
-    updater.submit_receipt_based_reputation(&receipt, true).await?;
+    updater
+        .submit_receipt_based_reputation(&receipt, true)
+        .await?;
     mock.assert_hits(1);
     Ok(())
 }
@@ -286,9 +301,14 @@ async fn test_reputation_updater_handles_http_500() -> Result<()> {
         signature: None,
     };
     let updater = HttpReputationUpdater::new(server.url(""), did.clone());
-    let result = updater.submit_receipt_based_reputation(&receipt, true).await;
+    let result = updater
+        .submit_receipt_based_reputation(&receipt, true)
+        .await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Failed to submit reputation record: 500"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Failed to submit reputation record: 500"));
     mock.assert_hits(1);
     Ok(())
 }
@@ -298,27 +318,29 @@ async fn test_noop_reputation_updater_ignores_submission() -> Result<()> {
     let updater = icn_runtime::reputation_integration::NoopReputationUpdater;
     let did = Did::from_str("did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345")?;
     let receipt = RuntimeExecutionReceipt {
-       id: "test-receipt-noop".into(),
-       issuer: did.to_string(),
-       proposal_id: "test-proposal-noop".into(),
-       wasm_cid: "test-wasm-noop".into(),
-       ccl_cid: "test-ccl-noop".into(),
-       metrics: RuntimeExecutionMetrics {
-           host_calls: 1,
-           io_bytes: 1,
-           mana_cost: Some(10), // Corrected: Added mana_cost
-       },
-       anchored_cids: vec![],
-       resource_usage: vec![],
-       timestamp: Utc::now().timestamp() as u64,
-       dag_epoch: Some(3), // Corrected: Added dag_epoch
-       receipt_cid: Some("receipt-cid-noop".into()),
-       signature: None,
-   };
-   let result = updater.submit_receipt_based_reputation(&receipt, true).await;
-   assert!(result.is_ok());
-   // No mock server to assert hits against
-   Ok(())
+        id: "test-receipt-noop".into(),
+        issuer: did.to_string(),
+        proposal_id: "test-proposal-noop".into(),
+        wasm_cid: "test-wasm-noop".into(),
+        ccl_cid: "test-ccl-noop".into(),
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 1,
+            io_bytes: 1,
+            mana_cost: Some(10), // Corrected: Added mana_cost
+        },
+        anchored_cids: vec![],
+        resource_usage: vec![],
+        timestamp: Utc::now().timestamp() as u64,
+        dag_epoch: Some(3), // Corrected: Added dag_epoch
+        receipt_cid: Some("receipt-cid-noop".into()),
+        signature: None,
+    };
+    let result = updater
+        .submit_receipt_based_reputation(&receipt, true)
+        .await;
+    assert!(result.is_ok());
+    // No mock server to assert hits against
+    Ok(())
 }
 
 #[tokio::test]
@@ -328,7 +350,7 @@ async fn test_http_reputation_updater_submits_correct_payload() -> Result<()> {
     let expected_anchor = "cid-abc123".to_string();
     let expected_mana_cost = Some(1000); // Cost that likely won't hit the cap
     let expected_timestamp = 1_700_000_000;
-    
+
     let config = ReputationScoringConfig {
         mana_cost_weight: 100.0,
         failure_penalty: -25.0,
@@ -376,7 +398,9 @@ async fn test_http_reputation_updater_submits_correct_payload() -> Result<()> {
         Did::from_str(&expected_subject)?,
         config.clone(), // Clone config for this updater
     );
-    updater.submit_receipt_based_reputation(&receipt, true).await?;
+    updater
+        .submit_receipt_based_reputation(&receipt, true)
+        .await?;
     mock.assert_hits(1);
     Ok(())
 }
@@ -387,12 +411,12 @@ async fn test_http_reputation_updater_score_capping() -> Result<()> {
     let subject = "did:key:z6MkpTHR8VNsESGeQGSwQy1VBCLeP2g2rM86Zbf3pt12345".to_string();
     let anchor = "cid-cap-test".to_string();
     let timestamp = 1_700_000_002;
-    
+
     // Config with a specific cap
     let config_for_capping = ReputationScoringConfig {
-        mana_cost_weight: 100.0,      // Same weight
+        mana_cost_weight: 100.0, // Same weight
         failure_penalty: -25.0,
-        max_positive_score: 2.0,      // Lower cap to ensure it's hit
+        max_positive_score: 2.0, // Lower cap to ensure it's hit
     };
 
     // Mana cost low enough that raw_score (100.0 / 10.0 = 10.0) would exceed max_positive_score (2.0)
@@ -437,7 +461,9 @@ async fn test_http_reputation_updater_score_capping() -> Result<()> {
         Did::from_str(&subject)?,
         config_for_capping, // Use the specific config for this test
     );
-    updater.submit_receipt_based_reputation(&receipt, true).await?;
+    updater
+        .submit_receipt_based_reputation(&receipt, true)
+        .await?;
     mock.assert_hits(1);
     Ok(())
 }
@@ -486,17 +512,16 @@ async fn test_http_reputation_updater_submits_failure_penalty() -> Result<()> {
         id: "receipt-fail-id".to_string(),
         dag_epoch: Some(5), // Corrected: Added dag_epoch
     };
-    let updater = HttpReputationUpdater::new_with_config(
-        server.url(""),
-        Did::from_str(&subject)?,
-        config,
-    );
-    
+    let updater =
+        HttpReputationUpdater::new_with_config(server.url(""), Did::from_str(&subject)?, config);
+
     // Pass is_successful = false
-    let _result = updater.submit_receipt_based_reputation(&receipt, false).await;
+    let _result = updater
+        .submit_receipt_based_reputation(&receipt, false)
+        .await;
 
     // Now the mock assertion should pass because the implementation uses the parameter
-    mock.assert_hits(1); 
+    mock.assert_hits(1);
 
     Ok(())
 }
@@ -520,18 +545,18 @@ async fn test_mesh_receipt_signature_verification_and_submission() -> Result<()>
     let runtime = Runtime::from_config(config).await?;
 
     // 3. Generate keypair and create signed MeshExecutionReceipt
+    use bincode;
+    use chrono::Utc;
+    use icn_economics::ResourceType; // For resource_usage HashMap key
     use icn_identity::IcnKeyPair;
     use icn_types::mesh::{ExecutionReceipt as MeshExecutionReceipt, JobStatus as IcnJobStatus};
     use icn_types::receipt_verification::VerifiableReceipt; // For get_payload_for_signing
-    use icn_economics::ResourceType; // For resource_usage HashMap key
-    use std::collections::HashMap; // For HashMap
-    use chrono::Utc;
-    use bincode; // For serialization
+    use std::collections::HashMap; // For HashMap // For serialization
 
     let keypair = IcnKeyPair::generate();
     let now_dt = Utc::now();
     let now_ts = now_dt.timestamp() as u64;
-    
+
     let mut receipt = MeshExecutionReceipt {
         job_id: "job-mesh-abc123".into(),
         executor: keypair.did.clone(),
@@ -539,18 +564,19 @@ async fn test_mesh_receipt_signature_verification_and_submission() -> Result<()>
         result_data_cid: None,
         logs_cid: None,
         resource_usage: HashMap::new(), // Initialize with all fields
-        execution_start_time: now_ts.saturating_sub(1), 
+        execution_start_time: now_ts.saturating_sub(1),
         execution_end_time: now_ts,
-        execution_end_time_dt: now_dt, 
+        execution_end_time_dt: now_dt,
         signature: vec![], // Will be filled after signing
         coop_id: None,
         community_id: None,
     };
-    
-    let payload = receipt.get_payload_for_signing()
+
+    let payload = receipt
+        .get_payload_for_signing()
         .expect("Failed to get payload for MeshExecutionReceipt signing");
-    let bytes = bincode::serialize(&payload)
-        .expect("Failed to serialize MeshExecutionReceipt payload");
+    let bytes =
+        bincode::serialize(&payload).expect("Failed to serialize MeshExecutionReceipt payload");
     let sig = keypair.sign(&bytes);
     receipt.signature = sig.to_bytes().to_vec();
 
@@ -560,4 +586,4 @@ async fn test_mesh_receipt_signature_verification_and_submission() -> Result<()>
     // 5. Confirm the mock server was hit
     mock.assert_hits(1);
     Ok(())
-} 
+}

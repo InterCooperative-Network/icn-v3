@@ -1,16 +1,16 @@
-use std::sync::Arc;
-use icn_types::dag_store::SharedDagStore;
-use icn_identity::TrustValidator;
-use icn_economics::{Economics, ResourceAuthorizationPolicy, ResourceType, LedgerKey, ManaManager};
-use std::collections::HashMap;
-use tokio::sync::RwLock;
-use icn_types::mesh::MeshJob;
-use std::collections::VecDeque;
-use std::sync::Mutex;
+use crate::reputation_integration::{HttpReputationUpdater, ReputationUpdater};
+use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
+use icn_economics::{Economics, LedgerKey, ManaManager, ResourceAuthorizationPolicy, ResourceType};
 use icn_identity::IdentityIndex;
 use icn_identity::KeyPair;
-use crate::reputation_integration::{ReputationUpdater, HttpReputationUpdater};
-use icn_economics::mana::{ManaRegenerator, ManaLedger, InMemoryManaLedger};
+use icn_identity::TrustValidator;
+use icn_types::dag_store::SharedDagStore;
+use icn_types::mesh::MeshJob;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// High-level execution state of the currently running job / stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,23 +23,23 @@ pub enum ExecutionStatus {
 /// Runtime context for execution environments
 ///
 /// Provides shared infrastructure and state needed across the runtime,
-/// including access to the DAG store for anchoring and querying 
+/// including access to the DAG store for anchoring and querying
 /// governance events and receipts, and the TrustValidator for verifying
 /// trust bundles.
 #[derive(Clone)]
 pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLedger> {
     /// Shared DAG store for transaction and anchor operations
     pub dag_store: Arc<SharedDagStore>,
-    
+
     /// Shared DAG store for mesh receipts
     pub receipt_store: Arc<SharedDagStore>,
-    
+
     /// Federation identifier
     pub federation_id: Option<String>,
-    
+
     /// Executor identifier (node ID or DID)
     pub executor_id: Option<String>,
-    
+
     /// Trust validator for verifying trust bundles
     pub trust_validator: Option<Arc<TrustValidator>>,
 
@@ -69,10 +69,10 @@ pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLe
 
     /// Optional identity for the runtime
     identity: Option<KeyPair>,
-    
+
     /// Optional reputation service URL
     reputation_service_url: Option<String>,
-    
+
     /// Optional mesh job service URL
     mesh_job_service_url: Option<String>,
 }
@@ -139,7 +139,7 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
         self.executor_id = Some(executor_id.into());
         self
     }
-    
+
     /// Set the trust validator
     pub fn with_trust_validator(mut self, trust_validator: Arc<TrustValidator>) -> Self {
         self.trust_validator = Some(trust_validator);
@@ -151,7 +151,7 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
         self.economics = economics;
         self
     }
-    
+
     /// Get a reference to the trust validator, if present
     pub fn trust_validator(&self) -> Option<&Arc<TrustValidator>> {
         self.trust_validator.as_ref()
@@ -176,15 +176,15 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
     pub fn dag_store(&self) -> Arc<SharedDagStore> {
         self.dag_store.clone()
     }
-    
+
     pub fn identity(&self) -> Option<&KeyPair> {
         self.identity.as_ref()
     }
-    
+
     pub fn reputation_service_url(&self) -> Option<&String> {
         self.reputation_service_url.as_ref()
     }
-    
+
     pub fn mesh_job_service_url(&self) -> Option<&String> {
         self.mesh_job_service_url.as_ref()
     }
@@ -317,4 +317,4 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
             mesh_job_service_url: self.mesh_job_service_url,
         }
     }
-} 
+}

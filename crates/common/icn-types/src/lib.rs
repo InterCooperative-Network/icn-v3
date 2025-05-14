@@ -3,29 +3,32 @@ pub mod dag;
 pub mod dag_store;
 pub mod error;
 pub mod identity;
-pub mod org;
-pub mod trust;
-pub mod mesh;
 pub mod jobs;
+pub mod mana;
+pub mod mesh;
+pub mod org;
+pub mod receipt_verification;
 pub mod reputation;
 pub mod resource;
 pub mod runtime_receipt;
-pub mod receipt_verification;
-pub mod mana;
+pub mod trust;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
-pub use runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
+pub use runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 // pub use dag_store::{DagStore, SharedDagStore, StorageError as DagStorageError}; // Still problematic, removing
-pub use mesh::{MeshJob, MeshJobParams, QoSProfile, WorkflowType, JobStatus as MeshJobStatus}; 
-// pub use node_config::{NodeConfig, StorageConfig, NetworkConfig, ReputationConfig, LoggingConfig}; 
-pub use org::{CooperativeId, CommunityId};
-// pub use p2p::{PeerId, Multiaddr}; 
-// pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError}; 
+pub use mesh::{JobStatus as MeshJobStatus, MeshJob, MeshJobParams, QoSProfile, WorkflowType};
+// pub use node_config::{NodeConfig, StorageConfig, NetworkConfig, ReputationConfig, LoggingConfig};
+pub use org::{CommunityId, CooperativeId};
+// pub use p2p::{PeerId, Multiaddr};
+// pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError};
 pub use receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 
 // Corrected jobs re-export to only include types actually defined in icn_types::jobs
-pub use jobs::{TokenAmount, policy::ExecutionPolicy};
+pub use jobs::{policy::ExecutionPolicy, TokenAmount};
 
-pub use resource::ResourceType;
 pub use mana::{ManaState, ScopedMana};
-pub use reputation::{ReputationProfile, ReputationUpdateEvent, compute_score as compute_reputation_score, ReputationRecord};
+pub use reputation::{
+    compute_score as compute_reputation_score, ReputationProfile, ReputationRecord,
+    ReputationUpdateEvent,
+};
+pub use resource::ResourceType;

@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use icn_identity::Did;
+use serde::{Deserialize, Serialize};
 
 /// Represents the state of mana for an entity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -20,9 +20,9 @@ impl Default for ManaState {
     fn default() -> Self {
         Self {
             current_mana: 0,
-            max_mana: 1000, // Default max mana, can be configured
+            max_mana: 1000,             // Default max mana, can be configured
             regen_rate_per_epoch: 10.0, // Default regen rate
-            last_updated_epoch: 0, // Default epoch
+            last_updated_epoch: 0,      // Default epoch
         }
     }
 }
@@ -41,7 +41,14 @@ pub struct ScopedMana {
 
 impl ScopedMana {
     /// Creates a new ScopedMana for an executor, optionally tied to a cooperative.
-    pub fn new(executor_did: Did, cooperative_did: Option<Did>, initial_mana: u64, max_mana: u64, regen_rate: f64, current_epoch: u64) -> Self {
+    pub fn new(
+        executor_did: Did,
+        cooperative_did: Option<Did>,
+        initial_mana: u64,
+        max_mana: u64,
+        regen_rate: f64,
+        current_epoch: u64,
+    ) -> Self {
         Self {
             executor_did,
             cooperative_did,
@@ -53,4 +60,4 @@ impl ScopedMana {
             },
         }
     }
-} 
+}

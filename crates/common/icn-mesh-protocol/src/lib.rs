@@ -89,4 +89,4 @@ pub enum MeshProtocolMessage {
 
 /// Constants for interactive input/output
 pub const INLINE_PAYLOAD_MAX_SIZE: usize = 1024 * 1024; // 1MB
-pub const MAX_INTERACTIVE_INPUT_BUFFER_PEEK: usize = 1024 * 1024; // 1MB 
+pub const MAX_INTERACTIVE_INPUT_BUFFER_PEEK: usize = 1024 * 1024; // 1MB

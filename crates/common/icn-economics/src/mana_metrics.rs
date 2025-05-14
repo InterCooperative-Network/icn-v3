@@ -1,8 +1,6 @@
-use prometheus::{
-    IntCounterVec, IntGauge, register_int_counter_vec, register_int_gauge,
-};
-use lazy_static::lazy_static;
 use crate::mana::RegenerationPolicy;
+use lazy_static::lazy_static;
+use prometheus::{register_int_counter_vec, register_int_gauge, IntCounterVec, IntGauge};
 
 lazy_static! {
     // Ticks
@@ -55,4 +53,4 @@ pub fn policy_to_label(policy: &RegenerationPolicy) -> &'static str {
     match policy {
         RegenerationPolicy::FixedRatePerTick(_) => "fixed_rate_per_tick",
     }
-} 
+}

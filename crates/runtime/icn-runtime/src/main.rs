@@ -1,13 +1,13 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use tokio::signal;
-use tracing::{info, error, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::{fmt, EnvFilter};
 
 // Import necessary items from the library crate
-use icn_runtime::{Runtime, config::RuntimeConfig};
+use icn_runtime::{config::RuntimeConfig, Runtime};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -30,14 +30,12 @@ async fn main() -> Result<()> {
         .with_context(|| format!("Failed to parse configuration file: {:?}", args.config))?;
 
     // Initialize tracing subscriber based on config or default
-    let log_level_str = config.log_level.as_deref().unwrap_or("info"); 
+    let log_level_str = config.log_level.as_deref().unwrap_or("info");
     let filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(log_level_str))
         .unwrap_or_else(|_| EnvFilter::new(Level::INFO.to_string()));
 
-    fmt::Subscriber::builder()
-        .with_env_filter(filter)
-        .init();
+    fmt::Subscriber::builder().with_env_filter(filter).init();
 
     info!("Starting ICN Runtime Node...");
     info!("Using Node DID: {}", config.node_did);
@@ -72,4 +70,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-} 
+}

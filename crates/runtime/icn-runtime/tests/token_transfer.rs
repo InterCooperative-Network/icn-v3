@@ -1,16 +1,22 @@
 #![allow(dead_code)]
-use icn_economics::{ResourceType, LedgerKey};
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use icn_economics::{LedgerKey, ResourceType};
 use icn_identity::{Did, KeyPair, ScopeKey};
-use icn_runtime::{Runtime, RuntimeContext, RuntimeContextBuilder, VmContext, RuntimeStorage, Proposal, ProposalState, QuorumStatus};
+use icn_runtime::{
+    Proposal, ProposalState, QuorumStatus, Runtime, RuntimeContext, RuntimeContextBuilder,
+    RuntimeStorage, VmContext,
+};
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use anyhow::{Result, anyhow};
-use async_trait::async_trait;
-use wasm_encoder::{CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection, Instruction, Module, TypeSection, ValType, ConstExpr};
-use std::pin::Pin;
-use std::future::Future;
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
+use wasm_encoder::{
+    CodeSection, ConstExpr, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
+    Instruction, Module, TypeSection, ValType,
+};
 
 #[derive(Clone, Default)]
 struct MockRuntimeStorage {
@@ -23,7 +29,12 @@ struct MockRuntimeStorage {
 #[async_trait]
 impl RuntimeStorage for MockRuntimeStorage {
     async fn load_proposal(&self, id: &str) -> Result<Proposal> {
-        self.proposals.lock().unwrap().get(id).cloned().ok_or_else(|| anyhow!("Proposal not found"))
+        self.proposals
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Proposal not found"))
     }
 
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
@@ -33,22 +44,38 @@ impl RuntimeStorage for MockRuntimeStorage {
     }
 
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
-        self.wasm_modules.lock().unwrap().get(cid).cloned().ok_or_else(|| anyhow!("WASM not found"))
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .get(cid)
+            .cloned()
+            .ok_or_else(|| anyhow!("WASM not found"))
     }
 
     async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
         let receipt_id = receipt.id.clone();
-        self.receipts.lock().unwrap().insert(receipt_id.clone(), receipt.clone());
+        self.receipts
+            .lock()
+            .unwrap()
+            .insert(receipt_id.clone(), receipt.clone());
         Ok(receipt_id)
     }
 
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
-        self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .insert(cid.to_string(), bytes.to_vec());
         Ok(())
     }
 
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
-        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt not found"))
+        self.receipts
+            .lock()
+            .unwrap()
+            .get(receipt_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Receipt not found"))
     }
 
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
@@ -65,12 +92,13 @@ async fn test_transfer_tokens_wasm() -> Result<()> {
     let receiver_did = receiver_keypair.did.clone();
 
     let storage = Arc::new(MockRuntimeStorage::default());
-    let mut runtime = Runtime::new(storage.clone()).expect("Failed to create runtime in token_transfer test");
-    
+    let mut runtime =
+        Runtime::new(storage.clone()).expect("Failed to create runtime in token_transfer test");
+
     let context = RuntimeContextBuilder::new()
         .with_executor_id(sender_did.to_string())
         .build();
-    
+
     // --- Mana Manager Interaction (Commented out credit, fixed balance key) ---
     // This assumes the test setup implicitly provides funds or the transfer logic handles insufficient funds.
     // let mana_mgr = context.mana_manager.lock().unwrap();
@@ -81,7 +109,7 @@ async fn test_transfer_tokens_wasm() -> Result<()> {
     //     community_id: None,
     // }, 100);
     // ----------------------------------------------------------------------
-    
+
     let wasm_bytes = build_transfer_tokens_wasm(&receiver_did.to_string(), 50)?;
     storage.store_wasm("transfer-wasm-cid", &wasm_bytes).await?;
 
@@ -95,13 +123,15 @@ async fn test_transfer_tokens_wasm() -> Result<()> {
         community_id: None,
     };
 
-    let _result = runtime.execute_wasm(&wasm_bytes, "_start".to_string(), Vec::new()).await?;
+    let _result = runtime
+        .execute_wasm(&wasm_bytes, "_start".to_string(), Vec::new())
+        .await?;
 
     let mut final_mana_mgr = context.mana_manager.lock().unwrap();
     // Use ScopeKey instead of LedgerKey for balance check
     let sender_scope_key = ScopeKey::Individual(sender_did.to_string());
     let receiver_scope_key = ScopeKey::Individual(receiver_did.to_string());
-    
+
     let sender_balance = final_mana_mgr.balance(&sender_scope_key).unwrap_or(0);
     let receiver_balance = final_mana_mgr.balance(&receiver_scope_key).unwrap_or(0);
 
@@ -141,18 +171,31 @@ fn build_transfer_tokens_wasm(receiver_did_str: &str, amount: u64) -> Result<Vec
     module.section(&functions);
 
     let mut memory = wasm_encoder::MemorySection::new();
-    memory.memory(wasm_encoder::MemoryType { minimum: 1, maximum: None, memory64: false, shared: false });
+    memory.memory(wasm_encoder::MemoryType {
+        minimum: 1,
+        maximum: None,
+        memory64: false,
+        shared: false,
+    });
     module.section(&memory);
 
     let mut exports = ExportSection::new();
-    exports.export("_start", ExportKind::Func, start_func_local_idx + transfer_func_idx + 1 );
+    exports.export(
+        "_start",
+        ExportKind::Func,
+        start_func_local_idx + transfer_func_idx + 1,
+    );
     exports.export("memory", ExportKind::Memory, 0);
     module.section(&exports);
 
     let mut data = wasm_encoder::DataSection::new();
     let receiver_did_bytes = receiver_did_str.as_bytes();
     let memory_offset = 0;
-    data.active(0, &ConstExpr::i32_const(memory_offset), receiver_did_bytes.to_vec());
+    data.active(
+        0,
+        &ConstExpr::i32_const(memory_offset),
+        receiver_did_bytes.to_vec(),
+    );
     module.section(&data);
 
     let mut code = CodeSection::new();
@@ -168,4 +211,4 @@ fn build_transfer_tokens_wasm(receiver_did_str: &str, amount: u64) -> Result<Vec
     module.section(&code);
 
     Ok(module.finish())
-} 
+}

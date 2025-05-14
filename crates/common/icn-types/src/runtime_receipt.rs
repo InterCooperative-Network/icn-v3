@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
-use anyhow::{Result};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 // use icn_identity::Did; // Removed unused import
 // use std::str::FromStr; // Removed unused import
 // use ed25519_dalek::{Signature, VerifyingKey}; // Removed unused imports
@@ -8,8 +8,8 @@ use crate::receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 // use bincode; // Removed unused import
 
 // NEW IMPORTS for CID generation
-use cid::{Cid, Version}; // Simplified cid import
 use cid::multihash::{Code as MultihashCode, MultihashDigest}; // CORRECTED IMPORT for multihash types
+use cid::{Cid, Version}; // Simplified cid import
 use serde_cbor;
 // use thiserror::Error; // Removed unused import
 
@@ -64,9 +64,9 @@ impl RuntimeExecutionReceipt {
 
         let bytes = serde_cbor::to_vec(&temp_receipt)
             .map_err(|e| ReceiptCidError::Serialization(e.to_string()))?;
-        
+
         let hash = MultihashCode::Sha2_256.digest(&bytes);
-        
+
         // Use raw u64 for DAG_CBOR codec (0x71) for robustness
         Ok(Cid::new(Version::V1, 0x71, hash).expect("Failed to create CID v1 dag-cbor"))
     }
@@ -104,7 +104,7 @@ mod tests {
     // Ensure Signer trait is in scope if KeyPair::sign directly returns ed25519_dalek::Signature
     // and doesn't rely on a trait method from ed25519_dalek::Signer for KeyPair itself.
     // If KeyPair::sign is a direct method, this specific import might not be needed for keypair.sign().
-    // use ed25519_dalek::Signer; 
+    // use ed25519_dalek::Signer;
 
     #[test]
     fn test_valid_receipt_verification() {
@@ -123,27 +123,31 @@ mod tests {
             timestamp: 1678886400, // Example timestamp
             dag_epoch: Some(10),
             receipt_cid: None, // Not part of signed payload
-            signature: None, // Will be added below
+            signature: None,   // Will be added below
         };
 
         // Sign it
-        let payload = receipt.get_payload_for_signing().expect("Failed to get payload for signing in test");
+        let payload = receipt
+            .get_payload_for_signing()
+            .expect("Failed to get payload for signing in test");
         let bytes = bincode::serialize(&payload).expect("Failed to serialize payload for test");
         // Assumes icn_identity::KeyPair has a public method `sign`:
         // fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature;
-        let signature = keypair.sign(&bytes); 
+        let signature = keypair.sign(&bytes);
         let sig_bytes = signature.to_bytes().to_vec();
 
-        let signed_receipt = RuntimeExecutionReceipt { 
-            signature: Some(sig_bytes), 
+        let signed_receipt = RuntimeExecutionReceipt {
+            signature: Some(sig_bytes),
             ..receipt // Clone the rest from the original receipt
         };
 
         // Verification should succeed using the trait method
         // signed_receipt.verify().expect("Verification failed for a valid signed receipt");
-        signed_receipt.verify_signature().expect("Signature verification failed for a valid signed receipt");
+        signed_receipt
+            .verify_signature()
+            .expect("Signature verification failed for a valid signed receipt");
     }
-    
+
     // Optional: Add a test for verification failure with bad signature
     #[test]
     fn test_invalid_signature_receipt_verification_fails() {
@@ -167,14 +171,16 @@ mod tests {
         };
 
         // Sign with keypair2's secret key
-        let payload = receipt.get_payload_for_signing().expect("Failed to get payload for signing in test (invalid signature)");
+        let payload = receipt
+            .get_payload_for_signing()
+            .expect("Failed to get payload for signing in test (invalid signature)");
         let bytes = bincode::serialize(&payload).unwrap();
         // Assumes icn_identity::KeyPair has a public method `sign`
         let bad_signature = keypair2.sign(&bytes);
         let bad_sig_bytes = bad_signature.to_bytes().to_vec();
 
-        let wrongly_signed_receipt = RuntimeExecutionReceipt { 
-            signature: Some(bad_sig_bytes), 
+        let wrongly_signed_receipt = RuntimeExecutionReceipt {
+            signature: Some(bad_sig_bytes),
             ..receipt
         };
 
@@ -182,9 +188,12 @@ mod tests {
         // let verification_result = wrongly_signed_receipt.verify();
         let verification_result = wrongly_signed_receipt.verify_signature();
         assert!(verification_result.is_err());
-        assert!(verification_result.unwrap_err().to_string().contains("Signature verification failed"));
+        assert!(verification_result
+            .unwrap_err()
+            .to_string()
+            .contains("Signature verification failed"));
     }
-    
+
     // Optional: Add a test for missing required fields
     #[test]
     fn test_missing_id_receipt_verification_fails() {
@@ -206,13 +215,13 @@ mod tests {
             signature: None, // No signature needed to test field validation
         };
 
-        // Field validation is no longer part of verify_signature, 
+        // Field validation is no longer part of verify_signature,
         // it should be done separately if needed before calling verify_signature.
-        // let verification_result = receipt_no_id.verify(); 
+        // let verification_result = receipt_no_id.verify();
         // assert!(verification_result.is_err());
         // assert!(verification_result.unwrap_err().to_string().contains("Receipt has empty id"));
         // For now, we just test that the signature verification logic doesn't run (or panic)
-        // if required fields for *it* are missing (like issuer DID). 
+        // if required fields for *it* are missing (like issuer DID).
         // Let's test missing issuer:
         let receipt_no_issuer = RuntimeExecutionReceipt {
             id: "receipt-789".into(),
@@ -230,7 +239,10 @@ mod tests {
         };
         let verification_result_no_issuer = receipt_no_issuer.verify_signature();
         assert!(verification_result_no_issuer.is_err());
-        assert!(verification_result_no_issuer.unwrap_err().to_string().contains("Receipt issuer DID is empty"));
+        assert!(verification_result_no_issuer
+            .unwrap_err()
+            .to_string()
+            .contains("Receipt issuer DID is empty"));
     }
 
     #[test]
@@ -252,4 +264,4 @@ mod tests {
         };
         dbg!(&_receipt_no_id); // Explicitly use the variable
     }
-} 
+}

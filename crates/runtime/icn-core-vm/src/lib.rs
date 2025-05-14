@@ -1,12 +1,12 @@
 // Core-VM: WebAssembly Virtual Machine for ICN runtime
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use wasmtime::{
-    AsContextMut, Caller, Config, Engine, Extern, Func, FuncType, Instance, Module, OptLevel,
-    Store, Val, ValType, Linker,
+    AsContextMut, Caller, Config, Engine, Extern, Func, FuncType, Instance, Linker, Module,
+    OptLevel, Store, Val, ValType,
 };
-use std::sync::{Arc, Mutex};
 
 /// Error types specific to the Cooperative VM
 #[derive(Error, Debug)]
@@ -94,10 +94,10 @@ pub struct HostContext {
 
     /// Job submissions from this execution
     pub job_submissions: Arc<Mutex<Vec<JobSubmission>>>,
-    
+
     /// Optional organization context: cooperative ID
     pub coop_id: Option<icn_types::org::CooperativeId>,
-    
+
     /// Optional organization context: community ID
     pub community_id: Option<icn_types::org::CommunityId>,
 }
@@ -232,12 +232,12 @@ impl CoVm {
 
     /// Execute a WASM module with a provided linker and store
     pub fn execute_with_linker<T>(
-        &self, 
-        wasm_bytes: &[u8], 
+        &self,
+        wasm_bytes: &[u8],
         context: HostContext,
         linker: &Linker<T>,
         store: &mut Store<T>,
-    ) -> Result<HostContext> 
+    ) -> Result<HostContext>
     where
         T: wasmtime::AsContextMut,
     {
@@ -248,21 +248,22 @@ impl CoVm {
         // Set initial fuel based on limits
         let initial_fuel = self.limits.max_fuel;
         store.set_fuel(initial_fuel)?;
-        
+
         // Instantiate the module with the provided linker
-        let instance = linker.instantiate(&mut *store, &module)
+        let instance = linker
+            .instantiate(&mut *store, &module)
             .map_err(|e| anyhow!("Failed to instantiate WASM module: {}", e))?;
-            
+
         // Call the entrypoint function
         self.call_entrypoint_with_store(store, &instance)?;
-        
+
         // Calculate resource usage
         let fuel_remaining = store.get_fuel().unwrap_or(0);
         let _fuel_consumed = initial_fuel.saturating_sub(fuel_remaining);
-        
+
         // Track metrics in the host context
         let host_context = context;
-        
+
         Ok(host_context)
     }
 
@@ -279,10 +280,10 @@ impl CoVm {
             }
         })
     }
-    
+
     /// Call entrypoint function with a generic store
-    fn call_entrypoint_with_store<T>(&self, store: &mut Store<T>, instance: &Instance) -> Result<()> 
-    where 
+    fn call_entrypoint_with_store<T>(&self, store: &mut Store<T>, instance: &Instance) -> Result<()>
+    where
         T: wasmtime::AsContextMut,
     {
         let entrypoint = instance

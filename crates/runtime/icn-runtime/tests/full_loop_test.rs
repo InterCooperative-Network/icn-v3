@@ -1,43 +1,53 @@
+use icn_identity::{Did, KeyPair as IcnKeyPair};
 use icn_runtime::{
     config::RuntimeConfig,
+    reputation_integration::{HttpReputationUpdater, NoopReputationUpdater},
+    MemStorage, // Use MemStorage directly
+    Proposal,
+    ProposalState,
+    QuorumStatus,
     Runtime,
     RuntimeContextBuilder,
-    MemStorage, // Use MemStorage directly
-    Proposal, ProposalState, QuorumStatus,
     RuntimeStorage, // Add trait
-    reputation_integration::{HttpReputationUpdater, NoopReputationUpdater},
 };
 use icn_types::{
-    mesh::{MeshJob, MeshJobParams, JobStatus as IcnJobStatus, QoSProfile, WorkflowType, OrgScopeIdentifier},
+    mesh::{
+        JobStatus as IcnJobStatus, MeshJob, MeshJobParams, OrgScopeIdentifier, QoSProfile,
+        WorkflowType,
+    },
+    org::{CommunityId, CooperativeId}, // Added org types
     resource::ResourceType,
     runtime_receipt::RuntimeExecutionMetrics,
-    org::{CooperativeId, CommunityId}, // Added org types
 };
-use icn_identity::{Did, KeyPair as IcnKeyPair};
 
 // Multihash and CID related imports
 use cid::Cid as IcnCid;
-use multihash::{Multihash, Code};
-use sha2::{Sha256, Digest};
+use multihash::{Code, Multihash};
+use sha2::{Digest, Sha256};
 
+use icn_types::dag_store::DagStore;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use tempfile::tempdir;
-use uuid::Uuid;
-use tracing_subscriber;
 use std::time::Duration;
-use icn_types::dag_store::DagStore; // Added DagStore trait for .list()
+use tempfile::tempdir;
+use tracing_subscriber;
+use uuid::Uuid; // Added DagStore trait for .list()
 
 // --- Mana Related Imports for new test ---
-use icn_economics::mana::{ManaLedger, ManaState, InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
+use icn_economics::mana::{
+    InMemoryManaLedger, ManaLedger, ManaRegenerator, ManaState, RegenerationPolicy,
+};
 use icn_identity::did::generate_did_key; // For generating test DIDs
-// --- End Mana Related Imports ---
+                                         // --- End Mana Related Imports ---
 
 // Helper to initialize tracing for tests, if not already done globally
 fn init_test_tracing() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("icn_runtime=debug".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("icn_runtime=debug".parse().unwrap()),
+        )
         .try_init();
 }
 
@@ -48,8 +58,8 @@ fn dummy_wasm_bytes() -> Vec<u8> {
 }
 
 // --- Mock Reputation Updater for Mana Deduction (local to this test file) ---
-use std::sync::Mutex; // Ensure Mutex is imported if not already at top level
-use async_trait::async_trait; // Ensure async_trait is imported
+use async_trait::async_trait;
+use std::sync::Mutex; // Ensure Mutex is imported if not already at top level // Ensure async_trait is imported
 
 #[derive(Debug, Clone)]
 struct TestManaDeductionCall {
@@ -93,12 +103,15 @@ impl icn_runtime::reputation_integration::ReputationUpdater for TestMockReputati
         coop_id: &str,
         community_id: &str,
     ) -> anyhow::Result<()> {
-        self.mana_deductions.lock().unwrap().push(TestManaDeductionCall {
-            executor_did: executor_did.clone(),
-            amount,
-            coop_id: coop_id.to_string(),
-            community_id: community_id.to_string(),
-        });
+        self.mana_deductions
+            .lock()
+            .unwrap()
+            .push(TestManaDeductionCall {
+                executor_did: executor_did.clone(),
+                amount,
+                coop_id: coop_id.to_string(),
+                community_id: community_id.to_string(),
+            });
         Ok(())
     }
 }
@@ -120,14 +133,16 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
     let mut hasher = Sha256::new();
     hasher.update(&wasm_bytes);
     let hash_result = hasher.finalize();
-    let wasm_multihash = Multihash::wrap(Code::Sha2_256.into(), &hash_result).expect("Failed to wrap hash");
+    let wasm_multihash =
+        Multihash::wrap(Code::Sha2_256.into(), &hash_result).expect("Failed to wrap hash");
     let wasm_cid = IcnCid::new_v1(0x55, wasm_multihash).to_string();
 
     // 2. Build config - Ensure node has an identity (KeyPair)
     let node_keypair = IcnKeyPair::generate();
     let node_did_str = node_keypair.did.to_string();
 
-    let config = RuntimeConfig { // Config is needed for Runtime::from_config or setting context details
+    let config = RuntimeConfig {
+        // Config is needed for Runtime::from_config or setting context details
         node_did: node_did_str.clone(),
         storage_path: temp_dir.path().to_path_buf(),
         key_path: None,
@@ -136,45 +151,47 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
         metrics_port: None,
         log_level: Some("debug".into()),
         reputation_scoring_config_path: None, // Added missing field
-        mana_regeneration_policy: None, // Add this line for the new field
+        mana_regeneration_policy: None,       // Add this line for the new field
     };
 
     // 3. Build runtime
     // Direct context setup for test clarity:
     let storage_for_runtime: Arc<dyn RuntimeStorage> = Arc::new(MemStorage::new());
-    storage_for_runtime.store_wasm(&wasm_cid, &wasm_bytes).await?;
+    storage_for_runtime
+        .store_wasm(&wasm_cid, &wasm_bytes)
+        .await?;
 
     let mut context_builder = RuntimeContextBuilder::new(); // Use public builder
     context_builder = context_builder.with_executor_id(node_did_str.clone());
     context_builder = context_builder.with_identity(node_keypair.clone());
     let runtime_context = Arc::new(context_builder.build());
-    
+
     // Initialize Runtime with context
     let mut runtime = Runtime::with_context(storage_for_runtime.clone(), runtime_context);
     // If Runtime needs config data not in context, alternative setup might be needed.
     // Assuming context holds enough for this test.
     // Ensure NoopReputationUpdater if needed
-    if runtime.context().reputation_service_url().is_none() { 
+    if runtime.context().reputation_service_url().is_none() {
         runtime = runtime.with_reputation_updater(Arc::new(NoopReputationUpdater));
     }
 
     // 4. Create job and inject into queue
     let job_originator_keypair = IcnKeyPair::generate();
     let job_originator_did = job_originator_keypair.did;
-    
+
     let job_params = MeshJobParams {
-        wasm_cid: wasm_cid.clone(), 
+        wasm_cid: wasm_cid.clone(),
         description: "Test job for full loop".to_string(),
-        resources_required: vec![(ResourceType::Cpu, 1)], 
+        resources_required: vec![(ResourceType::Cpu, 1)],
         qos_profile: QoSProfile::BestEffort,
         deadline: None,
         input_data_cid: None,
-        max_acceptable_bid_tokens: None, 
+        max_acceptable_bid_tokens: None,
         workflow_type: WorkflowType::SingleWasmModule,
         stages: None,
         is_interactive: false,
         expected_output_schema_cid: None,
-        execution_policy: None, 
+        execution_policy: None,
         explicit_mana_cost: None, // Added missing field
     };
 
@@ -182,17 +199,21 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
         job_id: Uuid::new_v4().to_string(),
         originator_did: job_originator_did.clone(), // Use clone
         params: job_params,
-        originator_org_scope: Some(OrgScopeIdentifier { 
+        originator_org_scope: Some(OrgScopeIdentifier {
             coop_id: None,
             community_id: None,
-        }), 
+        }),
         submission_timestamp: chrono::Utc::now().timestamp_millis() as u64, // Cast to u64
     };
 
     {
         let mut queue = runtime.context().pending_mesh_jobs.lock().unwrap();
         queue.push_back(job.clone());
-        println!("Job {} pushed to queue. Queue size: {}", job.job_id, queue.len());
+        println!(
+            "Job {} pushed to queue. Queue size: {}",
+            job.job_id,
+            queue.len()
+        );
     }
 
     // 5. Spawn runtime in background
@@ -212,11 +233,18 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
 
     // 7. Assertions (Example - check if receipt exists)
     let potential_receipt_id = format!("mock-receipt-{}", job.job_id); // Guess based on MemStorage impl
-    match storage_for_runtime.load_receipt(&potential_receipt_id).await { // Use correct storage var
+    match storage_for_runtime
+        .load_receipt(&potential_receipt_id)
+        .await
+    {
+        // Use correct storage var
         Ok(receipt) => {
-             tracing::info!(receipt_id = %receipt.id, "Successfully loaded receipt for job.");
-             assert_eq!(receipt.proposal_id, job.job_id, "Receipt proposal ID should match job ID");
-        },
+            tracing::info!(receipt_id = %receipt.id, "Successfully loaded receipt for job.");
+            assert_eq!(
+                receipt.proposal_id, job.job_id,
+                "Receipt proposal ID should match job ID"
+            );
+        }
         Err(e) => {
             // Fail if receipt *should* have been created
             panic!("Failed to load receipt for job {}: {}. This might indicate the job failed or receipt IDing is different.", job.job_id, e);
@@ -260,7 +288,8 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
 
     // --- Use with_context and ensure updater ---
     let mut runtime = Runtime::with_context(storage.clone(), runtime_context.clone());
-    if runtime.context().reputation_service_url().is_none() { // Check context directly
+    if runtime.context().reputation_service_url().is_none() {
+        // Check context directly
         runtime = runtime.with_reputation_updater(Arc::new(NoopReputationUpdater));
     }
     // ----------------------------------------
@@ -295,7 +324,11 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
     };
     // --------------------------------------
 
-    runtime_context.pending_mesh_jobs.lock().unwrap().push_back(job.clone());
+    runtime_context
+        .pending_mesh_jobs
+        .lock()
+        .unwrap()
+        .push_back(job.clone());
     tracing::info!(job_id = %job.job_id, "Pushed job to runtime queue");
 
     // Run the runtime for a short duration to process the job
@@ -315,14 +348,18 @@ async fn test_full_runtime_loop_with_mem_storage() -> anyhow::Result<()> {
 
     // Check receipt
     let potential_receipt_id = format!("mock-receipt-{}", job_id);
-    match storage.load_receipt(&potential_receipt_id).await { // storage is Arc<dyn RuntimeStorage>
+    match storage.load_receipt(&potential_receipt_id).await {
+        // storage is Arc<dyn RuntimeStorage>
         Ok(receipt) => {
-             tracing::info!(receipt_id = %receipt.id, "Successfully loaded receipt for job.");
-             assert_eq!(receipt.proposal_id, job_id, "Receipt proposal ID should match job ID");
-        },
+            tracing::info!(receipt_id = %receipt.id, "Successfully loaded receipt for job.");
+            assert_eq!(
+                receipt.proposal_id, job_id,
+                "Receipt proposal ID should match job ID"
+            );
+        }
         Err(e) => {
             // Fail if receipt should exist
-             panic!("Failed to load receipt for job {}: {}. This might indicate the job failed or receipt IDing is different.", job_id, e);
+            panic!("Failed to load receipt for job {}: {}. This might indicate the job failed or receipt IDing is different.", job_id, e);
         }
     }
 
@@ -344,7 +381,8 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
     let mut hasher = Sha256::new();
     hasher.update(&wasm_bytes);
     let hash_result = hasher.finalize();
-    let wasm_multihash = Multihash::wrap(Code::Sha2_256.into(), &hash_result).expect("Failed to wrap hash");
+    let wasm_multihash =
+        Multihash::wrap(Code::Sha2_256.into(), &hash_result).expect("Failed to wrap hash");
     let wasm_cid = IcnCid::new_v1(0x55, wasm_multihash).to_string();
 
     // 2. Node Identity & Mock Updater
@@ -355,7 +393,9 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
 
     // 3. Build runtime with Mock Updater
     let storage_for_runtime: Arc<dyn RuntimeStorage> = Arc::new(MemStorage::new());
-    storage_for_runtime.store_wasm(&wasm_cid, &wasm_bytes).await?;
+    storage_for_runtime
+        .store_wasm(&wasm_cid, &wasm_bytes)
+        .await?;
 
     let mut context_builder = RuntimeContextBuilder::new();
     context_builder = context_builder
@@ -363,29 +403,30 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
         .with_executor_id(node_did_str.clone())
         .with_federation_id("test-federation-mana-pipeline".to_string()); // For coop/community scope
     let runtime_context = Arc::new(context_builder.build());
-    
+
     let mut runtime = Runtime::with_context(storage_for_runtime.clone(), runtime_context)
-        .with_reputation_updater(mock_reputation_updater.clone() as Arc<dyn icn_runtime::reputation_integration::ReputationUpdater>);
+        .with_reputation_updater(mock_reputation_updater.clone()
+            as Arc<dyn icn_runtime::reputation_integration::ReputationUpdater>);
 
     // 4. Create job with mana_cost
     let job_originator_keypair = IcnKeyPair::generate();
     let job_originator_did = job_originator_keypair.did;
-    
+
     let mana_to_cost = 75u64;
 
     let job_params = MeshJobParams {
-        wasm_cid: wasm_cid.clone(), 
+        wasm_cid: wasm_cid.clone(),
         description: "Test job for mana pipeline".to_string(),
-        resources_required: vec![(ResourceType::Cpu, 1)], 
+        resources_required: vec![(ResourceType::Cpu, 1)],
         qos_profile: QoSProfile::BestEffort,
         deadline: None,
         input_data_cid: None,
-        max_acceptable_bid_tokens: None, 
+        max_acceptable_bid_tokens: None,
         workflow_type: WorkflowType::SingleWasmModule,
         stages: None,
         is_interactive: false,
         expected_output_schema_cid: None,
-        execution_policy: None, 
+        execution_policy: None,
         explicit_mana_cost: Some(mana_to_cost), // Set explicit mana cost
     };
 
@@ -393,21 +434,29 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
         job_id: Uuid::new_v4().to_string(),
         originator_did: job_originator_did.clone(),
         params: job_params,
-        originator_org_scope: Some(OrgScopeIdentifier { 
+        originator_org_scope: Some(OrgScopeIdentifier {
             coop_id: Some(CooperativeId::new("test-coop".to_string())), // Corrected type
             community_id: Some(CommunityId::new("test-community".to_string())), // Corrected type
-        }), 
+        }),
         submission_timestamp: chrono::Utc::now().timestamp_millis() as u64,
     };
 
     // Push job to queue
-    runtime.context().pending_mesh_jobs.lock().unwrap().push_back(job.clone());
+    runtime
+        .context()
+        .pending_mesh_jobs
+        .lock()
+        .unwrap()
+        .push_back(job.clone());
     tracing::info!(job_id = %job.job_id, "Pushed job with mana_cost to runtime queue");
 
     // 5. Spawn runtime in background
     let runtime_clone_for_task = runtime.clone();
-    let _handle = tokio::spawn(async move { // Changed handle to _handle as it's not awaited here before abort
-        match tokio::time::timeout(Duration::from_secs(5), runtime_clone_for_task.run_forever()).await {
+    let _handle = tokio::spawn(async move {
+        // Changed handle to _handle as it's not awaited here before abort
+        match tokio::time::timeout(Duration::from_secs(5), runtime_clone_for_task.run_forever())
+            .await
+        {
             Ok(Err(e)) => tracing::error!("Runtime loop (mana test) exited with error: {:?}", e),
             Err(_) => tracing::warn!("Runtime loop (mana test) timed out"),
             Ok(Ok(_)) => tracing::info!("Runtime loop (mana test) finished cleanly (unexpected)"),
@@ -428,7 +477,10 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
 
     for node in dag_nodes {
         // The content of the DagNode is expected to be a JSON string of RuntimeExecutionReceipt
-        if let Ok(receipt_content) = serde_json::from_str::<icn_types::runtime_receipt::RuntimeExecutionReceipt>(&node.content) {
+        if let Ok(receipt_content) = serde_json::from_str::<
+            icn_types::runtime_receipt::RuntimeExecutionReceipt,
+        >(&node.content)
+        {
             if receipt_content.proposal_id == job.job_id {
                 found_receipt = Some(receipt_content);
                 break;
@@ -438,12 +490,19 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
             tracing::debug!(cid = %node.cid()?.to_string(), content_str = %node.content, "DAG node content not a RuntimeExecutionReceipt JSON or deserialization failed");
         }
     }
-    
-    assert!(found_receipt.is_some(), "Receipt for job {} should have been created and anchored.", job.job_id);
-    if let Some(ref receipt) = found_receipt {
-         assert_eq!(receipt.metrics.mana_cost, Some(mana_to_cost), "Receipt metrics should reflect mana_cost");
-    }
 
+    assert!(
+        found_receipt.is_some(),
+        "Receipt for job {} should have been created and anchored.",
+        job.job_id
+    );
+    if let Some(ref receipt) = found_receipt {
+        assert_eq!(
+            receipt.metrics.mana_cost,
+            Some(mana_to_cost),
+            "Receipt metrics should reflect mana_cost"
+        );
+    }
 
     // Assert mana deduction
     let deductions = mock_reputation_updater.get_mana_deductions();
@@ -452,11 +511,23 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
     let deduction = &deductions[0];
     // The executor_did for mana deduction will be the runtime's own DID (node_did)
     // because execute_mesh_job sets local_keypair.did as executor_did.
-    assert_eq!(deduction.executor_did, node_did, "Mana should be deducted from the runtime/node DID");
-    assert_eq!(deduction.amount, mana_to_cost, "Deducted mana amount should match job's mana_cost");
-    assert_eq!(deduction.coop_id, "test-federation-mana-pipeline", "Coop ID for deduction should match federation ID from context");
-    assert_eq!(deduction.community_id, "test-federation-mana-pipeline", "Community ID for deduction should match federation ID from context");
-    
+    assert_eq!(
+        deduction.executor_did, node_did,
+        "Mana should be deducted from the runtime/node DID"
+    );
+    assert_eq!(
+        deduction.amount, mana_to_cost,
+        "Deducted mana amount should match job's mana_cost"
+    );
+    assert_eq!(
+        deduction.coop_id, "test-federation-mana-pipeline",
+        "Coop ID for deduction should match federation ID from context"
+    );
+    assert_eq!(
+        deduction.community_id, "test-federation-mana-pipeline",
+        "Community ID for deduction should match federation ID from context"
+    );
+
     // _handle.abort(); // Abort the runtime task
     // No need to abort if it's expected to finish or timeout. If it's truly `run_forever`, then abort.
     // The previous tests used handle.abort(), let's keep it for now.
@@ -475,26 +546,30 @@ async fn test_reputation_mana_pipeline() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_mana_regeneration_loop_ticks() -> anyhow::Result<()> {
     // Initialize tracing for debug output (optional but helpful)
-    let _ = tracing_subscriber::fmt().with_env_filter("icn_runtime=debug,icn_economics=debug").try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("icn_runtime=debug,icn_economics=debug")
+        .try_init();
 
     // Generate a test DID
     let test_user_did = generate_did_key().unwrap();
 
     // Create an InMemoryManaLedger and set initial mana
     let ledger = Arc::new(InMemoryManaLedger::default());
-    ledger.set_initial_state(test_user_did.clone(), ManaState {
-        current_mana: 50,
-        max_mana: 100,
-        regen_rate_per_epoch: 0, // Not directly used by FixedRatePerTick policy, but part of struct
-        last_updated_epoch: 0,   // Not directly used by FixedRatePerTick policy, but part of struct
-    }).await; // set_initial_state is async in the provided code for InMemoryManaLedger
+    ledger
+        .set_initial_state(
+            test_user_did.clone(),
+            ManaState {
+                current_mana: 50,
+                max_mana: 100,
+                regen_rate_per_epoch: 0, // Not directly used by FixedRatePerTick policy, but part of struct
+                last_updated_epoch: 0, // Not directly used by FixedRatePerTick policy, but part of struct
+            },
+        )
+        .await; // set_initial_state is async in the provided code for InMemoryManaLedger
 
     // Create a ManaRegenerator with fixed regen rate (10 per tick)
     let policy = RegenerationPolicy::FixedRatePerTick(10);
-    let regenerator = Arc::new(ManaRegenerator::new(
-        ledger.clone(),
-        policy,
-    ));
+    let regenerator = Arc::new(ManaRegenerator::new(ledger.clone(), policy));
 
     // Build RuntimeContext with the regenerator
     // RuntimeContextBuilder is generic, defaults to InMemoryManaLedger
@@ -502,14 +577,15 @@ async fn test_mana_regeneration_loop_ticks() -> anyhow::Result<()> {
         .with_identity(IcnKeyPair::generate()) // Runtime needs an identity
         .with_executor_id("test-runtime-did-for-mana-regen".to_string()) // And an executor ID
         .with_mana_regenerator(regenerator.clone());
-    
+
     let runtime_context = Arc::new(context_builder.build());
 
     // Create a dummy storage for the runtime
-    let dummy_storage = Arc::new(MemStorage::new()); 
+    let dummy_storage = Arc::new(MemStorage::new());
 
     // Runtime::with_context is generic, specify InMemoryManaLedger
-    let runtime = Runtime::<InMemoryManaLedger>::with_context(dummy_storage, runtime_context.clone());
+    let runtime =
+        Runtime::<InMemoryManaLedger>::with_context(dummy_storage, runtime_context.clone());
 
     // Spawn runtime task. The run_forever loop has a 30s tick interval for mana.
     info!("Spawning runtime for mana regeneration test...");
@@ -522,13 +598,22 @@ async fn test_mana_regeneration_loop_ticks() -> anyhow::Result<()> {
 
     // Check mana state after tick
     let updated_state_option = ledger.get_mana_state(&test_user_did).await?;
-    assert!(updated_state_option.is_some(), "ManaState should exist for the DID");
+    assert!(
+        updated_state_option.is_some(),
+        "ManaState should exist for the DID"
+    );
 
     let updated_state = updated_state_option.unwrap();
     // Initial: 50, Regen: 10 per tick. Expected: 50 + 10 = 60
-    assert_eq!(updated_state.current_mana, 60, "Mana should have regenerated by 10 units");
+    assert_eq!(
+        updated_state.current_mana, 60,
+        "Mana should have regenerated by 10 units"
+    );
 
-    info!("Mana regeneration test successful. Final mana: {}", updated_state.current_mana);
+    info!(
+        "Mana regeneration test successful. Final mana: {}",
+        updated_state.current_mana
+    );
 
     // Clean up the runtime task
     runtime_handle.abort();
@@ -549,15 +634,15 @@ async fn test_mana_regeneration_policy_from_config() -> anyhow::Result<()> {
     let temp_dir = tempdir()?; // For storage_path, SledManaLedger will use this
     let config = RuntimeConfig {
         node_did: "test-node-did-for-config-test".to_string(), // Required by RuntimeConfig
-        storage_path: temp_dir.path().to_path_buf(),        // Required by from_config for SledStorage & SledManaLedger
+        storage_path: temp_dir.path().to_path_buf(), // Required by from_config for SledStorage & SledManaLedger
         mana_regeneration_policy: Some(RegenerationPolicy::FixedRatePerTick(regeneration_amount)),
         // Provide other necessary fields with defaults or test-specific values if from_config requires them
-        key_path: None, // from_config generates one if None
+        key_path: None,               // from_config generates one if None
         reputation_service_url: None, // Noop updater will be used
-        mesh_job_service_url: None, // No job polling
-        metrics_port: None, // No metrics server
+        mesh_job_service_url: None,   // No job polling
+        metrics_port: None,           // No metrics server
         log_level: Some("debug".to_string()),
-        reputation_scoring_config_path: None, 
+        reputation_scoring_config_path: None,
         mana_tick_interval_seconds: Some(30), // Explicitly set for test predictability
     };
 
@@ -568,17 +653,25 @@ async fn test_mana_regeneration_policy_from_config() -> anyhow::Result<()> {
     // 3. Get the ledger from the runtime (it was created by from_config).
     // The ledger will be an Arc<SledManaLedger>.
     let regenerator_opt = runtime.context().mana_regenerator.as_ref();
-    assert!(regenerator_opt.is_some(), "ManaRegenerator should be initialized by from_config");
+    assert!(
+        regenerator_opt.is_some(),
+        "ManaRegenerator should be initialized by from_config"
+    );
     // The ledger inside ManaRegenerator is Arc<L>, which is Arc<SledManaLedger> here.
     let ledger_from_runtime: Arc<dyn ManaLedger> = regenerator_opt.unwrap().ledger.clone();
-    
+
     // 4. Set initial state on this SledManaLedger instance.
-    ledger_from_runtime.update_mana_state(&test_user_did, ManaState {
-        current_mana: initial_mana,
-        max_mana: 100,
-        regen_rate_per_epoch: 0, // Not directly used by FixedRatePerTick
-        last_updated_epoch: 0,   // Not directly used by FixedRatePerTick
-    }).await?;
+    ledger_from_runtime
+        .update_mana_state(
+            &test_user_did,
+            ManaState {
+                current_mana: initial_mana,
+                max_mana: 100,
+                regen_rate_per_epoch: 0, // Not directly used by FixedRatePerTick
+                last_updated_epoch: 0,   // Not directly used by FixedRatePerTick
+            },
+        )
+        .await?;
 
     // 5. Spawn runtime task.
     info!("Spawning runtime for mana regeneration (from_config with SledManaLedger) test...");
@@ -586,19 +679,25 @@ async fn test_mana_regeneration_policy_from_config() -> anyhow::Result<()> {
 
     // 6. Wait long enough for at least one regeneration tick.
     // Use the mana_tick_interval_seconds from config + a buffer
-    let tick_interval_secs = 30; 
-    info!("Test sleeping for {} seconds to allow mana tick...", tick_interval_secs + 5);
+    let tick_interval_secs = 30;
+    info!(
+        "Test sleeping for {} seconds to allow mana tick...",
+        tick_interval_secs + 5
+    );
     tokio::time::sleep(Duration::from_secs(tick_interval_secs + 5)).await;
     info!("Test woke up, checking mana state (from_config with SledManaLedger)...");
 
     // 7. Assert on the ledger.
     let updated_state_option = ledger_from_runtime.get_mana_state(&test_user_did).await?;
-    assert!(updated_state_option.is_some(), "ManaState should exist for the DID (from_config with SledManaLedger)");
+    assert!(
+        updated_state_option.is_some(),
+        "ManaState should exist for the DID (from_config with SledManaLedger)"
+    );
 
     let updated_state = updated_state_option.unwrap();
     assert_eq!(
         updated_state.current_mana, expected_mana_after_tick,
-        "Mana should have regenerated by {} units as per config. Expected {}, got {}", 
+        "Mana should have regenerated by {} units as per config. Expected {}, got {}",
         regeneration_amount, expected_mana_after_tick, updated_state.current_mana
     );
 
@@ -609,7 +708,7 @@ async fn test_mana_regeneration_policy_from_config() -> anyhow::Result<()> {
 
     // Clean up the runtime task and temp directory
     runtime_handle.abort();
-    temp_dir.close()?; 
+    temp_dir.close()?;
 
     Ok(())
-} 
+}

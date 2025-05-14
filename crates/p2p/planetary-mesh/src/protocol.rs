@@ -1,11 +1,11 @@
-use icn_types::mesh::MeshJob;
-use icn_identity::Did;
-use std::collections::HashMap;
 use icn_economics::ResourceType;
-use serde::{Serialize, Deserialize};
+use icn_identity::Did;
 use icn_node_runtime::icn_did::Did;
 use icn_node_runtime::job_desc::JobId;
+use icn_types::mesh::MeshJob;
 use libp2p::identity::PeerId;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Type alias for JobId, which is typically a String.
 pub type JobId = String;
@@ -25,9 +25,9 @@ pub enum MeshProtocolMessage {
         // For example: estimated_bid_range: Option<(u64, u64)>, capability_summary_hash: Option<String>
     },
     ExecutionReceiptAvailableV1 {
-        job_id: JobId,         // The ID of the job this receipt is for
-        receipt_cid: String,   // The CID of the anchored ExecutionReceipt
-        executor_did: Did,     // The DID of the node that executed the job and produced the receipt
+        job_id: JobId,       // The ID of the job this receipt is for
+        receipt_cid: String, // The CID of the anchored ExecutionReceipt
+        executor_did: Did,   // The DID of the node that executed the job and produced the receipt
     },
     /// Sent by an executor node to update the originator (and potentially other interested parties)
     /// about the status of an ongoing job.
@@ -151,10 +151,10 @@ pub struct ReputationRecordAvailableV1 {
     pub record_cid: String, // Assuming CID is serialized as String for protocol messages
     pub subject_did: Did,
     pub issuer_did: Did,
-    pub job_id: JobId, // Using the JobId type alias from this file
+    pub job_id: JobId,                 // Using the JobId type alias from this file
     pub execution_receipt_cid: String, // Assuming CID is serialized as String
 }
 
 impl MeshProtocolMessage {
     // ... existing code ...
-} 
+}

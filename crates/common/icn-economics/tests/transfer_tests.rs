@@ -1,5 +1,5 @@
+use icn_economics::mana::{ManaError, ManaManager};
 use icn_identity::ScopeKey;
-use icn_economics::mana::{ManaManager, ManaError};
 
 #[test]
 fn transfer_moves_and_creates_pools() {
@@ -13,7 +13,8 @@ fn transfer_moves_and_creates_pools() {
     let to = ScopeKey::Cooperative("did:icn:coopA".to_string());
 
     // Transfer 200 credits
-    mgr.transfer(&from, &to, 200).expect("transfer should succeed");
+    mgr.transfer(&from, &to, 200)
+        .expect("transfer should succeed");
 
     // Source should have 300 left
     assert_eq!(mgr.balance(&from).unwrap(), 300);
@@ -22,6 +23,8 @@ fn transfer_moves_and_creates_pools() {
     assert_eq!(mgr.balance(&to).unwrap(), 200);
 
     // Attempt to overdraw should error
-    let err = mgr.transfer(&from, &to, 400).expect_err("expected InsufficientMana error");
+    let err = mgr
+        .transfer(&from, &to, 400)
+        .expect_err("expected InsufficientMana error");
     matches!(err, ManaError::InsufficientMana { .. });
-} 
+}

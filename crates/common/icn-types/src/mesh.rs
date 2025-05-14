@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
+use crate::jobs::policy::ExecutionPolicy;
+use crate::org::{CommunityId, CooperativeId}; // Assuming these are in icn_types::org
 use crate::resource::ResourceType;
 use icn_identity::Did; // Correct source for Did
-use crate::org::{CooperativeId, CommunityId}; // Assuming these are in icn_types::org
-use crate::jobs::policy::ExecutionPolicy; // New import
-// use crate::identity::Did; // Removed erroneous/duplicate import
-// use crate::runtime_receipt::RuntimeExecutionReceipt; // Removed, as it does not appear to be used in this file
-// use std::collections::HashMap; // Removed unused import
+use serde::{Deserialize, Serialize}; // New import
+                                     // use crate::identity::Did; // Removed erroneous/duplicate import
+                                     // use crate::runtime_receipt::RuntimeExecutionReceipt; // Removed, as it does not appear to be used in this file
+                                     // use std::collections::HashMap; // Removed unused import
 
 // Potential unused imports to be checked by compiler, remove if confirmed unused by later build.
 // Based on previous compiler output, these were unused:
@@ -106,7 +106,8 @@ pub struct MeshJobParams {
     pub expected_output_schema_cid: Option<String>,
 
     /// Optional execution policy for this job.
-    #[serde(skip_serializing_if = "Option::is_none")] // Add skip_serializing_if for consistency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    // Add skip_serializing_if for consistency
     pub execution_policy: Option<ExecutionPolicy>, // ✅ New field
 }
 
@@ -160,4 +161,4 @@ pub enum JobStatus {
     Completed,
     Failed,
     Cancelled, // Adding this as it was in planetary-mesh JobStatus
-} 
+}

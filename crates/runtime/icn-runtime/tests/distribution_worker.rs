@@ -1,9 +1,9 @@
-use icn_identity::ScopeKey;
 use icn_economics::mana::ManaManager;
-use icn_types::dag::{DagEventType, DagNodeBuilder};
-use icn_types::dag_store::SharedDagStore;
-use icn_types::dag_store::DagStore;
+use icn_identity::ScopeKey;
 use icn_runtime::distribution_worker::DistributionWorker; // path depending, adjust if module is public
+use icn_types::dag::{DagEventType, DagNodeBuilder};
+use icn_types::dag_store::DagStore;
+use icn_types::dag_store::SharedDagStore;
 use std::sync::{Arc, Mutex};
 
 #[tokio::test]
@@ -37,7 +37,13 @@ async fn test_distribution_tick() {
     }
 
     // Create worker with 60s interval but call tick directly
-    let worker = DistributionWorker::new(node_scope.clone(), dag_store.clone(), mana_mgr.clone(), None, 60);
+    let worker = DistributionWorker::new(
+        node_scope.clone(),
+        dag_store.clone(),
+        mana_mgr.clone(),
+        None,
+        60,
+    );
 
     let transfers = worker.tick().await;
     assert_eq!(transfers, 2);
@@ -52,4 +58,4 @@ async fn test_distribution_tick() {
         let bal = mgr.balance(&origin_scope).unwrap_or(0);
         assert_eq!(bal, 50);
     }
-} 
+}

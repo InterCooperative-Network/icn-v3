@@ -2,10 +2,10 @@
 // This module defines the data structure used by the `icn-runtime` to hold the state
 // and manage the execution of a single Mesh Job.
 
-use icn_types::mesh::MeshJobParams;
+use host_abi::LogLevel;
 use icn_identity::Did;
 use icn_mesh_protocol::{JobInteractiveInputV1, P2PJobStatus};
-use host_abi::LogLevel;
+use icn_types::mesh::MeshJobParams;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -43,7 +43,7 @@ pub struct JobExecutionContext {
 
     pub current_status: P2PJobStatus, // The rich status from planetary_mesh::protocol::P2PJobStatus
     pub current_stage_index: Option<u32>, // Current stage for workflow jobs.
-    pub current_stage_id: Option<String>,   // User-defined ID of the current stage.
+    pub current_stage_id: Option<String>, // User-defined ID of the current stage.
 
     // Interactivity State
     pub interactive_input_queue: VecDeque<JobInteractiveInputV1>,
@@ -62,7 +62,13 @@ pub struct JobExecutionContext {
 }
 
 impl JobExecutionContext {
-    pub fn new(job_id: String, originator_did: Did, job_params: MeshJobParams, host_node_did: Did, current_time_ms: u64) -> Self {
+    pub fn new(
+        job_id: String,
+        originator_did: Did,
+        job_params: MeshJobParams,
+        host_node_did: Did,
+        current_time_ms: u64,
+    ) -> Self {
         let mut permissions = JobPermissions::default();
         if job_params.is_interactive {
             permissions.can_send_interactive_output = true;
@@ -74,10 +80,20 @@ impl JobExecutionContext {
         JobExecutionContext {
             job_id,
             originator_did,
-            current_status: P2PJobStatus::Running { // Initial status when execution context is created
+            current_status: P2PJobStatus::Running {
+                // Initial status when execution context is created
                 node_id: host_node_did, // The DID of the current executor node
-                current_stage_index: if job_params.workflow_type != icn_types::mesh::WorkflowType::SingleWasmModule { Some(0) } else { None },
-                current_stage_id: job_params.stages.as_ref().and_then(|s| s.get(0).map(|sd| sd.stage_id.clone())),
+                current_stage_index: if job_params.workflow_type
+                    != icn_types::mesh::WorkflowType::SingleWasmModule
+                {
+                    Some(0)
+                } else {
+                    None
+                },
+                current_stage_id: job_params
+                    .stages
+                    .as_ref()
+                    .and_then(|s| s.get(0).map(|sd| sd.stage_id.clone())),
                 progress_percent: Some(0),
                 status_message: Some("Job initializing".to_string()),
             },
@@ -97,6 +113,9 @@ impl JobExecutionContext {
     // Example method to update status and potentially notify (simplified)
     pub fn update_status(&mut self, new_status: P2PJobStatus) {
         self.current_status = new_status;
-        println!("Job {} status updated to: {:?}", self.job_id, self.current_status);
+        println!(
+            "Job {} status updated to: {:?}",
+            self.job_id, self.current_status
+        );
     }
-} 
+}

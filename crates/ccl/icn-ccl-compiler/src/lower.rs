@@ -25,10 +25,7 @@ impl std::fmt::Display for UnhandledRuleInfo {
         write!(
             f,
             "rule: {:?}, content: \"{}\", line: {}, column: {}",
-            self.rule,
-            self.content,
-            self.line,
-            self.column
+            self.rule, self.content, self.line, self.column
         )
     }
 }
@@ -950,7 +947,9 @@ impl Lowerer {
                                             ));
                                         }
                                         Rule::perform_metered_action => {
-                                            steps.push(self.lower_perform_metered_action(step_pair)?);
+                                            steps.push(
+                                                self.lower_perform_metered_action(step_pair)?,
+                                            );
                                         }
                                         _ => {
                                             // Other statement types within an action_def block are ignored for now
@@ -1134,12 +1133,12 @@ impl Lowerer {
 
     fn lower_perform_metered_action(&self, pair: Pair<'_, Rule>) -> Result<ActionStep, LowerError> {
         // perform_metered_action = { "perform_metered_action" ~ "(" ~ string_literal ~ "," ~ identifier ~ "." ~ identifier ~ "," ~ number ~ ")" ~ ";" }
-        
+
         // Store the span for error reporting
         let pair_span = pair.as_span();
-        
+
         let mut inner_pairs = pair.into_inner();
-        
+
         // Extract the action name (string literal)
         let action_name_pair = inner_pairs.next().ok_or_else(|| {
             // Error if action name is missing
@@ -1151,20 +1150,21 @@ impl Lowerer {
             )))
         })?;
         let action_name = self.extract_string_literal(action_name_pair)?;
-        
+
         // Extract the ResourceType (namespace.identifier)
         let resource_type_namespace = inner_pairs.next().ok_or_else(|| {
             LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
-                    message: "Missing resource type namespace in perform_metered_action".to_string(),
+                    message: "Missing resource type namespace in perform_metered_action"
+                        .to_string(),
                 },
                 pair_span.clone(),
             )))
         })?;
-        
+
         // Skip the dot
         inner_pairs.next();
-        
+
         let resource_type_name = inner_pairs.next().ok_or_else(|| {
             LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
@@ -1173,35 +1173,39 @@ impl Lowerer {
                 pair_span.clone(),
             )))
         })?;
-        
+
         // Combine namespace and name to get ResourceType
         let namespace = resource_type_namespace.as_str();
         let name = resource_type_name.as_str();
-        
+
         if namespace != "ResourceType" {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!("Expected ResourceType namespace, found '{}'", namespace),
-                },
-                resource_type_namespace.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!("Expected ResourceType namespace, found '{}'", namespace),
+                    },
+                    resource_type_namespace.as_span(),
+                ),
+            )));
         }
-        
+
         let resource_type = match name {
             "CPU" => ResourceType::Cpu,
             "MEMORY" => ResourceType::Memory,
             "TOKEN" => ResourceType::Token,
             "IO" => ResourceType::Io,
             _ => {
-                return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                    pest::error::ErrorVariant::CustomError {
-                        message: format!("Unknown resource type '{}'", name),
-                    },
-                    resource_type_name.as_span(),
-                ))));
+                return Err(LowerError::Parse(Box::new(
+                    pest::error::Error::new_from_span(
+                        pest::error::ErrorVariant::CustomError {
+                            message: format!("Unknown resource type '{}'", name),
+                        },
+                        resource_type_name.as_span(),
+                    ),
+                )));
             }
         };
-        
+
         // Extract the amount (number)
         let amount_pair = inner_pairs.next().ok_or_else(|| {
             LowerError::Parse(Box::new(pest::error::Error::new_from_span(
@@ -1220,7 +1224,7 @@ impl Lowerer {
                 amount_pair.as_span(),
             )))
         })?;
-        
+
         Ok(ActionStep::PerformMeteredAction {
             ident: action_name,
             resource: resource_type,
@@ -1282,18 +1286,20 @@ impl Lowerer {
 
     fn extract_string_literal(&self, pair: Pair<'_, Rule>) -> Result<String, LowerError> {
         if pair.as_rule() != Rule::string_literal {
-            return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: format!("Expected string literal, found {:?}", pair.as_rule()),
-                },
-                pair.as_span(),
-            ))));
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!("Expected string literal, found {:?}", pair.as_rule()),
+                    },
+                    pair.as_span(),
+                ),
+            )));
         }
-        
+
         // Remove the quotes from the string literal
         let raw_str = pair.as_str();
         let content = &raw_str[1..raw_str.len() - 1];
-        
+
         // TODO: Handle escape sequences properly
         Ok(content.to_string())
     }

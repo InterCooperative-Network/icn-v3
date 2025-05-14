@@ -1,9 +1,9 @@
-use multibase::{Base, decode};
-use thiserror::Error;
-use std::str::FromStr;
-use std::fmt;
-use serde::{Deserialize, Serialize};
 use anyhow::Context;
+use multibase::{decode, Base};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
+use thiserror::Error;
 
 // Ed25519 public key multicodec prefix
 const ED25519_MULTICODEC_PREFIX: u8 = 0xed;
@@ -53,11 +53,11 @@ impl Did {
                 if key_bytes.len() != 32 {
                     return Err(DidError::Malformed);
                 }
-                
+
                 // Convert to array for ed25519_dalek::VerifyingKey
                 let mut bytes = [0u8; 32];
                 bytes.copy_from_slice(key_bytes);
-                
+
                 let pk = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
                     .map_err(|_| DidError::Malformed)?;
                 Ok(pk)
@@ -86,11 +86,11 @@ impl FromStr for Did {
         if !s.starts_with("did:key:") {
             return Err(DidError::Malformed);
         }
-        
+
         // Attempt to decode the public key to validate it's a proper DID
         let did = Did(s.to_string());
         did.to_ed25519()?;
-        
+
         Ok(did)
     }
 }
@@ -99,4 +99,4 @@ impl fmt::Display for Did {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
-} 
+}

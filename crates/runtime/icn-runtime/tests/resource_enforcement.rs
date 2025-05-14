@@ -1,21 +1,23 @@
 #![allow(dead_code)]
-use std::sync::Arc;
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use icn_economics::{Economics, ResourceAuthorizationPolicy};
+use icn_economics::{LedgerKey, ResourceType};
+use icn_identity::KeyPair;
+use icn_runtime::{
+    Proposal, ProposalState, QuorumStatus, RuntimeContext, RuntimeError, RuntimeStorage,
+};
 use icn_runtime::{Runtime, RuntimeContextBuilder, VmContext};
 use icn_types::dag_store::SharedDagStore;
-use icn_identity::KeyPair;
-use icn_economics::{ResourceType, LedgerKey};
-use anyhow::{Result, anyhow};
-use wat::parse_str;
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-use icn_runtime::{RuntimeStorage, Proposal, ProposalState, QuorumStatus, RuntimeError, RuntimeContext};
-use icn_economics::{Economics, ResourceAuthorizationPolicy};
-use async_trait::async_trait;
-use std::sync::{Mutex};
-use std::str::FromStr;
-use std::path::Path;
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::future::Future;
+use std::path::Path;
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::Mutex;
+use wat::parse_str;
 
 /// Mock storage for testing
 #[derive(Clone, Default)]
@@ -36,31 +38,57 @@ impl MockStorage {
 #[async_trait]
 impl icn_runtime::RuntimeStorage for MockStorage {
     async fn load_proposal(&self, _id: &str) -> Result<Proposal> {
-        Ok(Proposal { id: "mock_proposal_id".into(), wasm_cid: "mock_wasm_cid".into(), ccl_cid: "mock_ccl_cid".into(), state: ProposalState::Approved, quorum_status: QuorumStatus::MajorityReached })
+        Ok(Proposal {
+            id: "mock_proposal_id".into(),
+            wasm_cid: "mock_wasm_cid".into(),
+            ccl_cid: "mock_ccl_cid".into(),
+            state: ProposalState::Approved,
+            quorum_status: QuorumStatus::MajorityReached,
+        })
     }
 
-    async fn update_proposal(&self, _proposal: &Proposal) -> Result<()> { Ok(()) }
+    async fn update_proposal(&self, _proposal: &Proposal) -> Result<()> {
+        Ok(())
+    }
 
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
-        self.wasm.lock().unwrap().get(cid).cloned().ok_or_else(|| anyhow!("WASM not found in mock: {}", cid))
+        self.wasm
+            .lock()
+            .unwrap()
+            .get(cid)
+            .cloned()
+            .ok_or_else(|| anyhow!("WASM not found in mock: {}", cid))
     }
 
     async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
         let id = receipt.id.clone();
-        self.receipts.lock().unwrap().insert(id.clone(), receipt.clone());
+        self.receipts
+            .lock()
+            .unwrap()
+            .insert(id.clone(), receipt.clone());
         Ok(id)
     }
 
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
-        self.wasm.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        self.wasm
+            .lock()
+            .unwrap()
+            .insert(cid.to_string(), bytes.to_vec());
         Ok(())
     }
 
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
-        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt not found"))
+        self.receipts
+            .lock()
+            .unwrap()
+            .get(receipt_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Receipt not found"))
     }
 
-    async fn anchor_to_dag(&self, _cid: &str) -> Result<String> { Ok("mock-anchor".into()) }
+    async fn anchor_to_dag(&self, _cid: &str) -> Result<String> {
+        Ok("mock-anchor".into())
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -87,7 +115,7 @@ async fn resource_usage_recording() -> Result<()> {
             i64.const 10 ;; amount
             call $record_usage))
     "#;
-    
+
     let wasm = parse_str(wat)?;
 
     // Generate a test DID
@@ -99,11 +127,11 @@ async fn resource_usage_recording() -> Result<()> {
         .with_dag_store(Arc::new(SharedDagStore::new()))
         .with_executor_id(did.to_string())
         .build();
-    
+
     // Create runtime with mock storage
     let storage = Arc::new(MockStorage::new());
     let mut runtime = Runtime::with_context(storage, Arc::new(ctx.clone()));
-    
+
     // Create VM context
     let vm_context = VmContext {
         executor_did: did.to_string(),
@@ -114,10 +142,12 @@ async fn resource_usage_recording() -> Result<()> {
         coop_id: None,
         community_id: None,
     };
-    
+
     // Execute the WASM
-    let result_vals = runtime.execute_wasm(&wasm, "_start".to_string(), Vec::new()).await?;
-    
+    let result_vals = runtime
+        .execute_wasm(&wasm, "_start".to_string(), Vec::new())
+        .await?;
+
     // Check the ledger
     let ledger = ctx.resource_ledger.read().await;
     let expected_key = LedgerKey {
@@ -128,7 +158,7 @@ async fn resource_usage_recording() -> Result<()> {
     };
     assert_eq!(ledger.contains_key(&expected_key), false, 
                "Ledger shouldn't contain entries yet until core-vm is updated to use our economics API (or ManaManager is checked)");
-    
+
     Ok(())
 }
 
@@ -157,7 +187,11 @@ async fn test_resource_enforcement() -> Result<()> {
     "#;
     let wasm = wat::parse_str(wat)?;
 
-    let policy = ResourceAuthorizationPolicy { max_cpu: 1000, max_memory: 1000, token_allowance: 1000 };
+    let policy = ResourceAuthorizationPolicy {
+        max_cpu: 1000,
+        max_memory: 1000,
+        token_allowance: 1000,
+    };
     let economics = Arc::new(Economics::new(policy));
 
     // Initialize context
@@ -184,7 +218,9 @@ async fn test_resource_enforcement() -> Result<()> {
         community_id: None,
     };
 
-    let _result = runtime.execute_wasm(&wasm, "_start".to_string(), Vec::new()).await?;
+    let _result = runtime
+        .execute_wasm(&wasm, "_start".to_string(), Vec::new())
+        .await?;
 
     let mana_mgr = ctx.mana_manager.lock().unwrap();
     let expected_key_cpu = LedgerKey {
@@ -201,4 +237,4 @@ async fn test_resource_enforcement() -> Result<()> {
     };
 
     Ok(())
-} 
+}

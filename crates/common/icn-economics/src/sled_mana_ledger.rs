@@ -1,11 +1,11 @@
-use anyhow::{Result, Context, anyhow};
+use crate::mana_metrics::*; // Added for metrics
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use icn_identity::Did;
 use sled::Db;
-use std::sync::Arc; // May not be needed directly here, but often with sled
 use std::str::FromStr; // Added for Did::from_str
-use crate::mana_metrics::*; // Added for metrics
-use tracing::{error, debug}; // Added for logging
+use std::sync::Arc; // May not be needed directly here, but often with sled
+use tracing::{debug, error}; // Added for logging
 
 use crate::mana::{ManaLedger, ManaState};
 
@@ -30,7 +30,8 @@ impl SledManaLedger {
 
     // Helper to get the specific tree for mana states
     fn get_tree(&self) -> Result<sled::Tree> {
-        self.db.open_tree(MANA_STATE_TREE_NAME)
+        self.db
+            .open_tree(MANA_STATE_TREE_NAME)
             .context("Failed to access mana_states tree in Sled database")
     }
 }
@@ -70,7 +71,11 @@ impl ManaLedger for SledManaLedger {
                             .inc();
                         error!(%did, error = %e, "Failed to deserialize ManaState from Sled");
                         // Return error instead of Ok(None) to indicate data corruption
-                        Err(anyhow!("Failed to deserialize ManaState for DID {}: {}", did, e))
+                        Err(anyhow!(
+                            "Failed to deserialize ManaState for DID {}: {}",
+                            did,
+                            e
+                        ))
                     }
                 }
             }
@@ -103,7 +108,7 @@ impl ManaLedger for SledManaLedger {
                 .with_label_values(&["sled", "get_tree", "io"])
                 .inc();
             error!(%did, "Failed to get Sled tree for update_mana_state: {}", e);
-            return Err(e); 
+            return Err(e);
         }
         let tree = tree_result.unwrap();
 
@@ -145,7 +150,11 @@ impl ManaLedger for SledManaLedger {
                     .with_label_values(&["sled", "set", "deserialization"])
                     .inc();
                 error!(%did, error = %e, "Failed to serialize ManaState for Sled");
-                Err(anyhow!("Serialization error for ManaState for DID {}: {}", did, e))
+                Err(anyhow!(
+                    "Serialization error for ManaState for DID {}: {}",
+                    did,
+                    e
+                ))
             }
         }
     }
@@ -177,7 +186,11 @@ impl ManaLedger for SledManaLedger {
                                 Err(e) => {
                                     // This is an error in data format, not an I/O error for the overall operation
                                     MANA_LEDGER_ERRORS_TOTAL
-                                        .with_label_values(&["sled", "list_parse_did", "deserialization"])
+                                        .with_label_values(&[
+                                            "sled",
+                                            "list_parse_did",
+                                            "deserialization",
+                                        ])
                                         .inc();
                                     error!(did_str = %did_str, error = %e, "Error parsing Did from Sled key");
                                     // Optionally, continue collecting other valid DIDs
@@ -199,13 +212,13 @@ impl ManaLedger for SledManaLedger {
                         .inc();
                     error!(error = %e, "Sled tree iteration I/O error");
                     operation_successful = false; // Mark operation as failed
-                    // Depending on desired behavior, we might stop or continue iteration
-                    // For now, let's stop and report the error for the whole operation
-                    return Err(anyhow!("Sled iteration failed: {}", e)); 
+                                                  // Depending on desired behavior, we might stop or continue iteration
+                                                  // For now, let's stop and report the error for the whole operation
+                    return Err(anyhow!("Sled iteration failed: {}", e));
                 }
             }
         }
-        
+
         if operation_successful {
             MANA_LEDGER_OPERATIONS_TOTAL
                 .with_label_values(&["sled", "list", "success"])
@@ -233,7 +246,7 @@ mod tests {
     async fn test_sled_mana_ledger_set_get() -> Result<()> {
         let dir = tempdir()?;
         let ledger = SledManaLedger::open(dir.path())?;
-        
+
         let did1 = generate_did_key().unwrap();
         let state1 = ManaState {
             current_mana: 100,
@@ -275,7 +288,7 @@ mod tests {
         let mut all_dids_retrieved = ledger.all_dids().await?;
         // Sort by string representation if Did does not implement Ord directly
         all_dids_retrieved.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-        
+
         let mut expected_dids = vec![did1.clone(), did2.clone()];
         // Sort by string representation
         expected_dids.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
@@ -283,7 +296,7 @@ mod tests {
         assert_eq!(all_dids_retrieved, expected_dids);
         Ok(())
     }
-    
+
     #[tokio::test]
     async fn test_sled_mana_ledger_update_existing() -> Result<()> {
         let dir = tempdir()?;
@@ -295,7 +308,9 @@ mod tests {
             regen_rate_per_epoch: 5,
             last_updated_epoch: 0,
         };
-        ledger.update_mana_state(&did1, initial_state.clone()).await?;
+        ledger
+            .update_mana_state(&did1, initial_state.clone())
+            .await?;
 
         let updated_mana_state = ManaState {
             current_mana: 75,
@@ -303,11 +318,13 @@ mod tests {
             regen_rate_per_epoch: 5,
             last_updated_epoch: 1, // Simulate an epoch update
         };
-        ledger.update_mana_state(&did1, updated_mana_state.clone()).await?;
+        ledger
+            .update_mana_state(&did1, updated_mana_state.clone())
+            .await?;
 
         let retrieved_state = ledger.get_mana_state(&did1).await?.unwrap();
         assert_eq!(retrieved_state.current_mana, 75);
         assert_eq!(retrieved_state.last_updated_epoch, 1);
         Ok(())
     }
-} 
+}

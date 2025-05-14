@@ -1,9 +1,9 @@
 use crate::{Did, KeyPair, Signature};
 use chrono::{DateTime, Utc};
+use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use ed25519_dalek::Verifier;
 
 /// Generic W3C-style Verifiable Credential.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +99,10 @@ where
             signature_value_hex: hex::encode(sig.to_bytes()),
         });
 
-        Ok(SignedCredential { vc: self, signature: sig })
+        Ok(SignedCredential {
+            vc: self,
+            signature: sig,
+        })
     }
 }
 
@@ -115,4 +118,4 @@ where
             Err(CredentialError::InvalidSignature)
         }
     }
-} 
+}

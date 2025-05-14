@@ -11,19 +11,31 @@ pub struct IdentityIndex {
 }
 
 impl IdentityIndex {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Register DID membership in a cooperative.
     pub fn insert_did_coop(&mut self, did: Did, coop_id: impl Into<String>) {
         self.did_to_coop.insert(did, coop_id.into());
     }
 
-    pub fn insert_coop_community(&mut self, coop_id: impl Into<String>, community_id: impl Into<String>) {
-        self.coop_to_community.insert(coop_id.into(), community_id.into());
+    pub fn insert_coop_community(
+        &mut self,
+        coop_id: impl Into<String>,
+        community_id: impl Into<String>,
+    ) {
+        self.coop_to_community
+            .insert(coop_id.into(), community_id.into());
     }
 
-    pub fn insert_community_federation(&mut self, community_id: impl Into<String>, federation: impl Into<String>) {
-        self.community_to_federation.insert(community_id.into(), federation.into());
+    pub fn insert_community_federation(
+        &mut self,
+        community_id: impl Into<String>,
+        federation: impl Into<String>,
+    ) {
+        self.community_to_federation
+            .insert(community_id.into(), federation.into());
     }
 
     /// Resolve an accounting `ScopeKey` for the given DID.
@@ -39,4 +51,4 @@ impl IdentityIndex {
         }
         ScopeKey::Individual(did.to_string())
     }
-} 
+}

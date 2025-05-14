@@ -1,6 +1,6 @@
 use crate::{Did, KeyPair, VerifiableCredential};
-use crate::{QuorumProof, QuorumType, QuorumError};
 use crate::{FederationMetadata, TrustBundle};
+use crate::{QuorumError, QuorumProof, QuorumType};
 use std::collections::HashMap;
 
 #[test]
@@ -27,7 +27,7 @@ fn sign_and_verify() {
     // Tamper
     let mut bad = sig.to_bytes();
     bad[0] ^= 0xFF;
-    
+
     // In ed25519-dalek v2, from_bytes returns a Signature directly, not a Result
     let bad_sig = ed25519_dalek::Signature::from_bytes(&bad);
     assert!(!kp.verify(msg, &bad_sig));
@@ -44,7 +44,9 @@ trait ErrOrNone<T, E> {
     fn is_err_or_none(&self) -> bool;
 }
 impl<T, E> ErrOrNone<T, E> for Result<T, E> {
-    fn is_err_or_none(&self) -> bool { self.is_err() }
+    fn is_err_or_none(&self) -> bool {
+        self.is_err()
+    }
 }
 
 // VC Tests
@@ -92,37 +94,37 @@ fn canonical_bytes_stable() {
 fn quorum_proof_majority() {
     // Create 5 keypairs as potential signers
     let keypairs: Vec<KeyPair> = (0..5).map(|_| KeyPair::generate()).collect();
-    
+
     // Create a message to sign
     let message = b"Federation test message";
-    
+
     // Create a map of allowed signers
     let mut allowed_signers = HashMap::new();
     for kp in &keypairs {
         allowed_signers.insert(kp.did.clone(), kp.pk);
     }
-    
+
     // Create signatures from 3 signers (majority of 5)
     let signatures = vec![
         (keypairs[0].did.clone(), keypairs[0].sign(message)),
         (keypairs[1].did.clone(), keypairs[1].sign(message)),
         (keypairs[2].did.clone(), keypairs[2].sign(message)),
     ];
-    
+
     // Create a majority quorum proof
     let proof = QuorumProof::new(QuorumType::Majority, signatures);
-    
+
     // Verify should succeed with 3/5 signatures
     assert!(proof.verify(message, &allowed_signers).is_ok());
-    
+
     // Create a proof with only 2 signatures (not a majority)
     let insufficient_signatures = vec![
         (keypairs[0].did.clone(), keypairs[0].sign(message)),
         (keypairs[1].did.clone(), keypairs[1].sign(message)),
     ];
-    
+
     let insufficient_proof = QuorumProof::new(QuorumType::Majority, insufficient_signatures);
-    
+
     // Verify should fail with 2/5 signatures
     assert!(matches!(
         insufficient_proof.verify(message, &allowed_signers),
@@ -134,31 +136,31 @@ fn quorum_proof_majority() {
 fn quorum_proof_threshold() {
     // Create 5 keypairs as potential signers
     let keypairs: Vec<KeyPair> = (0..5).map(|_| KeyPair::generate()).collect();
-    
+
     // Create a message to sign
     let message = b"Federation threshold test";
-    
+
     // Create a map of allowed signers
     let mut allowed_signers = HashMap::new();
     for kp in &keypairs {
         allowed_signers.insert(kp.did.clone(), kp.pk);
     }
-    
+
     // Create signatures from 2 signers
     let signatures = vec![
         (keypairs[0].did.clone(), keypairs[0].sign(message)),
         (keypairs[1].did.clone(), keypairs[1].sign(message)),
     ];
-    
+
     // Create a threshold quorum proof requiring 2 signers
     let proof = QuorumProof::new(QuorumType::Threshold(2), signatures.clone());
-    
+
     // Verify should succeed with 2 signatures meeting threshold
     assert!(proof.verify(message, &allowed_signers).is_ok());
-    
+
     // Test with threshold too high
     let high_threshold_proof = QuorumProof::new(QuorumType::Threshold(6), signatures);
-    
+
     // Verify should fail with threshold > number of allowed signers
     assert!(matches!(
         high_threshold_proof.verify(message, &allowed_signers),
@@ -170,43 +172,41 @@ fn quorum_proof_threshold() {
 fn quorum_proof_weighted() {
     // Create 3 keypairs as potential signers
     let keypairs: Vec<KeyPair> = (0..3).map(|_| KeyPair::generate()).collect();
-    
+
     // Create a message to sign
     let message = b"Federation weighted test";
-    
+
     // Create a map of allowed signers
     let mut allowed_signers = HashMap::new();
     for kp in &keypairs {
         allowed_signers.insert(kp.did.clone(), kp.pk);
     }
-    
+
     // Create weight map: kp0 gets 3 votes, kp1 gets 2 votes, kp2 gets 1 vote
     let mut weights = HashMap::new();
     weights.insert(keypairs[0].did.clone(), 3);
     weights.insert(keypairs[1].did.clone(), 2);
     weights.insert(keypairs[2].did.clone(), 1);
-    
+
     // Case 1: Only kp0 signs (3/6 votes, not enough)
-    let signatures1 = vec![
-        (keypairs[0].did.clone(), keypairs[0].sign(message)),
-    ];
-    
+    let signatures1 = vec![(keypairs[0].did.clone(), keypairs[0].sign(message))];
+
     let proof1 = QuorumProof::new(QuorumType::Weighted(weights.clone()), signatures1);
-    
+
     // Should fail - need more than 3/6 votes
     assert!(matches!(
         proof1.verify(message, &allowed_signers),
         Err(QuorumError::InsufficientSigners)
     ));
-    
+
     // Case 2: kp0 and kp1 sign (5/6 votes, sufficient)
     let signatures2 = vec![
         (keypairs[0].did.clone(), keypairs[0].sign(message)),
         (keypairs[1].did.clone(), keypairs[1].sign(message)),
     ];
-    
+
     let proof2 = QuorumProof::new(QuorumType::Weighted(weights), signatures2);
-    
+
     // Should succeed with 5/6 votes
     assert!(proof2.verify(message, &allowed_signers).is_ok());
 }
@@ -215,22 +215,22 @@ fn quorum_proof_weighted() {
 fn quorum_proof_duplicate_signer() {
     // Create keypair
     let kp = KeyPair::generate();
-    
+
     // Create a message to sign
     let message = b"Federation duplicate test";
-    
+
     // Create a map of allowed signers
     let mut allowed_signers = HashMap::new();
     allowed_signers.insert(kp.did.clone(), kp.pk);
-    
+
     // Try to add same signer twice
     let signatures = vec![
         (kp.did.clone(), kp.sign(message)),
         (kp.did.clone(), kp.sign(message)), // Duplicate signer
     ];
-    
+
     let proof = QuorumProof::new(QuorumType::Majority, signatures);
-    
+
     // Verify should fail due to duplicate signer
     assert!(matches!(
         proof.verify(message, &allowed_signers),
@@ -243,7 +243,7 @@ fn quorum_proof_duplicate_signer() {
 fn trust_bundle_verify() {
     // Create 5 keypairs as trusted signers
     let keypairs: Vec<KeyPair> = (0..5).map(|_| KeyPair::generate()).collect();
-    
+
     // Create federation metadata
     let metadata = FederationMetadata {
         name: "Test Federation".to_string(),
@@ -251,42 +251,43 @@ fn trust_bundle_verify() {
         version: "1.0".to_string(),
         additional: HashMap::new(),
     };
-    
+
     // Create a trust bundle
     let mut bundle = TrustBundle::new(
         "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
         metadata,
     );
-    
+
     // Calculate the hash for signing
     let bundle_hash = bundle.calculate_hash().unwrap();
-    
+
     // Create signatures from 3 signers
     let signatures = vec![
         (keypairs[0].did.clone(), keypairs[0].sign(&bundle_hash)),
         (keypairs[1].did.clone(), keypairs[1].sign(&bundle_hash)),
         (keypairs[2].did.clone(), keypairs[2].sign(&bundle_hash)),
     ];
-    
+
     // Create a quorum proof
     let proof = QuorumProof::new(QuorumType::Majority, signatures);
-    
+
     // Add the proof to the bundle
     bundle.add_quorum_proof(proof);
-    
+
     // Create a map of trusted signer verifying keys
     let mut signer_keys = HashMap::new();
     for kp in &keypairs {
         signer_keys.insert(kp.did.clone(), kp.pk);
     }
-    
+
     // Verify the trust bundle
     assert!(bundle.verify(&signer_keys).is_ok());
-    
+
     // Test with a tampered bundle
     let mut tampered_bundle = bundle.clone();
-    tampered_bundle.root_dag_cid = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354".to_string();
-    
+    tampered_bundle.root_dag_cid =
+        "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354".to_string();
+
     // Verification should fail for the tampered bundle
     assert!(tampered_bundle.verify(&signer_keys).is_err());
-} 
+}

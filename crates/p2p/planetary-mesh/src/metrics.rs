@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
 use prometheus::{
-    opts, register_counter, register_counter_vec, register_histogram, register_histogram_vec, Counter,
-    CounterVec, Histogram, HistogramVec,
+    opts, register_counter, register_counter_vec, register_histogram, register_histogram_vec,
+    Counter, CounterVec, Histogram, HistogramVec,
 };
 
 // --- Metric Label Definitions ---
@@ -56,7 +56,6 @@ lazy_static! {
     ).unwrap();
 }
 
-
 // --- Helper Functions to Record Metrics ---
 
 // Job Lifecycle
@@ -73,7 +72,9 @@ pub fn jobs_execution_attempted_inc() {
 #[inline]
 pub fn job_execution_observe(duration_seconds: f64, success: bool) {
     let result_label = if success { "success" } else { "failure" };
-    MESH_JOBS_EXECUTED_TOTAL.with_label_values(&[result_label]).inc();
+    MESH_JOBS_EXECUTED_TOTAL
+        .with_label_values(&[result_label])
+        .inc();
     MESH_JOB_EXECUTION_DURATION_SECONDS.observe(duration_seconds);
 }
 
@@ -86,7 +87,9 @@ pub fn receipts_created_inc() {
 #[inline]
 pub fn receipt_signing_observe(duration_seconds: f64, success: bool) {
     let result_label = if success { "success" } else { "failure" };
-    MESH_RECEIPTS_SIGNED_TOTAL.with_label_values(&[result_label]).inc();
+    MESH_RECEIPTS_SIGNED_TOTAL
+        .with_label_values(&[result_label])
+        .inc();
     // Only observe duration for successful signings for this specific histogram.
     // Failed signing durations could be a separate metric if valuable.
     if success {
@@ -96,5 +99,7 @@ pub fn receipt_signing_observe(duration_seconds: f64, success: bool) {
 
 #[inline]
 pub fn receipt_local_processing_error_inc(stage: &str) {
-    MESH_RECEIPT_LOCAL_PROCESSING_ERRORS_TOTAL.with_label_values(&[stage]).inc();
-} 
+    MESH_RECEIPT_LOCAL_PROCESSING_ERRORS_TOTAL
+        .with_label_values(&[stage])
+        .inc();
+}

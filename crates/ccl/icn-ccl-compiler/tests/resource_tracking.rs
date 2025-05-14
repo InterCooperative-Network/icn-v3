@@ -24,10 +24,7 @@ impl icn_runtime::RuntimeStorage for MockStorage {
         unimplemented!("Not needed for this test")
     }
 
-    async fn store_receipt(
-        &self,
-        _receipt: &icn_runtime::ExecutionReceipt,
-    ) -> Result<String> {
+    async fn store_receipt(&self, _receipt: &icn_runtime::ExecutionReceipt) -> Result<String> {
         unimplemented!("Not needed for this test")
     }
 
@@ -44,12 +41,10 @@ fn runtime_with_default_economics() -> Runtime {
         max_memory: 1000,
         token_allowance: 1000,
     };
-    
+
     let economics = Arc::new(Economics::new(policy));
-    let context = RuntimeContext::builder()
-        .with_economics(economics)
-        .build();
-        
+    let context = RuntimeContext::builder().with_economics(economics).build();
+
     Runtime::with_context(Arc::new(MockStorage), context)
 }
 
@@ -66,14 +61,14 @@ async fn test_perform_metered_action() -> Result<()> {
         perform_metered_action("publish_result", ResourceType.TOKEN, 10);
     }
     "#;
-    
+
     // Compile the CCL to WASM
     let compiler = CclCompiler::new()?;
     let wasm_bytes = compiler.compile_to_wasm(ccl_source)?;
-    
+
     // Create a runtime with default economics
     let runtime = runtime_with_default_economics();
-    
+
     // Create a VM context with a test DID
     let test_did = "did:icn:test-user";
     let vm_context = VmContext {
@@ -83,37 +78,43 @@ async fn test_perform_metered_action() -> Result<()> {
         code_cid: None,
         resource_limits: None,
     };
-    
+
     // Execute the WASM module
     let result = runtime.execute_wasm(&wasm_bytes, vm_context)?;
-    
+
     // Verify resource usage was recorded
     let resource_ledger = runtime.context().resource_ledger.clone();
     let economics = runtime.context().economics.clone();
-    
+
     // Check CPU usage
-    let cpu_usage = economics.get_usage(
-        &Did::from_str(test_did).unwrap(),
-        ResourceType::Cpu,
-        &resource_ledger
-    ).await;
+    let cpu_usage = economics
+        .get_usage(
+            &Did::from_str(test_did).unwrap(),
+            ResourceType::Cpu,
+            &resource_ledger,
+        )
+        .await;
     assert_eq!(cpu_usage, 25, "Expected 25 units of CPU usage");
-    
+
     // Check Memory usage
-    let memory_usage = economics.get_usage(
-        &Did::from_str(test_did).unwrap(),
-        ResourceType::Memory,
-        &resource_ledger
-    ).await;
+    let memory_usage = economics
+        .get_usage(
+            &Did::from_str(test_did).unwrap(),
+            ResourceType::Memory,
+            &resource_ledger,
+        )
+        .await;
     assert_eq!(memory_usage, 50, "Expected 50 units of Memory usage");
-    
+
     // Check Token usage
-    let token_usage = economics.get_usage(
-        &Did::from_str(test_did).unwrap(),
-        ResourceType::Token,
-        &resource_ledger
-    ).await;
+    let token_usage = economics
+        .get_usage(
+            &Did::from_str(test_did).unwrap(),
+            ResourceType::Token,
+            &resource_ledger,
+        )
+        .await;
     assert_eq!(token_usage, 10, "Expected 10 units of Token usage");
-    
+
     Ok(())
-} 
+}

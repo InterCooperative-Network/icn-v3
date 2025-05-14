@@ -4,10 +4,10 @@ use strum_macros::Display;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 #[repr(u32)]
 pub enum ResourceType {
-    Cpu    = 1,
+    Cpu = 1,
     Memory = 2,
-    Io     = 3,
-    Token  = 4,
+    Io = 3,
+    Token = 4,
 }
 
 impl From<u32> for ResourceType {
@@ -19,4 +19,4 @@ impl From<u32> for ResourceType {
             _ => ResourceType::Token,
         }
     }
-} 
+}

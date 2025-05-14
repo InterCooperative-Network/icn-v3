@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
 
 pub mod economics;
-pub mod policy;
-pub mod types;
 pub mod mana;
-pub mod sled_mana_ledger;
 pub mod mana_metrics;
+pub mod policy;
+pub mod sled_mana_ledger;
+pub mod types;
 
 pub use economics::Economics;
-pub use policy::ResourceAuthorizationPolicy;
 pub use icn_types::resource::ResourceType;
+pub use policy::ResourceAuthorizationPolicy;
 // Using a different name for the import to avoid conflict
 pub use economics::EconomicsError as ResourceAuthorizationError;
 pub use economics::LedgerKey;
@@ -275,16 +275,25 @@ impl ResourceRepository for InMemoryResourceRepository {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| anyhow!("Error getting current time: {}", e))?
             .as_secs();
-        
+
         let mut usage_guard = self.usage.lock().await;
-        usage_guard.entry(key).or_default().push((now, token.amount));
+        usage_guard
+            .entry(key)
+            .or_default()
+            .push((now, token.amount));
         Ok(())
     }
 
     async fn get_usage(&self, did: &Did, resource_type: &str, scope: &str) -> Result<u64> {
-        let key = (did.to_string(), resource_type.to_string(), scope.to_string());
+        let key = (
+            did.to_string(),
+            resource_type.to_string(),
+            scope.to_string(),
+        );
         let usage_guard = self.usage.lock().await;
-        Ok(usage_guard.get(&key).map_or(0, |records| records.iter().map(|(_, amount)| amount).sum()))
+        Ok(usage_guard
+            .get(&key)
+            .map_or(0, |records| records.iter().map(|(_, amount)| amount).sum()))
     }
 
     async fn get_usage_history(
@@ -294,10 +303,18 @@ impl ResourceRepository for InMemoryResourceRepository {
         scope: &str,
         since_timestamp: u64,
     ) -> Result<Vec<(u64, u64)>> {
-        let key = (did.to_string(), resource_type.to_string(), scope.to_string());
+        let key = (
+            did.to_string(),
+            resource_type.to_string(),
+            scope.to_string(),
+        );
         let usage_guard = self.usage.lock().await;
         Ok(usage_guard.get(&key).map_or_else(Vec::new, |records| {
-            records.iter().filter(|(ts, _)| *ts >= since_timestamp).cloned().collect()
+            records
+                .iter()
+                .filter(|(ts, _)| *ts >= since_timestamp)
+                .cloned()
+                .collect()
         }))
     }
 }
@@ -325,7 +342,10 @@ mod tests {
             expires_at: None,
             issuer: None,
         };
-        assert!(enforcer.check_authorization(&test_did(), &token).await.unwrap());
+        assert!(enforcer
+            .check_authorization(&test_did(), &token)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -343,7 +363,11 @@ mod tests {
             issuer: None,
         };
         assert!(enforcer.check_authorization(&did, &token1).await.unwrap());
-        enforcer.repository.record_usage(&did, &token1).await.unwrap();
+        enforcer
+            .repository
+            .record_usage(&did, &token1)
+            .await
+            .unwrap();
 
         let token2 = ScopedResourceToken {
             resource_type: "storage".to_string(),
@@ -353,7 +377,11 @@ mod tests {
             issuer: None,
         };
         assert!(enforcer.check_authorization(&did, &token2).await.unwrap());
-        enforcer.repository.record_usage(&did, &token2).await.unwrap();
+        enforcer
+            .repository
+            .record_usage(&did, &token2)
+            .await
+            .unwrap();
 
         let token3 = ScopedResourceToken {
             resource_type: "storage".to_string(),
@@ -365,7 +393,7 @@ mod tests {
         let result = enforcer.check_authorization(&did, &token3).await;
         assert!(result.is_err());
         match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::QuotaExceeded(_)) => {}, // Expected
+            Some(EconomicsError::QuotaExceeded(_)) => {} // Expected
             _ => panic!("Expected QuotaExceeded error"),
         }
     }
@@ -377,7 +405,10 @@ mod tests {
         enforcer.set_policy(
             "api_calls",
             "user_group_a",
-            ResourceAuthorization::RateLimit { amount: 3, period_secs: 60 },
+            ResourceAuthorization::RateLimit {
+                amount: 3,
+                period_secs: 60,
+            },
         );
 
         let did = test_did();
@@ -393,18 +424,22 @@ mod tests {
         for _ in 0..3 {
             let token = create_token();
             assert!(enforcer.check_authorization(&did, &token).await.unwrap());
-            enforcer.repository.record_usage(&did, &token).await.unwrap();
+            enforcer
+                .repository
+                .record_usage(&did, &token)
+                .await
+                .unwrap();
         }
 
         // 4th call should fail
         let token4 = create_token();
         let result = enforcer.check_authorization(&did, &token4).await;
         assert!(result.is_err());
-         match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::RateLimitExceeded(_)) => {}, // Expected
+        match result.err().unwrap().downcast_ref::<EconomicsError>() {
+            Some(EconomicsError::RateLimitExceeded(_)) => {} // Expected
             _ => panic!("Expected RateLimitExceeded error"),
         }
-        
+
         // If we could advance time by 60s here, the limit would reset.
         // For simplicity, this test only checks immediate rate limiting.
     }
@@ -436,19 +471,22 @@ mod tests {
         let result = enforcer.check_authorization(&did3, &token).await;
         assert!(result.is_err());
         match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::AccessDenied(_)) => {}, // Expected
+            Some(EconomicsError::AccessDenied(_)) => {} // Expected
             _ => panic!("Expected AccessDenied error"),
         }
     }
 
-     #[tokio::test]
+    #[tokio::test]
     async fn test_expired_token() {
         let repo = Box::new(InMemoryResourceRepository::default());
         let mut enforcer = ResourcePolicyEnforcer::new(repo);
         enforcer.set_policy("compute", "global", ResourceAuthorization::AllowAll);
 
         let past_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 3600; // 1 hour ago
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 3600; // 1 hour ago
 
         let token = ScopedResourceToken {
             resource_type: "compute".to_string(),
@@ -460,7 +498,7 @@ mod tests {
         let result = enforcer.check_authorization(&test_did(), &token).await;
         assert!(result.is_err());
         match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::InvalidToken(_)) => {}, // Expected
+            Some(EconomicsError::InvalidToken(_)) => {} // Expected
             _ => panic!("Expected InvalidToken error for expired token"),
         }
     }

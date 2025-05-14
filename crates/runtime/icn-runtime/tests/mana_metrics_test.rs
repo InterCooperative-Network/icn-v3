@@ -1,13 +1,13 @@
 use icn_economics::mana::{ManaManager, ManaPool}; // Adjusted import for ManaManager
 use icn_economics::ScopeKey; // Added ScopeKey import
 use icn_runtime::metrics::PrometheusManaMetrics;
-use prometheus::{Encoder, TextEncoder, gather};
+use prometheus::{gather, Encoder, TextEncoder};
 use std::sync::Arc;
 
 #[test]
 fn test_mana_metrics_balance_update() {
     // Assume PrometheusManaMetrics::new() registers globally or uses a default registry
-    let metrics_hook = PrometheusManaMetrics::new(); 
+    let metrics_hook = PrometheusManaMetrics::new();
     // Pass the Arc<PrometheusManaMetrics> which implements ManaMetricsHook
     let mut manager = ManaManager::with_metrics_hook(metrics_hook.clone()); // Pass the hook Arc
 
@@ -29,7 +29,9 @@ fn test_mana_metrics_balance_update() {
     // Let's use transfer from a dummy source to credit
     let dummy_source = ScopeKey::Individual("dummy_source".to_string());
     manager.ensure_pool(&dummy_source, 1000, 1);
-    manager.transfer(&dummy_source, &coop, 500).expect("Transfer to coop failed"); 
+    manager
+        .transfer(&dummy_source, &coop, 500)
+        .expect("Transfer to coop failed");
     // Coop balance should be max (1000), dummy source is 500
 
     // Spend from indiv (initial balance 1000, spend 250 -> 750)
@@ -39,8 +41,10 @@ fn test_mana_metrics_balance_update() {
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
     // gather() collects from the default registry
-    let metric_families = gather(); 
-    encoder.encode(&metric_families, &mut buffer).expect("Failed to encode metrics");
+    let metric_families = gather();
+    encoder
+        .encode(&metric_families, &mut buffer)
+        .expect("Failed to encode metrics");
     let output = String::from_utf8(buffer).expect("Metrics output not valid UTF-8");
 
     println!("Metrics Output:\n{}", output);
@@ -50,13 +54,31 @@ fn test_mana_metrics_balance_update() {
     let coop_expected_balance = initial_max_mana; // Crediting 500 shouldn't exceed max
     let indiv_expected_balance = initial_max_mana - 250;
 
-    let coop_pattern_1 = format!("icn_mana_pool_balance{{scope_id=\"{}\",scope_type=\"cooperative\"}} {}", coop_id, coop_expected_balance as f64);
-    let coop_pattern_2 = format!("icn_mana_pool_balance{{scope_type=\"cooperative\",scope_id=\"{}\"}} {}", coop_id, coop_expected_balance as f64);
-    assert!(output.contains(&coop_pattern_1) || output.contains(&coop_pattern_2),
-            "Coop balance metric not found or incorrect. Expected: {}", coop_expected_balance);
+    let coop_pattern_1 = format!(
+        "icn_mana_pool_balance{{scope_id=\"{}\",scope_type=\"cooperative\"}} {}",
+        coop_id, coop_expected_balance as f64
+    );
+    let coop_pattern_2 = format!(
+        "icn_mana_pool_balance{{scope_type=\"cooperative\",scope_id=\"{}\"}} {}",
+        coop_id, coop_expected_balance as f64
+    );
+    assert!(
+        output.contains(&coop_pattern_1) || output.contains(&coop_pattern_2),
+        "Coop balance metric not found or incorrect. Expected: {}",
+        coop_expected_balance
+    );
 
-    let indiv_pattern_1 = format!("icn_mana_pool_balance{{scope_id=\"{}\",scope_type=\"individual\"}} {}", indiv_did, indiv_expected_balance as f64);
-    let indiv_pattern_2 = format!("icn_mana_pool_balance{{scope_type=\"individual\",scope_id=\"{}\"}} {}", indiv_did, indiv_expected_balance as f64);
-    assert!(output.contains(&indiv_pattern_1) || output.contains(&indiv_pattern_2),
-            "Individual balance metric not found or incorrect. Expected: {}", indiv_expected_balance);
-} 
+    let indiv_pattern_1 = format!(
+        "icn_mana_pool_balance{{scope_id=\"{}\",scope_type=\"individual\"}} {}",
+        indiv_did, indiv_expected_balance as f64
+    );
+    let indiv_pattern_2 = format!(
+        "icn_mana_pool_balance{{scope_type=\"individual\",scope_id=\"{}\"}} {}",
+        indiv_did, indiv_expected_balance as f64
+    );
+    assert!(
+        output.contains(&indiv_pattern_1) || output.contains(&indiv_pattern_2),
+        "Individual balance metric not found or incorrect. Expected: {}",
+        indiv_expected_balance
+    );
+}

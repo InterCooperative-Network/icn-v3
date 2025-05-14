@@ -25,7 +25,7 @@ pub trait DagStore: Send + Sync {
 }
 
 /// In-memory, async, transactional DAG store.
-/// 
+///
 /// `SharedDagStore` provides an in-memory implementation of the `DagStore` trait
 /// with full support for concurrent access through tokio's async-aware RwLock.
 ///
@@ -70,7 +70,9 @@ pub struct SharedDagStore {
 impl SharedDagStore {
     /// Create a new empty SharedDagStore
     pub fn new() -> Self {
-        Self { inner: Arc::new(RwLock::new(HashMap::new())) }
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 }
 
@@ -150,16 +152,16 @@ impl DagStore for SharedDagStore {
 pub struct DagStoreBatch {
     store: SharedDagStore,
     // None = remove, Some = insert
-    staged: HashMap<String, Option<DagNode>>, 
+    staged: HashMap<String, Option<DagNode>>,
     committed: bool,
 }
 
 impl DagStoreBatch {
     fn new(store: SharedDagStore) -> Self {
-        Self { 
-            store, 
-            staged: HashMap::new(), 
-            committed: false 
+        Self {
+            store,
+            staged: HashMap::new(),
+            committed: false,
         }
     }
 
@@ -182,8 +184,12 @@ impl DagStoreBatch {
         let mut map = self.store.inner.write().await;
         for (id, op) in self.staged.drain() {
             match op {
-                Some(node) => { map.insert(id, node); }
-                None => { map.remove(&id); }
+                Some(node) => {
+                    map.insert(id, node);
+                }
+                None => {
+                    map.remove(&id);
+                }
             }
         }
         self.committed = true;
@@ -215,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn test_basic_crud() {
         let store = SharedDagStore::new();
-        
+
         // Create a test node
         let node = DagNodeBuilder::new()
             .content("test content".to_string())
@@ -224,13 +230,13 @@ mod tests {
             .timestamp(0)
             .build()
             .unwrap();
-        
+
         let node_id = node.cid().unwrap().to_string();
-        
+
         // Insert
         store.insert(node.clone()).await.unwrap();
         assert_eq!(store.get(&node_id).await.unwrap(), Some(node.clone()));
-        
+
         // Remove
         store.remove(&node_id).await.unwrap();
         assert_eq!(store.get(&node_id).await.unwrap(), None);
@@ -239,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_reads_and_writes() {
         let store = SharedDagStore::new();
-        
+
         // Create a test node
         let node = DagNodeBuilder::new()
             .content("concurrent test".to_string())
@@ -281,16 +287,34 @@ mod tests {
         // For this simple test, we just ensure tasks completed.
         // A more robust test would check if the specific nodes are present/absent as expected.
     }
-    
+
     #[tokio::test]
     async fn test_batch_commit_and_rollback() {
         let store = SharedDagStore::new();
 
-        let node1 = DagNodeBuilder::new().content("node1".into()).event_type(DagEventType::Proposal).scope_id("s1".into()).timestamp(1).build().unwrap();
+        let node1 = DagNodeBuilder::new()
+            .content("node1".into())
+            .event_type(DagEventType::Proposal)
+            .scope_id("s1".into())
+            .timestamp(1)
+            .build()
+            .unwrap();
         let node1_id = node1.cid().unwrap().to_string();
-        let node2 = DagNodeBuilder::new().content("node2".into()).event_type(DagEventType::Proposal).scope_id("s2".into()).timestamp(2).build().unwrap();
+        let node2 = DagNodeBuilder::new()
+            .content("node2".into())
+            .event_type(DagEventType::Proposal)
+            .scope_id("s2".into())
+            .timestamp(2)
+            .build()
+            .unwrap();
         let node2_id = node2.cid().unwrap().to_string();
-        let node3 = DagNodeBuilder::new().content("node3".into()).event_type(DagEventType::Proposal).scope_id("s3".into()).timestamp(3).build().unwrap();
+        let node3 = DagNodeBuilder::new()
+            .content("node3".into())
+            .event_type(DagEventType::Proposal)
+            .scope_id("s3".into())
+            .timestamp(3)
+            .build()
+            .unwrap();
         let node3_id = node3.cid().unwrap().to_string();
 
         // Test commit
@@ -312,12 +336,18 @@ mod tests {
 
         // Test explicit rollback
         let mut batch_explicit_rollback = store.begin_batch().await;
-        let node4 = DagNodeBuilder::new().content("node4".into()).event_type(DagEventType::Proposal).scope_id("s4".into()).timestamp(4).build().unwrap();
+        let node4 = DagNodeBuilder::new()
+            .content("node4".into())
+            .event_type(DagEventType::Proposal)
+            .scope_id("s4".into())
+            .timestamp(4)
+            .build()
+            .unwrap();
         let node4_id = node4.cid().unwrap().to_string();
         batch_explicit_rollback.insert(node4.clone()).await.unwrap();
         batch_explicit_rollback.rollback(); // Explicitly rollback
         assert!(store.get(&node4_id).await.unwrap().is_none());
-        
+
         // Test remove in batch
         let mut batch_remove = store.begin_batch().await;
         batch_remove.remove(&node1_id).await.unwrap();
@@ -325,4 +355,4 @@ mod tests {
         assert!(store.get(&node1_id).await.unwrap().is_none());
         assert!(store.get(&node2_id).await.unwrap().is_some()); // node2 should still be there
     }
-} 
+}

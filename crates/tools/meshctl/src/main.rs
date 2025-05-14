@@ -753,7 +753,12 @@ async fn execute_local(wasm_path: &Path, output_path: Option<&Path>) -> Result<(
 
 async fn handle_mesh_subcommand(cmd: Commands) -> Result<()> {
     match cmd {
-        Commands::CreateNode { name, memory, cpu, location } => {
+        Commands::CreateNode {
+            name,
+            memory,
+            cpu,
+            location,
+        } => {
             create_node(&name, memory, cpu, &location).await?;
         }
         Commands::SubmitJob { .. } => {
@@ -777,7 +782,7 @@ async fn handle_mesh_subcommand(cmd: Commands) -> Result<()> {
         Commands::AnchorReceipt { receipt } => {
             // Read receipt file
             let receipt_bytes = tokio::fs::read(&receipt).await?;
-            
+
             // Determine file type based on extension
             let receipt_obj = if receipt.ends_with(".cbor") {
                 // Deserialize from CBOR
@@ -792,14 +797,14 @@ async fn handle_mesh_subcommand(cmd: Commands) -> Result<()> {
                     "Unsupported receipt format. Use .cbor or .json extension."
                 ));
             };
-            
+
             // Connect to runtime to anchor the receipt
             let client = create_client().await?;
-            
+
             // Convert receipt to CBOR for anchoring
             let receipt_cbor = serde_cbor::to_vec(&receipt_obj)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize receipt: {}", e))?;
-            
+
             // Call the runtime's anchor_receipt API
             let response = client
                 .post(format!("{}/api/v1/receipts/anchor", RUNTIME_URL))
@@ -807,16 +812,16 @@ async fn handle_mesh_subcommand(cmd: Commands) -> Result<()> {
                 .body(receipt_cbor)
                 .send()
                 .await?;
-            
+
             if !response.status().is_success() {
                 let error = response.text().await?;
                 return Err(anyhow::anyhow!("Failed to anchor receipt: {}", error));
             }
-            
+
             // Parse response to get CID
             let result: serde_json::Value = response.json().await?;
             let cid = result["cid"].as_str().unwrap_or("unknown");
-            
+
             println!("Receipt anchored with CID: {}", cid);
             Ok(())
         }

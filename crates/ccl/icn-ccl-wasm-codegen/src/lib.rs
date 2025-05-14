@@ -96,18 +96,28 @@ impl WasmGenerator {
                     path: a.path.clone(),
                     data_ref: a.data_reference.clone(),
                 });
-            },
-            ActionStep::PerformMeteredAction { ident, resource, amount } => {
+            }
+            ActionStep::PerformMeteredAction {
+                ident,
+                resource,
+                amount,
+            } => {
                 // Record resource usage and perform an action
                 self.ops.push(Opcode::UseResource {
                     resource_type: resource.to_string(),
                     amount: *amount,
                 });
-                
+
                 // Generate code for the action identifier
-                self.ops.push(Opcode::Todo(format!("Perform action: {}", ident)));
-            },
-            ActionStep::TransferToken { token_type, amount, sender, recipient } => {
+                self.ops
+                    .push(Opcode::Todo(format!("Perform action: {}", ident)));
+            }
+            ActionStep::TransferToken {
+                token_type,
+                amount,
+                sender,
+                recipient,
+            } => {
                 // Transfer tokens between accounts
                 self.ops.push(Opcode::TransferToken {
                     token_type: token_type.clone(),

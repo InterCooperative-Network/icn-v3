@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::{Signature, Signer, VerifyingKey, SigningKey};
-use signature::Verifier;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use signature::Verifier;
 use thiserror::Error;
 
 /// Error types for JWS operations
@@ -77,7 +77,9 @@ pub fn verify_detached_jws(
 
     // Base64 decode the signature
     let signature_bytes = URL_SAFE_NO_PAD.decode(signature_b64)?;
-    let signature_array: &[u8; 64] = signature_bytes.as_slice().try_into()
+    let signature_array: &[u8; 64] = signature_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| JwsError::InvalidSignature)?;
     let signature = Signature::from_bytes(signature_array);
 

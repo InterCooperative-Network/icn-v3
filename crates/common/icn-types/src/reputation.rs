@@ -35,7 +35,7 @@ pub enum ReputationUpdateEvent {
         bid_accuracy: f32, // 0.0–1.0
         on_time: bool,
         anchor_cid: Option<Cid>, // Optional CID of the execution receipt or result anchor
-        mana_cost: Option<u64>,      // Added mana cost
+        mana_cost: Option<u64>,  // Added mana cost
         verification_passed: bool, // Added verification status
     },
     JobFailed {
@@ -47,7 +47,7 @@ pub enum ReputationUpdateEvent {
     DishonestyPenalty {
         // Could be related to a specific job or general misbehavior
         job_id: Option<Cid>,
-        details: String, // Description of the dishonest act
+        details: String,                     // Description of the dishonest act
         penalty_amount: Option<TokenAmount>, // Optional direct token penalty
     },
     StakeIncreased {
@@ -66,7 +66,8 @@ pub enum ReputationUpdateEvent {
         from: Did,
         reason: Option<String>,
     },
-    ProfileScoreManuallyAdjusted { // For admin interventions or specific non-event-driven changes
+    ProfileScoreManuallyAdjusted {
+        // For admin interventions or specific non-event-driven changes
         new_score: f64,
         previous_score: f64,
         reason: String,
@@ -98,19 +99,28 @@ impl ReputationProfile {
 
         // Always bump total_jobs when a job event occurs
         match event {
-            JobCompletedSuccessfully { execution_duration_ms, bid_accuracy, on_time, .. } => {
+            JobCompletedSuccessfully {
+                execution_duration_ms,
+                bid_accuracy,
+                on_time,
+                ..
+            } => {
                 self.successful_jobs = self.successful_jobs.saturating_add(1);
                 if *on_time {
                     self.jobs_on_time = self.jobs_on_time.saturating_add(1);
                 } else {
                     self.jobs_late = self.jobs_late.saturating_add(1);
                 }
-                self.average_execution_ms = Some(
-                    average_u32(self.average_execution_ms, *execution_duration_ms, self.successful_jobs),
-                );
-                self.average_bid_accuracy = Some(
-                    average_f32(self.average_bid_accuracy, *bid_accuracy, self.successful_jobs),
-                );
+                self.average_execution_ms = Some(average_u32(
+                    self.average_execution_ms,
+                    *execution_duration_ms,
+                    self.successful_jobs,
+                ));
+                self.average_bid_accuracy = Some(average_f32(
+                    self.average_bid_accuracy,
+                    *bid_accuracy,
+                    self.successful_jobs,
+                ));
                 self.total_jobs = self.total_jobs.saturating_add(1);
             }
 
@@ -119,21 +129,29 @@ impl ReputationProfile {
                 self.total_jobs = self.total_jobs.saturating_add(1);
             }
 
-            DishonestyPenalty { .. } => { // Added score_impact from event to be used
+            DishonestyPenalty { .. } => {
+                // Added score_impact from event to be used
                 self.dishonesty_events = self.dishonesty_events.saturating_add(1);
                 // If score_impact is intended to directly modify computed_score, it would happen here or in recompute_score
                 // For now, just tracking the event count. The direct impact could be part of recompute_score logic.
             }
 
-            StakeIncreased { new_total_stake, .. } => { // Changed to use new_total_stake for consistency
+            StakeIncreased {
+                new_total_stake, ..
+            } => {
+                // Changed to use new_total_stake for consistency
                 self.current_stake = Some(*new_total_stake);
             }
 
-            StakeDecreased { new_total_stake, .. } => { // Changed to use new_total_stake for consistency
+            StakeDecreased {
+                new_total_stake, ..
+            } => {
+                // Changed to use new_total_stake for consistency
                 self.current_stake = Some(*new_total_stake);
             }
 
-            EndorsementReceived { from, .. } => { // Added weight from event
+            EndorsementReceived { from, .. } => {
+                // Added weight from event
                 if !self.endorsements.contains(from) {
                     self.endorsements.push(from.clone());
                 }
@@ -143,7 +161,7 @@ impl ReputationProfile {
             EndorsementRevoked { from, .. } => {
                 self.endorsements.retain(|d| d != from);
             }
-            
+
             ProfileScoreManuallyAdjusted { new_score, .. } => {
                 // This event directly sets the score, bypassing normal recomputation logic for this update.
                 self.computed_score = *new_score;
@@ -157,18 +175,24 @@ impl ReputationProfile {
 
 /// Utility to incrementally update a u32 average:
 fn average_u32(prev: Option<u32>, new_val: u32, count: u64) -> u32 {
-    if count == 0 { // Should not happen if called after incrementing count, but good guard
+    if count == 0 {
+        // Should not happen if called after incrementing count, but good guard
         return new_val;
     }
     match prev {
-        Some(old_avg) => (((old_avg as u64).saturating_mul(count.saturating_sub(1))).saturating_add(new_val as u64) / count) as u32,
+        Some(old_avg) => {
+            (((old_avg as u64).saturating_mul(count.saturating_sub(1)))
+                .saturating_add(new_val as u64)
+                / count) as u32
+        }
         None => new_val, // If no previous average, the new value is the average (assuming count is 1 here)
     }
 }
 
 /// Utility to incrementally update a f32 average:
 fn average_f32(prev: Option<f32>, new_val: f32, count: u64) -> f32 {
-    if count == 0 { // Guard clause
+    if count == 0 {
+        // Guard clause
         return new_val;
     }
     match prev {
@@ -190,7 +214,7 @@ pub fn compute_score(profile: &ReputationProfile) -> f64 {
     let total = (profile.total_jobs as f64).max(1.0);
 
     let success_rate = profile.successful_jobs as f64 / total;
-    
+
     // For on_time_rate, it should be based on successful_jobs or total_jobs depending on definition.
     // If it's % of successful jobs that were on time:
     let successful_jobs_total = (profile.successful_jobs as f64).max(1.0); // Avoid div by zero if no successful jobs
@@ -221,4 +245,4 @@ pub fn compute_score(profile: &ReputationProfile) -> f64 {
 // - Consider how f32/f64 fields impact needs for Eq/Hash if ReputationProfile or Event instances were used as HashMap keys.
 // - Implement actual reputation scoring algorithms (`compute_score` function) and integrate with `apply_event`.
 // - Design DAG anchoring for profiles and events (possibly via ReputationRecord).
-// - Ensure Signature type is robust and integrated with actual crypto libraries. 
+// - Ensure Signature type is robust and integrated with actual crypto libraries.

@@ -80,8 +80,8 @@ impl NoopTrustValidator {
     pub fn new(is_valid: bool) -> Self {
         Self { is_valid }
     }
-    
+
     pub fn always_valid() -> Self {
         Self { is_valid: true }
     }
-} 
+}

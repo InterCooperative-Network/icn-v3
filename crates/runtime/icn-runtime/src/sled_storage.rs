@@ -1,13 +1,13 @@
 use crate::RuntimeStorage;
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use bincode;
 use sled::{Db, IVec};
-use anyhow::{Result, Context, anyhow};
 use std::path::Path;
 use std::sync::Arc;
-use bincode;
 
 // Import necessary types used by the trait methods
-use crate::{Proposal, MeshExecutionReceipt}; // Using crate::Proposal now
+use crate::{MeshExecutionReceipt, Proposal}; // Using crate::Proposal now
 use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 
 /// A persistent storage backend using Sled embedded database.
@@ -43,7 +43,9 @@ impl RuntimeStorage for SledStorage {
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
         let key = Self::wasm_key(cid);
         tracing::debug!(key = %key, "Loading WASM");
-        let ivec = self.db.get(&key)?
+        let ivec = self
+            .db
+            .get(&key)?
             .ok_or_else(|| anyhow!("WASM not found for CID {} (key: {})", cid, key))?;
         Ok(ivec.to_vec())
     }
@@ -76,7 +78,9 @@ impl RuntimeStorage for SledStorage {
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
         let key = Self::receipt_key(receipt_id);
         tracing::debug!(key = %key, "Loading Receipt");
-        let ivec = self.db.get(&key)?
+        let ivec = self
+            .db
+            .get(&key)?
             .ok_or_else(|| anyhow!("Receipt not found for ID {} (key: {})", receipt_id, key))?;
         let receipt = bincode::deserialize::<RuntimeExecutionReceipt>(&ivec)
             .context("Failed to deserialize receipt")?;
@@ -87,10 +91,12 @@ impl RuntimeStorage for SledStorage {
     async fn load_proposal(&self, id: &str) -> Result<Proposal> {
         let key = Self::proposal_key(id);
         tracing::debug!(key = %key, "Loading proposal");
-        let val = self.db.get(&key)?
+        let val = self
+            .db
+            .get(&key)?
             .ok_or_else(|| anyhow::anyhow!("Proposal {} not found (key: {})", id, key))?;
-        let proposal = bincode::deserialize::<Proposal>(&val)
-            .context("Failed to deserialize proposal")?;
+        let proposal =
+            bincode::deserialize::<Proposal>(&val).context("Failed to deserialize proposal")?;
         Ok(proposal)
     }
 
@@ -111,4 +117,4 @@ impl RuntimeStorage for SledStorage {
         // with a separate DAG component (which might *use* Sled internally).
         Err(anyhow!("SledStorage does not support direct DAG anchoring"))
     }
-} 
+}

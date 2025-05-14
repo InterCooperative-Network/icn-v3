@@ -1,9 +1,9 @@
+use crate::crypto::Keypair;
 use crate::error::IdentityError;
 use crate::error::TrustError;
 use crate::error::VcError;
 use crate::trust::{QuorumConfig, QuorumRule};
 use chrono::Utc;
-use crate::crypto::Keypair;
 use ed25519_dalek::VerifyingKey;
 use icn_crypto::jws::{sign_detached_jws, verify_detached_jws};
 use serde::{Deserialize, Serialize};
@@ -171,7 +171,8 @@ impl VerifiableCredential {
         verification_method: &str,
     ) -> std::result::Result<Self, VcError> {
         // Generate the signature
-        let jws = sign_detached_jws(&self.canonical_bytes()?, keypair.signing_key()).map_err(VcError::Signing)?;
+        let jws = sign_detached_jws(&self.canonical_bytes()?, keypair.signing_key())
+            .map_err(VcError::Signing)?;
 
         // Create the proof
         let proof = CredentialProof {

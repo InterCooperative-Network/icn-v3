@@ -1,8 +1,8 @@
 use crate::{Did, Signature};
 use ed25519_dalek::{Verifier, VerifyingKey};
-use serde::{Deserialize, Serialize, Serializer, Deserializer};
-use serde::ser::{SerializeStruct};
-use serde::de::{self, Visitor, MapAccess};
+use serde::de::{self, MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
@@ -12,10 +12,10 @@ use thiserror::Error;
 pub enum QuorumType {
     /// Simple majority of allowed signers (>50%)
     Majority,
-    
+
     /// Specific threshold of signers needed (e.g., 3 of 5)
     Threshold(u8),
-    
+
     /// Weighted voting, where each signer has a specific voting power
     Weighted(HashMap<Did, u16>),
 }
@@ -25,19 +25,19 @@ pub enum QuorumType {
 pub enum QuorumError {
     #[error("insufficient signers to meet quorum requirements")]
     InsufficientSigners,
-    
+
     #[error("duplicate signer detected")]
     DuplicateSigner,
-    
+
     #[error("unauthorized signer: {0}")]
     UnauthorizedSigner(Did),
-    
+
     #[error("invalid signature")]
     InvalidSignature,
-    
+
     #[error("minimum threshold exceeds available authorized signers")]
     ThresholdTooHigh,
-    
+
     #[error("signer not in weight map: {0}")]
     SignerNotInWeightMap(Did),
 
@@ -51,7 +51,7 @@ pub enum QuorumError {
 pub struct QuorumProof {
     /// The type of quorum required for verification
     pub quorum_type: QuorumType,
-    
+
     /// Collection of signatures from different entities
     pub signatures: Vec<(Did, Signature)>,
 }
@@ -63,13 +63,14 @@ impl Serialize for QuorumProof {
     {
         let mut state = serializer.serialize_struct("QuorumProof", 2)?;
         state.serialize_field("quorum_type", &self.quorum_type)?;
-        
+
         // Convert signatures to a serializable format
-        let serialized_signatures: Vec<(Did, String)> = self.signatures
+        let serialized_signatures: Vec<(Did, String)> = self
+            .signatures
             .iter()
             .map(|(did, sig)| (did.clone(), hex::encode(sig.to_bytes())))
             .collect();
-        
+
         state.serialize_field("signatures", &serialized_signatures)?;
         state.end()
     }
@@ -80,7 +81,10 @@ impl<'de> Deserialize<'de> for QuorumProof {
     where
         D: Deserializer<'de>,
     {
-        enum Field { QuorumType, Signatures }
+        enum Field {
+            QuorumType,
+            Signatures,
+        }
 
         impl<'de> Deserialize<'de> for Field {
             fn deserialize<D>(deserializer: D) -> Result<Field, D::Error>
@@ -103,7 +107,10 @@ impl<'de> Deserialize<'de> for QuorumProof {
                         match value {
                             "quorum_type" => Ok(Field::QuorumType),
                             "signatures" => Ok(Field::Signatures),
-                            _ => Err(de::Error::unknown_field(value, &["quorum_type", "signatures"])),
+                            _ => Err(de::Error::unknown_field(
+                                value,
+                                &["quorum_type", "signatures"],
+                            )),
                         }
                     }
                 }
@@ -145,23 +152,26 @@ impl<'de> Deserialize<'de> for QuorumProof {
                     }
                 }
 
-                let quorum_type = quorum_type.ok_or_else(|| de::Error::missing_field("quorum_type"))?;
-                let signatures_str = signatures_str.ok_or_else(|| de::Error::missing_field("signatures"))?;
+                let quorum_type =
+                    quorum_type.ok_or_else(|| de::Error::missing_field("quorum_type"))?;
+                let signatures_str =
+                    signatures_str.ok_or_else(|| de::Error::missing_field("signatures"))?;
 
                 // Convert signature strings back to Signature objects
                 let signatures = signatures_str
                     .into_iter()
                     .map(|(did, sig_hex)| {
-                        let sig_bytes = hex::decode(&sig_hex)
-                            .map_err(|e| de::Error::custom(format!("Invalid signature hex: {}", e)))?;
-                        
+                        let sig_bytes = hex::decode(&sig_hex).map_err(|e| {
+                            de::Error::custom(format!("Invalid signature hex: {}", e))
+                        })?;
+
                         if sig_bytes.len() != 64 {
                             return Err(de::Error::custom("Invalid signature length"));
                         }
-                        
+
                         let mut bytes = [0u8; 64];
                         bytes.copy_from_slice(&sig_bytes);
-                        
+
                         let signature = ed25519_dalek::Signature::from_bytes(&bytes);
                         Ok((did, signature))
                     })
@@ -182,20 +192,27 @@ impl<'de> Deserialize<'de> for QuorumProof {
 impl QuorumProof {
     /// Creates a new QuorumProof with the specified quorum type and initial signatures.
     pub fn new(quorum_type: QuorumType, signatures: Vec<(Did, Signature)>) -> Self {
-        Self { quorum_type, signatures }
+        Self {
+            quorum_type,
+            signatures,
+        }
     }
-    
+
     /// Adds a signature to the proof.
     pub fn add_signature(&mut self, did: Did, signature: Signature) -> Result<(), QuorumError> {
         // Check for duplicate signers
-        if self.signatures.iter().any(|(existing_did, _)| existing_did == &did) {
+        if self
+            .signatures
+            .iter()
+            .any(|(existing_did, _)| existing_did == &did)
+        {
             return Err(QuorumError::DuplicateSigner);
         }
-        
+
         self.signatures.push((did, signature));
         Ok(())
     }
-    
+
     /// Verifies the quorum proof against a message hash and a set of allowed signers.
     pub fn verify(
         &self,
@@ -240,7 +257,7 @@ impl QuorumProof {
                 if *min as usize > allowed_signers.len() {
                     return Err(QuorumError::ThresholdTooHigh);
                 }
-                
+
                 if valid_signatures.len() >= *min as usize {
                     Ok(())
                 } else {
@@ -250,7 +267,7 @@ impl QuorumProof {
             QuorumType::Weighted(weights) => {
                 // Calculate the total possible weight
                 let total_weight: u16 = weights.values().sum();
-                
+
                 // Calculate the weight of valid signatures
                 let mut valid_weight: u16 = 0;
                 for did in valid_signatures {
@@ -259,7 +276,7 @@ impl QuorumProof {
                         None => return Err(QuorumError::SignerNotInWeightMap(did.clone())),
                     }
                 }
-                
+
                 // Check if we have a majority of the weighted votes
                 if valid_weight * 2 > total_weight {
                     Ok(())
@@ -269,4 +286,4 @@ impl QuorumProof {
             }
         }
     }
-} 
+}

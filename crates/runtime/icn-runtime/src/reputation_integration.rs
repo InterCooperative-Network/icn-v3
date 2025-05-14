@@ -1,21 +1,21 @@
 use anyhow::Result;
-use reqwest::Client;
-use icn_types::runtime_receipt::RuntimeExecutionReceipt;
-use icn_types::reputation::ReputationRecord;
-use std::time::Duration;
-use cid::Cid;
-use cid::multihash::{Multihash, Code};
 use chrono::Utc;
+use cid::multihash::{Code, Multihash};
+use cid::Cid;
 use icn_identity::Did;
-use tracing;
-use std::str::FromStr;
-use multihash::{Hasher, Sha2_256};
-use serde::Deserialize;
-use std::path::Path;
-use std::fs;
 use icn_identity::KeyPair;
-use serde_json::json;
+use icn_types::reputation::ReputationRecord;
+use icn_types::runtime_receipt::RuntimeExecutionReceipt;
+use multihash::{Hasher, Sha2_256};
+use reqwest::Client;
+use serde::Deserialize;
 use serde::Serialize;
+use serde_json::json;
+use std::fs;
+use std::path::Path;
+use std::str::FromStr;
+use std::time::Duration;
+use tracing;
 
 use crate::metrics;
 
@@ -36,26 +36,42 @@ pub struct ReputationScoringConfig {
 
     // New fields for refined scoring model
     pub sigmoid_k: f64,              // Steepness factor for the sigmoid curve
-    pub sigmoid_midpoint: f64,       // Midpoint for the sigmoid curve (mana_cost where score is 0.5 * max_positive_score scaling factor)
+    pub sigmoid_midpoint: f64, // Midpoint for the sigmoid curve (mana_cost where score is 0.5 * max_positive_score scaling factor)
     pub failure_penalty_weight: f64, // Weight factor for the scaled failure penalty
 
     // Fields for reputation modifier
     pub enable_reputation_modifier: bool, // Feature flag to enable/disable modifier logic
     pub modifier_min_bound: f64,          // Minimum value for the reputation modifier
     pub modifier_max_bound: f64,          // Maximum value for the reputation modifier
-    // Optional: Add field for assumed max reputation score if normalization needs it, e.g., `max_possible_reputation_score: f64`
+                                          // Optional: Add field for assumed max reputation score if normalization needs it, e.g., `max_possible_reputation_score: f64`
 }
 
 impl ReputationScoringConfig {
     /// Load reputation scoring configuration from a TOML file.
     pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let path_ref = path.as_ref();
-        tracing::info!("Attempting to load reputation scoring config from: {:?}", path_ref);
-        let text = fs::read_to_string(path_ref)
-            .map_err(|e| anyhow::anyhow!("Failed to read reputation config file at {:?}: {}", path_ref, e))?;
-        let config: Self = toml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("Failed to parse reputation config from TOML at {:?}: {}", path_ref, e))?;
-        tracing::info!("Successfully loaded reputation scoring config from: {:?}", path_ref);
+        tracing::info!(
+            "Attempting to load reputation scoring config from: {:?}",
+            path_ref
+        );
+        let text = fs::read_to_string(path_ref).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read reputation config file at {:?}: {}",
+                path_ref,
+                e
+            )
+        })?;
+        let config: Self = toml::from_str(&text).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse reputation config from TOML at {:?}: {}",
+                path_ref,
+                e
+            )
+        })?;
+        tracing::info!(
+            "Successfully loaded reputation scoring config from: {:?}",
+            path_ref
+        );
         Ok(config)
     }
 }
@@ -76,7 +92,7 @@ impl Default for ReputationScoringConfig {
             enable_reputation_modifier: false, // Disabled by default for backward compatibility
             modifier_min_bound: 0.5,           // Default min modifier (e.g., for low reputation)
             modifier_max_bound: 2.0,           // Default max modifier (e.g., for high reputation)
-            // max_possible_reputation_score: 100.0, // Example if needed for normalization
+                                               // max_possible_reputation_score: 100.0, // Example if needed for normalization
         }
     }
 }
@@ -111,8 +127,8 @@ pub trait ReputationUpdater: Send + Sync {
         &self,
         executor_did: &Did,
         amount: u64,
-        coop_id: &str,       // Cooperative ID scope for the deduction
-        community_id: &str,  // Community ID scope for the deduction
+        coop_id: &str,      // Cooperative ID scope for the deduction
+        community_id: &str, // Community ID scope for the deduction
     ) -> Result<()>;
 }
 
@@ -127,17 +143,30 @@ pub struct HttpReputationUpdater {
 impl HttpReputationUpdater {
     /// Creates a new HttpReputationUpdater with default configuration.
     pub fn new(reputation_service_url: String, local_did: Did) -> Self {
-        Self::new_with_config(reputation_service_url, local_did, ReputationScoringConfig::default())
+        Self::new_with_config(
+            reputation_service_url,
+            local_did,
+            ReputationScoringConfig::default(),
+        )
     }
 
     /// Creates a new HttpReputationUpdater with specific configuration.
-    pub fn new_with_config(reputation_service_url: String, local_did: Did, config: ReputationScoringConfig) -> Self {
+    pub fn new_with_config(
+        reputation_service_url: String,
+        local_did: Did,
+        config: ReputationScoringConfig,
+    ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client for reputation updater");
 
-        Self { client, reputation_service_url, local_did, config }
+        Self {
+            client,
+            reputation_service_url,
+            local_did,
+            config,
+        }
     }
 
     // Placeholder method to fetch current reputation score
@@ -163,7 +192,10 @@ impl HttpReputationUpdater {
         match self.client.get(&url).send().await {
             Ok(resp) => {
                 if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                    tracing::debug!("Reputation profile not found for {}, assuming default score for modifier.", did_str);
+                    tracing::debug!(
+                        "Reputation profile not found for {}, assuming default score for modifier.",
+                        did_str
+                    );
                     // Considered a "soft" failure or expected case, not an error metric necessarily unless desired.
                     // For now, not incrementing REPUTATION_SCORE_FETCH_FAILURES for 404 as it might be common for new DIDs.
                     Ok(None) // No profile exists yet
@@ -181,7 +213,10 @@ impl HttpReputationUpdater {
                 } else {
                     let status_code = resp.status();
                     let status_str = status_code.as_str().to_string(); // reqwest::StatusCode -> &str -> String
-                    let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read response>".to_string());
+                    let error_body = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<failed to read response>".to_string());
                     tracing::warn!("Failed GET request for reputation profile {}: HTTP {} - {}. Using default score for modifier.", did_str, status_code, error_body);
                     metrics::REPUTATION_SCORE_FETCH_FAILURES
                         .with_label_values(&[did_str, &status_str])
@@ -217,33 +252,48 @@ impl ReputationUpdater for HttpReputationUpdater {
 
         let score_delta = if is_successful {
             let mana_cost = receipt.metrics.mana_cost.unwrap_or(0) as f64;
-            let base_sigmoid_score = sigmoid(mana_cost, self.config.sigmoid_k, self.config.sigmoid_midpoint);
+            let base_sigmoid_score = sigmoid(
+                mana_cost,
+                self.config.sigmoid_k,
+                self.config.sigmoid_midpoint,
+            );
             let mut calculated_score = base_sigmoid_score * self.config.max_positive_score;
 
-            // --- Apply Reputation Modifier --- 
+            // --- Apply Reputation Modifier ---
             if self.config.enable_reputation_modifier {
                 tracing::debug!("Reputation modifier enabled for executor {}", executor_did);
                 // Fetch current score
                 let current_score_opt = self.get_current_score(executor_did).await?;
-                
+
                 // Assume a default score (e.g., 0.5 on a 0-1 scale) if none exists or fetch fails
                 // Normalize based on an assumed 0-100 scale from the reputation service (adjust if needed)
                 // A more robust approach might involve getting min/max possible scores from the service or config.
                 let assumed_max_score = 100.0; // TODO: Make this configurable if needed
-                let normalized_score = current_score_opt.map_or(0.5, |score| (score / assumed_max_score).clamp(0.0, 1.0));
-                
-                let reputation_modifier = (1.0 + normalized_score)
-                    .clamp(self.config.modifier_min_bound, self.config.modifier_max_bound);
-                
-                tracing::debug!("Applying reputation modifier: {:.2} (normalized score: {:.2})", reputation_modifier, normalized_score);
+                let normalized_score = current_score_opt
+                    .map_or(0.5, |score| (score / assumed_max_score).clamp(0.0, 1.0));
+
+                let reputation_modifier = (1.0 + normalized_score).clamp(
+                    self.config.modifier_min_bound,
+                    self.config.modifier_max_bound,
+                );
+
+                tracing::debug!(
+                    "Applying reputation modifier: {:.2} (normalized score: {:.2})",
+                    reputation_modifier,
+                    normalized_score
+                );
                 calculated_score *= reputation_modifier;
             }
-            // --- End Reputation Modifier --- 
+            // --- End Reputation Modifier ---
 
             calculated_score.min(self.config.max_positive_score)
         } else {
             let mana_cost = receipt.metrics.mana_cost.unwrap_or(0) as f64;
-            let penalty_base = if mana_cost >= 0.0 { mana_cost + 1.0 } else { 1.0 };
+            let penalty_base = if mana_cost >= 0.0 {
+                mana_cost + 1.0
+            } else {
+                1.0
+            };
             -self.config.failure_penalty_weight * penalty_base.ln()
             // Note: Modifier is not applied to penalties in this version
         };
@@ -251,7 +301,10 @@ impl ReputationUpdater for HttpReputationUpdater {
         // Create the record
         let record = ReputationRecord {
             subject: receipt.issuer.clone(),
-            anchor: receipt.receipt_cid.clone().unwrap_or_else(|| receipt.id.clone()), // Use receipt_cid if available, else id
+            anchor: receipt
+                .receipt_cid
+                .clone()
+                .unwrap_or_else(|| receipt.id.clone()), // Use receipt_cid if available, else id
             score_delta,
             success: is_successful,
             mana_cost: receipt.metrics.mana_cost,
@@ -260,22 +313,18 @@ impl ReputationUpdater for HttpReputationUpdater {
 
         // Increment submission counter metric with all labels
         metrics::increment_reputation_submission(
-            is_successful, 
-            coop_id, 
-            community_id, 
-            executor_did
+            is_successful,
+            coop_id,
+            community_id,
+            executor_did,
         );
 
         // Observe score delta metric with federation labels
-        metrics::observe_reputation_score_delta(
-            score_delta, 
-            coop_id, 
-            community_id, 
-            executor_did
-        );
-        
+        metrics::observe_reputation_score_delta(score_delta, coop_id, community_id, executor_did);
+
         // Send the record via HTTP
-        let response = self.client
+        let response = self
+            .client
             .post(&self.reputation_service_url)
             .json(&record)
             .send()
@@ -293,7 +342,8 @@ impl ReputationUpdater for HttpReputationUpdater {
         if response.status().is_success() {
             tracing::info!(
                 "Successfully submitted reputation record for subject {} (anchor: {})",
-                record.subject, record.anchor
+                record.subject,
+                record.anchor
             );
             // metrics::record_reputation_update_success(); // Removed, handled by increment_reputation_submission
             Ok(())
@@ -303,14 +353,18 @@ impl ReputationUpdater for HttpReputationUpdater {
             let body = response.text().await.unwrap_or_default();
             tracing::error!(
                 "Failed to submit reputation record: Status {}, Body: {}",
-                status_code, body
+                status_code,
+                body
             );
             // Increment counter for non-2xx HTTP responses from the service
             metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
                 .with_label_values(&[record.subject.as_str(), &status_str]) // Using record.subject as executor_did
                 .inc();
             // metrics::record_reputation_update_failure(); // Removed, handled by increment_reputation_submission
-            anyhow::bail!("Failed to submit reputation record: HTTP Status {}", status_code)
+            anyhow::bail!(
+                "Failed to submit reputation record: HTTP Status {}",
+                status_code
+            )
         }
     }
 
@@ -325,12 +379,23 @@ impl ReputationUpdater for HttpReputationUpdater {
             subject_did: executor_did.to_string(),
             mana_change: -(amount as i64), // Negative for deduction
             timestamp: Utc::now().timestamp() as u64,
-            cooperative_id: if coop_id.is_empty() { None } else { Some(coop_id.to_string()) },
-            community_id: if community_id.is_empty() { None } else { Some(community_id.to_string()) },
+            cooperative_id: if coop_id.is_empty() {
+                None
+            } else {
+                Some(coop_id.to_string())
+            },
+            community_id: if community_id.is_empty() {
+                None
+            } else {
+                Some(community_id.to_string())
+            },
             reason: "JobExecutionCost".to_string(),
         };
 
-        let endpoint_url = format!("{}/reputation/events", self.reputation_service_url.trim_end_matches('/'));
+        let endpoint_url = format!(
+            "{}/reputation/events",
+            self.reputation_service_url.trim_end_matches('/')
+        );
 
         tracing::info!(
             "Submitting mana deduction event to {}: {:?}",
@@ -344,33 +409,65 @@ impl ReputationUpdater for HttpReputationUpdater {
                 if status.is_success() {
                     tracing::info!(
                         "Successfully submitted mana deduction for {} ({} mana). Status: {}",
-                        executor_did, amount, status
+                        executor_did,
+                        amount,
+                        status
                     );
                     MANA_DEDUCTION_SUBMISSIONS_TOTAL
-                        .with_label_values(&[executor_did.as_str(), coop_id, community_id, "success"])
+                        .with_label_values(&[
+                            executor_did.as_str(),
+                            coop_id,
+                            community_id,
+                            "success",
+                        ])
                         .inc();
                     Ok(())
                 } else {
-                    let error_body = response.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
+                    let error_body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<failed to read error body>".to_string());
                     tracing::error!(
                         "Failed to submit mana deduction for {} ({} mana). Status: {}. Body: {}",
-                        executor_did, amount, status, error_body
+                        executor_did,
+                        amount,
+                        status,
+                        error_body
                     );
                     MANA_DEDUCTION_SUBMISSIONS_TOTAL
-                        .with_label_values(&[executor_did.as_str(), coop_id, community_id, &status.as_str()])
+                        .with_label_values(&[
+                            executor_did.as_str(),
+                            coop_id,
+                            community_id,
+                            &status.as_str(),
+                        ])
                         .inc();
-                    Err(anyhow::anyhow!("Reputation service returned error {} for mana deduction: {}", status, error_body))
+                    Err(anyhow::anyhow!(
+                        "Reputation service returned error {} for mana deduction: {}",
+                        status,
+                        error_body
+                    ))
                 }
             }
             Err(e) => {
                 tracing::error!(
                     "Client error submitting mana deduction for {} ({} mana): {}",
-                    executor_did, amount, e
+                    executor_did,
+                    amount,
+                    e
                 );
                 MANA_DEDUCTION_SUBMISSIONS_TOTAL
-                    .with_label_values(&[executor_did.as_str(), coop_id, community_id, "client_error"])
+                    .with_label_values(&[
+                        executor_did.as_str(),
+                        coop_id,
+                        community_id,
+                        "client_error",
+                    ])
                     .inc();
-                Err(anyhow::anyhow!("Client error submitting mana deduction: {}", e))
+                Err(anyhow::anyhow!(
+                    "Client error submitting mana deduction: {}",
+                    e
+                ))
             }
         }
     }
@@ -382,7 +479,7 @@ pub struct NoopReputationUpdater;
 #[async_trait::async_trait]
 impl ReputationUpdater for NoopReputationUpdater {
     async fn submit_receipt_based_reputation(
-        &self, 
+        &self,
         _receipt: &RuntimeExecutionReceipt,
         _is_successful: bool, // Accept new parameter
         _coop_id: &str,       // Accept new parameter
@@ -395,8 +492,8 @@ impl ReputationUpdater for NoopReputationUpdater {
         &self,
         _executor_did: &Did,
         _amount: u64,
-        _coop_id: &str,       // Cooperative ID scope for the deduction
-        _community_id: &str,  // Community ID scope for the deduction
+        _coop_id: &str,      // Cooperative ID scope for the deduction
+        _community_id: &str, // Community ID scope for the deduction
     ) -> Result<()> {
         tracing::debug!(
             "NoopReputationUpdater: Faking mana deduction for DID: {}, Amount: {}, Coop: {}, Comm: {}",
@@ -409,14 +506,18 @@ impl ReputationUpdater for NoopReputationUpdater {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics;
     use httpmock::MockServer;
-    use std::sync::{Arc, Mutex};
     use icn_types::runtime_receipt::RuntimeExecutionMetrics; // Keep if used
-    use tokio::time::sleep;
-    use crate::metrics; // Ensure metrics are available in test scope
-    
+    use std::sync::{Arc, Mutex};
+    use tokio::time::sleep; // Ensure metrics are available in test scope
+
     // Helper to calculate expected score delta for tests, mirroring the main logic
-    fn calculate_expected_score_delta(config: &ReputationScoringConfig, mana_cost_val: Option<u64>, is_successful: bool) -> f64 {
+    fn calculate_expected_score_delta(
+        config: &ReputationScoringConfig,
+        mana_cost_val: Option<u64>,
+        is_successful: bool,
+    ) -> f64 {
         fn sigmoid(mc: f64, k: f64, midpoint: f64) -> f64 {
             1.0 / (1.0 + f64::exp(k * (mc - midpoint)))
         }
@@ -432,14 +533,14 @@ mod tests {
             -config.failure_penalty_weight * penalty_base.ln()
         }
     }
-    
+
     #[derive(Clone)]
     struct MockReputationUpdater {
         submitted_items: Arc<Mutex<Vec<(RuntimeExecutionReceipt, bool, String, String)>>>,
         // To inspect the record sent to the HTTP client, including the calculated score_delta
         submitted_records_to_service: Arc<Mutex<Vec<ReputationRecord>>>,
     }
-    
+
     impl MockReputationUpdater {
         fn new() -> Self {
             Self {
@@ -447,7 +548,7 @@ mod tests {
                 submitted_records_to_service: Arc::new(Mutex::new(Vec::new())),
             }
         }
-        
+
         fn get_submissions(&self) -> Vec<(RuntimeExecutionReceipt, bool, String, String)> {
             self.submitted_items.lock().unwrap().clone()
         }
@@ -457,7 +558,7 @@ mod tests {
             self.submitted_records_to_service.lock().unwrap().clone()
         }
     }
-    
+
     // Mock HttpReputationUpdater to intercept the record before it would be sent
     // This is a simplified mock focusing on capturing the ReputationRecord
     // It doesn't actually make HTTP calls.
@@ -467,7 +568,7 @@ mod tests {
         is_successful: bool,
         // coop_id: &str, // Not used by the mocked part of logic directly
         // community_id: &str, // Not used by the mocked part of logic directly
-        records_log: Arc<Mutex<Vec<ReputationRecord>>> // Log to store the generated record
+        records_log: Arc<Mutex<Vec<ReputationRecord>>>, // Log to store the generated record
     ) -> Result<()> {
         fn sigmoid(mc: f64, k: f64, midpoint: f64) -> f64 {
             1.0 / (1.0 + f64::exp(k * (mc - midpoint)))
@@ -475,7 +576,11 @@ mod tests {
 
         let score_delta = if is_successful {
             let mc = receipt.metrics.mana_cost.unwrap_or(0) as f64;
-            let base_sigmoid_score = sigmoid(mc, updater_config.sigmoid_k, updater_config.sigmoid_midpoint);
+            let base_sigmoid_score = sigmoid(
+                mc,
+                updater_config.sigmoid_k,
+                updater_config.sigmoid_midpoint,
+            );
             let calculated_score = base_sigmoid_score * updater_config.max_positive_score;
             calculated_score.min(updater_config.max_positive_score)
         } else {
@@ -486,7 +591,10 @@ mod tests {
 
         let record = ReputationRecord {
             subject: receipt.issuer.clone(),
-            anchor: receipt.receipt_cid.clone().unwrap_or_else(|| receipt.id.clone()),
+            anchor: receipt
+                .receipt_cid
+                .clone()
+                .unwrap_or_else(|| receipt.id.clone()),
             score_delta,
             success: is_successful,
             mana_cost: receipt.metrics.mana_cost,
@@ -504,19 +612,18 @@ mod tests {
         // 2. Create HttpReputationUpdater
         let keypair = KeyPair::generate(); // Generate a DID for the updater
         let local_did = keypair.did;
-        
+
         let mut config = ReputationScoringConfig::default();
         config.enable_reputation_modifier = false;
         // Use specific values for reproducible score_delta
-        config.sigmoid_k = 0.01; 
+        config.sigmoid_k = 0.01;
         config.sigmoid_midpoint = 50.0;
         config.max_positive_score = 10.0;
-
 
         let updater = HttpReputationUpdater::new_with_config(
             server.base_url(), // Use mock server's URL
             local_did,
-            config.clone() 
+            config.clone(),
         );
 
         // 3. Create a sample RuntimeExecutionReceipt
@@ -552,29 +659,41 @@ mod tests {
         });
 
         // 5. Call updater.submit_receipt_based_reputation
-        let result = updater.submit_receipt_based_reputation(
-            &test_receipt,
-            true, // is_successful
-            "test-coop",
-            "test-community"
-        ).await;
+        let result = updater
+            .submit_receipt_based_reputation(
+                &test_receipt,
+                true, // is_successful
+                "test-coop",
+                "test-community",
+            )
+            .await;
 
         // 6. Assert mock server received the request
         mock.assert();
-        assert!(result.is_ok(), "Expected successful submission, got {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected successful submission, got {:?}",
+            result.err()
+        );
 
         // 7. Assert the content of the ReputationRecord
         let submitted_json = mock.requests()[0].body_json::<serde_json::Value>().unwrap();
-        
+
         let expected_score_delta = calculate_expected_score_delta(&config, receipt_mana_cost, true);
 
         assert_eq!(submitted_json["subject"], test_receipt.issuer);
-        assert_eq!(submitted_json["anchor"], test_receipt.receipt_cid.as_ref().unwrap());
+        assert_eq!(
+            submitted_json["anchor"],
+            test_receipt.receipt_cid.as_ref().unwrap()
+        );
         assert_eq!(submitted_json["success"], true);
         assert_eq!(submitted_json["mana_cost"], receipt_mana_cost.unwrap());
         // For score_delta, compare f64 with a small epsilon or check if close enough
         let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
-        assert!((submitted_score_delta - expected_score_delta).abs() < 1e-9, "Score delta mismatch");
+        assert!(
+            (submitted_score_delta - expected_score_delta).abs() < 1e-9,
+            "Score delta mismatch"
+        );
         // Timestamp is dynamic, so we don't assert its exact value here
         // but check it exists
         assert!(submitted_json["timestamp"].is_u64());
@@ -599,11 +718,8 @@ mod tests {
         config.modifier_min_bound = 0.5;
         config.modifier_max_bound = 2.0;
 
-        let updater = HttpReputationUpdater::new_with_config(
-            server.base_url(),
-            local_did,
-            config.clone()
-        );
+        let updater =
+            HttpReputationUpdater::new_with_config(server.base_url(), local_did, config.clone());
 
         let receipt_mana_cost = Some(100u64);
         let test_receipt = RuntimeExecutionReceipt {
@@ -612,7 +728,11 @@ mod tests {
             proposal_id: "prop-mod".to_string(),
             wasm_cid: "wasm-cid-mod".to_string(),
             ccl_cid: "ccl-cid-mod".to_string(),
-            metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost: receipt_mana_cost },
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 1,
+                io_bytes: 10,
+                mana_cost: receipt_mana_cost,
+            },
             anchored_cids: vec![],
             resource_usage: vec![],
             timestamp: 1234567891,
@@ -638,36 +758,49 @@ mod tests {
                 .json_body(json!({ "status": "ok" }));
         });
 
-        let result = updater.submit_receipt_based_reputation(
-            &test_receipt,
-            true, // is_successful
-            "test-coop-mod",
-            "test-community-mod"
-        ).await;
+        let result = updater
+            .submit_receipt_based_reputation(
+                &test_receipt,
+                true, // is_successful
+                "test-coop-mod",
+                "test-community-mod",
+            )
+            .await;
 
         get_score_mock.assert();
         post_submission_mock.assert();
-        assert!(result.is_ok(), "Expected successful submission, got {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected successful submission, got {:?}",
+            result.err()
+        );
 
-        let submitted_json = post_submission_mock.requests()[0].body_json::<serde_json::Value>().unwrap();
+        let submitted_json = post_submission_mock.requests()[0]
+            .body_json::<serde_json::Value>()
+            .unwrap();
 
         let base_sigmoid_score = calculate_expected_score_delta(&config, receipt_mana_cost, true);
         let current_score_from_service = 80.0;
         let assumed_max_score = 100.0; // As hardcoded in HttpReputationUpdater
-        let normalized_current_score = (current_score_from_service / assumed_max_score).clamp(0.0, 1.0);
+        let normalized_current_score =
+            (current_score_from_service / assumed_max_score).clamp(0.0, 1.0);
         let mut expected_modifier = (1.0 + normalized_current_score)
             .clamp(config.modifier_min_bound, config.modifier_max_bound);
-        
+
         // Ensure modifier is not optimized away if it's 1.0 but modifier is disabled
         // This test has modifier enabled, so this check is more for sanity.
         if !config.enable_reputation_modifier {
-             expected_modifier = 1.0;
+            expected_modifier = 1.0;
         }
 
-        let expected_score_delta_with_modifier = (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
+        let expected_score_delta_with_modifier =
+            (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
 
         assert_eq!(submitted_json["subject"], test_receipt.issuer);
-        assert_eq!(submitted_json["anchor"], test_receipt.receipt_cid.as_ref().unwrap());
+        assert_eq!(
+            submitted_json["anchor"],
+            test_receipt.receipt_cid.as_ref().unwrap()
+        );
         let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
         assert!((submitted_score_delta - expected_score_delta_with_modifier).abs() < 1e-9,
             "Score delta mismatch. Expected (with mod): {}, Got: {}, Base (no mod): {}, Modifier: {}",
@@ -692,11 +825,8 @@ mod tests {
         config.modifier_min_bound = 0.5;
         config.modifier_max_bound = 2.0;
 
-        let updater = HttpReputationUpdater::new_with_config(
-            server.base_url(),
-            local_did,
-            config.clone()
-        );
+        let updater =
+            HttpReputationUpdater::new_with_config(server.base_url(), local_did, config.clone());
 
         let receipt_mana_cost = Some(100u64);
         let test_receipt = RuntimeExecutionReceipt {
@@ -705,7 +835,11 @@ mod tests {
             proposal_id: "prop-mod-fail".to_string(),
             wasm_cid: "wasm-cid-mod-fail".to_string(),
             ccl_cid: "ccl-cid-mod-fail".to_string(),
-            metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost: receipt_mana_cost },
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 1,
+                io_bytes: 10,
+                mana_cost: receipt_mana_cost,
+            },
             anchored_cids: vec![],
             resource_usage: vec![],
             timestamp: 1234567892,
@@ -732,24 +866,36 @@ mod tests {
             .get_metric_with_label_values(&metric_labels)
             .map_or(0.0, |m| m.get());
 
-        let result = updater.submit_receipt_based_reputation(
-            &test_receipt,
-            true, // is_successful
-            "test-coop-mod-fail",
-            "test-community-mod-fail"
-        ).await;
+        let result = updater
+            .submit_receipt_based_reputation(
+                &test_receipt,
+                true, // is_successful
+                "test-coop-mod-fail",
+                "test-community-mod-fail",
+            )
+            .await;
 
         let final_metric_value = metrics::REPUTATION_SCORE_FETCH_FAILURES
             .get_metric_with_label_values(&metric_labels)
             .map_or(0.0, |m| m.get());
 
-        assert_eq!(final_metric_value - initial_metric_value, 1.0, "REPUTATION_SCORE_FETCH_FAILURES should increment by 1");
+        assert_eq!(
+            final_metric_value - initial_metric_value,
+            1.0,
+            "REPUTATION_SCORE_FETCH_FAILURES should increment by 1"
+        );
 
         get_score_mock.assert();
         post_submission_mock.assert();
-        assert!(result.is_ok(), "Expected successful submission logic (despite score fetch failure), got {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected successful submission logic (despite score fetch failure), got {:?}",
+            result.err()
+        );
 
-        let submitted_json = post_submission_mock.requests()[0].body_json::<serde_json::Value>().unwrap();
+        let submitted_json = post_submission_mock.requests()[0]
+            .body_json::<serde_json::Value>()
+            .unwrap();
 
         let base_sigmoid_score = calculate_expected_score_delta(&config, receipt_mana_cost, true);
         // Current HttpReputationUpdater::get_current_score maps failure/None to a default normalized score of 0.5
@@ -757,11 +903,13 @@ mod tests {
         let mut expected_modifier = (1.0 + normalized_current_score_on_failure)
             .clamp(config.modifier_min_bound, config.modifier_max_bound);
 
-        if !config.enable_reputation_modifier { // Should be true for this test
-             expected_modifier = 1.0;
+        if !config.enable_reputation_modifier {
+            // Should be true for this test
+            expected_modifier = 1.0;
         }
 
-        let expected_score_delta_with_modifier = (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
+        let expected_score_delta_with_modifier =
+            (base_sigmoid_score * expected_modifier).min(config.max_positive_score);
 
         assert_eq!(submitted_json["subject"], test_receipt.issuer);
         let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
@@ -780,18 +928,15 @@ mod tests {
 
         let mut config = ReputationScoringConfig::default();
         // Explicitly set modifier to true to ensure it's NOT applied on failure path
-        config.enable_reputation_modifier = true; 
+        config.enable_reputation_modifier = true;
         config.failure_penalty_weight = 5.0; // For predictable negative score
-        // Sigmoid params don't matter here but set for consistency if base_score was ever used
+                                             // Sigmoid params don't matter here but set for consistency if base_score was ever used
         config.sigmoid_k = 0.01;
         config.sigmoid_midpoint = 50.0;
         config.max_positive_score = 10.0;
 
-        let updater = HttpReputationUpdater::new_with_config(
-            server.base_url(),
-            local_did,
-            config.clone()
-        );
+        let updater =
+            HttpReputationUpdater::new_with_config(server.base_url(), local_did, config.clone());
 
         let receipt_mana_cost = Some(120u64);
         let test_receipt = RuntimeExecutionReceipt {
@@ -800,7 +945,11 @@ mod tests {
             proposal_id: "prop-fail-path".to_string(),
             wasm_cid: "wasm-cid-fail-path".to_string(),
             ccl_cid: "ccl-cid-fail-path".to_string(),
-            metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost: receipt_mana_cost },
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 1,
+                io_bytes: 10,
+                mana_cost: receipt_mana_cost,
+            },
             anchored_cids: vec![],
             resource_usage: vec![],
             timestamp: 1234567893,
@@ -817,27 +966,43 @@ mod tests {
 
         // No GET mock needed as modifier path should not be taken
 
-        let result = updater.submit_receipt_based_reputation(
-            &test_receipt,
-            false, // is_successful = false
-            "test-coop-fail",
-            "test-community-fail"
-        ).await;
+        let result = updater
+            .submit_receipt_based_reputation(
+                &test_receipt,
+                false, // is_successful = false
+                "test-coop-fail",
+                "test-community-fail",
+            )
+            .await;
 
         post_submission_mock.assert();
-        assert!(result.is_ok(), "Expected successful HTTP submission for failure path, got {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Expected successful HTTP submission for failure path, got {:?}",
+            result.err()
+        );
 
-        let submitted_json = post_submission_mock.requests()[0].body_json::<serde_json::Value>().unwrap();
-        
+        let submitted_json = post_submission_mock.requests()[0]
+            .body_json::<serde_json::Value>()
+            .unwrap();
+
         // calculate_expected_score_delta already handles the 'is_successful = false' case
-        let expected_score_delta = calculate_expected_score_delta(&config, receipt_mana_cost, false);
+        let expected_score_delta =
+            calculate_expected_score_delta(&config, receipt_mana_cost, false);
 
         assert_eq!(submitted_json["subject"], test_receipt.issuer);
         assert_eq!(submitted_json["success"], false);
         let submitted_score_delta = submitted_json["score_delta"].as_f64().unwrap();
-        assert!((submitted_score_delta - expected_score_delta).abs() < 1e-9,
-            "Negative score delta mismatch. Expected: {}, Got: {}", expected_score_delta, submitted_score_delta);
-        assert!(submitted_score_delta < 0.0, "Score delta should be negative for failure path");
+        assert!(
+            (submitted_score_delta - expected_score_delta).abs() < 1e-9,
+            "Negative score delta mismatch. Expected: {}, Got: {}",
+            expected_score_delta,
+            submitted_score_delta
+        );
+        assert!(
+            submitted_score_delta < 0.0,
+            "Score delta should be negative for failure path"
+        );
     }
 
     #[tokio::test]
@@ -852,11 +1017,8 @@ mod tests {
         // Config doesn't significantly impact this test, but use default
         let config = ReputationScoringConfig::default();
 
-        let updater = HttpReputationUpdater::new_with_config(
-            server.base_url(),
-            local_did,
-            config.clone()
-        );
+        let updater =
+            HttpReputationUpdater::new_with_config(server.base_url(), local_did, config.clone());
 
         let test_receipt = RuntimeExecutionReceipt {
             id: "test-receipt-http-500".to_string(),
@@ -864,7 +1026,11 @@ mod tests {
             proposal_id: "prop-http-500".to_string(),
             wasm_cid: "wasm-cid-http-500".to_string(),
             ccl_cid: "ccl-cid-http-500".to_string(),
-            metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost: Some(10u64) },
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 1,
+                io_bytes: 10,
+                mana_cost: Some(10u64),
+            },
             anchored_cids: vec![],
             resource_usage: vec![],
             timestamp: 1234567894,
@@ -884,27 +1050,41 @@ mod tests {
             .get_metric_with_label_values(&metric_labels)
             .map_or(0.0, |m| m.get());
 
-        let result = updater.submit_receipt_based_reputation(
-            &test_receipt,
-            true, // is_successful (so it attempts submission)
-            "test-coop-http-err",
-            "test-community-http-err"
-        ).await;
+        let result = updater
+            .submit_receipt_based_reputation(
+                &test_receipt,
+                true, // is_successful (so it attempts submission)
+                "test-coop-http-err",
+                "test-community-http-err",
+            )
+            .await;
 
         let final_metric_value = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
             .get_metric_with_label_values(&metric_labels)
             .map_or(0.0, |m| m.get());
 
-        assert_eq!(final_metric_value - initial_metric_value, 1.0, "REPUTATION_SUBMISSION_HTTP_ERRORS should increment by 1");
+        assert_eq!(
+            final_metric_value - initial_metric_value,
+            1.0,
+            "REPUTATION_SUBMISSION_HTTP_ERRORS should increment by 1"
+        );
 
         post_submission_mock.assert(); // Ensure the call was attempted
         assert!(result.is_err(), "Expected an error result due to HTTP 500");
-        
+
         // Optionally, check the error message if it's specific enough
         // e.g., format!("Failed to submit reputation record: {}", reqwest::StatusCode::INTERNAL_SERVER_ERROR)
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("Failed to submit reputation record"), "Error message mismatch: {}", err_msg);
-        assert!(err_msg.contains("500"), "Error message should contain status 500: {}", err_msg);
+        assert!(
+            err_msg.contains("Failed to submit reputation record"),
+            "Error message mismatch: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("500"),
+            "Error message should contain status 500: {}",
+            err_msg
+        );
     }
 
     #[tokio::test]
@@ -923,7 +1103,7 @@ mod tests {
         let updater = HttpReputationUpdater::new_with_config(
             malformed_url.to_string(),
             local_did,
-            config.clone()
+            config.clone(),
         );
 
         let test_receipt = RuntimeExecutionReceipt {
@@ -932,7 +1112,11 @@ mod tests {
             proposal_id: "prop-bad-url".to_string(),
             wasm_cid: "wasm-cid-bad-url".to_string(),
             ccl_cid: "ccl-cid-bad-url".to_string(),
-            metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost: Some(10u64) },
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 1,
+                io_bytes: 10,
+                mana_cost: Some(10u64),
+            },
             anchored_cids: vec![],
             resource_usage: vec![],
             timestamp: 1234567895,
@@ -959,17 +1143,22 @@ mod tests {
         // This is okay if tests are isolated or we clear metrics, which we are not doing here.
         // Let's try to get the specific error string from the result.
 
-        let result = updater.submit_receipt_based_reputation(
-            &test_receipt,
-            true, // is_successful
-            "test-coop-bad-url",
-            "test-community-bad-url"
-        ).await;
+        let result = updater
+            .submit_receipt_based_reputation(
+                &test_receipt,
+                true, // is_successful
+                "test-coop-bad-url",
+                "test-community-bad-url",
+            )
+            .await;
 
-        assert!(result.is_err(), "Expected an error result due to malformed URL");
+        assert!(
+            result.is_err(),
+            "Expected an error result due to malformed URL"
+        );
         let actual_err = result.err().unwrap();
         expected_reason_label = actual_err.to_string(); // This is the actual error message used as reason
-        
+
         let metric_labels = [executor_did_str.as_str(), expected_reason_label.as_str()];
         let final_metric_value = metrics::REPUTATION_SUBMISSION_CLIENT_ERRORS
             .get_metric_with_label_values(&metric_labels)
@@ -979,14 +1168,22 @@ mod tests {
         // So we assert that the final count is at least 1.
         // This assumes that this specific error string (reason) hasn't occurred before for this DID in this test run.
         // For truly isolated test of this counter, one would need to ensure the metric is 0 before this specific error.
-        assert_eq!(final_metric_value, 1.0, 
-            "REPUTATION_SUBMISSION_CLIENT_ERRORS should be 1 for this specific error. Label: {}", expected_reason_label);
+        assert_eq!(
+            final_metric_value, 1.0,
+            "REPUTATION_SUBMISSION_CLIENT_ERRORS should be 1 for this specific error. Label: {}",
+            expected_reason_label
+        );
 
         // Previous error string check remains useful for general error type validation
         let err_string_lowercase = actual_err.to_string().to_lowercase();
         assert!(
-            err_string_lowercase.contains("url") && (err_string_lowercase.contains("invalid") || err_string_lowercase.contains("builder error") || err_string_lowercase.contains("relative")) || err_string_lowercase.contains("failed to send request"),
-            "Error message should indicate a URL parsing or request sending issue: {}", err_string_lowercase
+            err_string_lowercase.contains("url")
+                && (err_string_lowercase.contains("invalid")
+                    || err_string_lowercase.contains("builder error")
+                    || err_string_lowercase.contains("relative"))
+                || err_string_lowercase.contains("failed to send request"),
+            "Error message should indicate a URL parsing or request sending issue: {}",
+            err_string_lowercase
         );
     }
 
@@ -995,14 +1192,32 @@ mod tests {
         // This test remains to check the trait plumbing with MockReputationUpdater
         let mock_updater_trait_impl = MockReputationUpdater::new();
         let updater_trait_arc = Arc::new(mock_updater_trait_impl.clone());
-        
-        let receipt = RuntimeExecutionReceipt { /* ... minimal fields ... */ 
-            id: "test-receipt-1".into(), issuer: "did:key:test-executor".into(), proposal_id: "p1".into(), wasm_cid: "w1".into(), ccl_cid: "c1".into(),
-            metrics: RuntimeExecutionMetrics { host_calls:0, io_bytes:0, mana_cost: Some(1000) }, anchored_cids: vec![], resource_usage: vec![],
-            timestamp:0, dag_epoch:None, receipt_cid:None, signature:None };
-        
-        updater_trait_arc.submit_receipt_based_reputation(&receipt, true, "test-coop", "test-community").await.unwrap();
-        
+
+        let receipt = RuntimeExecutionReceipt {
+            /* ... minimal fields ... */
+            id: "test-receipt-1".into(),
+            issuer: "did:key:test-executor".into(),
+            proposal_id: "p1".into(),
+            wasm_cid: "w1".into(),
+            ccl_cid: "c1".into(),
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 0,
+                io_bytes: 0,
+                mana_cost: Some(1000),
+            },
+            anchored_cids: vec![],
+            resource_usage: vec![],
+            timestamp: 0,
+            dag_epoch: None,
+            receipt_cid: None,
+            signature: None,
+        };
+
+        updater_trait_arc
+            .submit_receipt_based_reputation(&receipt, true, "test-coop", "test-community")
+            .await
+            .unwrap();
+
         let submitted_to_trait = mock_updater_trait_impl.get_submissions();
         assert_eq!(submitted_to_trait.len(), 1);
         assert_eq!(submitted_to_trait[0].0.id, "test-receipt-1");
@@ -1021,7 +1236,11 @@ mod tests {
             proposal_id: "prop-dynamic".into(),
             wasm_cid: "wasm-cid-dynamic".into(),
             ccl_cid: "ccl-cid-dynamic".into(),
-            metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost },
+            metrics: RuntimeExecutionMetrics {
+                host_calls: 1,
+                io_bytes: 10,
+                mana_cost,
+            },
             anchored_cids: vec![],
             resource_usage: vec![],
             timestamp: Utc::now().timestamp() as u64,
@@ -1042,37 +1261,90 @@ mod tests {
     async fn test_new_scoring_model_logic() {
         let config = default_test_config();
         let test_cases = vec![
-            ScoringTestCase { description: "Success: Low mana cost (10)", mana_cost: Some(10), is_successful: true },
-            ScoringTestCase { description: "Success: Mid mana cost (100)", mana_cost: Some(100), is_successful: true },
-            ScoringTestCase { description: "Success: High mana cost (200)", mana_cost: Some(200), is_successful: true },
-            ScoringTestCase { description: "Success: Zero mana cost", mana_cost: Some(0), is_successful: true },
-            ScoringTestCase { description: "Success: None mana cost", mana_cost: None, is_successful: true }, // Should also be treated as 0 cost
-
-            ScoringTestCase { description: "Failure: Low mana cost (10)", mana_cost: Some(10), is_successful: false },
-            ScoringTestCase { description: "Failure: Mid mana cost (100)", mana_cost: Some(100), is_successful: false },
-            ScoringTestCase { description: "Failure: High mana cost (200)", mana_cost: Some(200), is_successful: false },
-            ScoringTestCase { description: "Failure: Zero mana cost", mana_cost: Some(0), is_successful: false },
-            ScoringTestCase { description: "Failure: None mana cost", mana_cost: None, is_successful: false }, // Should also be treated as 0 cost
+            ScoringTestCase {
+                description: "Success: Low mana cost (10)",
+                mana_cost: Some(10),
+                is_successful: true,
+            },
+            ScoringTestCase {
+                description: "Success: Mid mana cost (100)",
+                mana_cost: Some(100),
+                is_successful: true,
+            },
+            ScoringTestCase {
+                description: "Success: High mana cost (200)",
+                mana_cost: Some(200),
+                is_successful: true,
+            },
+            ScoringTestCase {
+                description: "Success: Zero mana cost",
+                mana_cost: Some(0),
+                is_successful: true,
+            },
+            ScoringTestCase {
+                description: "Success: None mana cost",
+                mana_cost: None,
+                is_successful: true,
+            }, // Should also be treated as 0 cost
+            ScoringTestCase {
+                description: "Failure: Low mana cost (10)",
+                mana_cost: Some(10),
+                is_successful: false,
+            },
+            ScoringTestCase {
+                description: "Failure: Mid mana cost (100)",
+                mana_cost: Some(100),
+                is_successful: false,
+            },
+            ScoringTestCase {
+                description: "Failure: High mana cost (200)",
+                mana_cost: Some(200),
+                is_successful: false,
+            },
+            ScoringTestCase {
+                description: "Failure: Zero mana cost",
+                mana_cost: Some(0),
+                is_successful: false,
+            },
+            ScoringTestCase {
+                description: "Failure: None mana cost",
+                mana_cost: None,
+                is_successful: false,
+            }, // Should also be treated as 0 cost
         ];
 
         for case in test_cases {
             let receipt = create_test_receipt(case.mana_cost);
             let records_log = Arc::new(Mutex::new(Vec::<ReputationRecord>::new()));
-            
+
             // We use the mock_http_submit to simulate what HttpReputationUpdater's main logic would do
             // with its *own* config before sending. This tests the core calculation.
-            mock_http_submit(&config, &receipt, case.is_successful, records_log.clone()).await.unwrap();
-            
+            mock_http_submit(&config, &receipt, case.is_successful, records_log.clone())
+                .await
+                .unwrap();
+
             let submitted_service_records = records_log.lock().unwrap();
-            assert_eq!(submitted_service_records.len(), 1, "Failed for case: {}", case.description);
+            assert_eq!(
+                submitted_service_records.len(),
+                1,
+                "Failed for case: {}",
+                case.description
+            );
             let record_sent = &submitted_service_records[0];
 
-            let expected_delta = calculate_expected_score_delta(&config, case.mana_cost, case.is_successful);
-            
+            let expected_delta =
+                calculate_expected_score_delta(&config, case.mana_cost, case.is_successful);
+
             // Compare with a tolerance for f64 comparisons
-            assert!((record_sent.score_delta - expected_delta).abs() < 1e-9, 
-                "Score delta mismatch for case: {}. Expected: {}, Got: {}. Mana: {:?}, Success: {}", 
-                case.description, expected_delta, record_sent.score_delta, case.mana_cost, case.is_successful);
+            assert!(
+                (record_sent.score_delta - expected_delta).abs() < 1e-9,
+                "Score delta mismatch for case: {}. Expected: {}, Got: {}. Mana: {:?}, Success: {}",
+                case.description,
+                expected_delta,
+                record_sent.score_delta,
+                case.mana_cost,
+                case.is_successful
+            );
         }
     }
 
@@ -1116,12 +1388,17 @@ mod tests {
         let missing_path = Path::new("this/path/should/definitely/not/exist.toml");
         let result = ReputationScoringConfig::from_file(missing_path);
 
-        assert!(result.is_err(), "Expected an error when loading a missing config file");
+        assert!(
+            result.is_err(),
+            "Expected an error when loading a missing config file"
+        );
         let err_msg = result.err().unwrap().to_string();
         // Check for part of the error message from fs::read_to_string failure
         assert!(
-            err_msg.contains("Failed to read reputation config file") && err_msg.contains("No such file or directory"),
-            "Error message mismatch: {}", err_msg
+            err_msg.contains("Failed to read reputation config file")
+                && err_msg.contains("No such file or directory"),
+            "Error message mismatch: {}",
+            err_msg
         );
     }
-} 
+}

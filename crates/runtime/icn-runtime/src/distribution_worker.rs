@@ -1,15 +1,15 @@
 //! Periodic mana distribution worker.
 #![forbid(unsafe_code)]
 
+use icn_economics::mana::ManaManager;
+use icn_identity::Did;
+use icn_identity::IdentityIndex;
+use icn_identity::ScopeKey;
+use icn_types::dag::{DagEventType, DagNode};
+use icn_types::dag_store::{DagStore, SharedDagStore};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tokio::time::{self, Duration, Interval};
-use icn_types::dag::{DagNode, DagEventType};
-use icn_types::dag_store::{SharedDagStore, DagStore};
-use icn_identity::ScopeKey;
-use icn_identity::IdentityIndex;
-use icn_identity::Did;
-use icn_economics::mana::ManaManager;
-use std::str::FromStr;
 
 /// Attempt to extract the originator DID from a `DagNode`.
 /// For now we fall back to taking the final path segment of `scope_id`.
@@ -104,7 +104,10 @@ impl DistributionWorker {
                 ScopeKey::Individual(did)
             };
 
-            if mgr.transfer(&self.node_scope, &origin_scope, share_per).is_ok() {
+            if mgr
+                .transfer(&self.node_scope, &origin_scope, share_per)
+                .is_ok()
+            {
                 count += 1;
             }
         }
@@ -118,4 +121,4 @@ impl DistributionWorker {
             let _ = self.tick().await;
         }
     }
-} 
+}

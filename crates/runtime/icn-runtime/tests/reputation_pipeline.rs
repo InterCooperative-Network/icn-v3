@@ -1,47 +1,60 @@
 use anyhow::Result;
-use icn_runtime::{Runtime, RuntimeContextBuilder, reputation_integration::{HttpReputationUpdater, ReputationScoringConfig}};
+use icn_identity::{Did, KeyPair};
 use icn_runtime::MemStorage; // Corrected import path
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-use icn_identity::{KeyPair, Did};
+use icn_runtime::{
+    reputation_integration::{HttpReputationUpdater, ReputationScoringConfig},
+    Runtime, RuntimeContextBuilder,
+};
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use std::sync::Arc;
 // Revert to minimal httpmock import for core items used broadly
-use httpmock::{MockServer, Method::POST}; 
+use httpmock::{Method::POST, MockServer};
 // serde_json for predicate body parsing will be used via its own use statement or fully qualified if not present
+use icn_runtime::config::RuntimeConfig;
+use icn_runtime::metrics;
+use icn_runtime::reputation_integration::ReputationUpdater as _;
+use icn_types::dag_store::SharedDagStore;
+use icn_types::VerifiableReceipt;
 use serde_json::json;
 use std::str::FromStr;
-use icn_types::dag_store::SharedDagStore;
 use tempfile::TempDir;
 use url::Url;
-use icn_runtime::reputation_integration::{ReputationUpdater as _};
-use icn_runtime::metrics;
-use icn_runtime::config::RuntimeConfig;
-use icn_types::VerifiableReceipt;
-
 
 // Helper function to create a basic, signed RuntimeExecutionReceipt
 // This might need to be more sophisticated or use runtime.issue_receipt if direct signing is complex.
 // For now, let's try a simplified approach.
-fn create_basic_receipt(issuer_did: &str, receipt_id: &str, mana_cost: Option<u64>) -> RuntimeExecutionReceipt {
+fn create_basic_receipt(
+    issuer_did: &str,
+    receipt_id: &str,
+    mana_cost: Option<u64>,
+) -> RuntimeExecutionReceipt {
     RuntimeExecutionReceipt {
         id: receipt_id.to_string(),
         issuer: issuer_did.to_string(),
         proposal_id: "test_proposal".to_string(),
         wasm_cid: "test_wasm_cid".to_string(),
         ccl_cid: "test_ccl_cid".to_string(),
-        metrics: RuntimeExecutionMetrics { host_calls: 1, io_bytes: 10, mana_cost },
+        metrics: RuntimeExecutionMetrics {
+            host_calls: 1,
+            io_bytes: 10,
+            mana_cost,
+        },
         anchored_cids: vec![],
         resource_usage: vec![],
         timestamp: 1234567890,
         dag_epoch: Some(1),
-        receipt_cid: None, 
+        receipt_cid: None,
         signature: None, // Signature will be added later if needed by the test
     }
 }
 
 // Helper to sign a receipt for testing purposes
 fn sign_receipt(receipt: &mut RuntimeExecutionReceipt, keypair: &KeyPair) {
-    let payload_struct = receipt.get_payload_for_signing().expect("Failed to get payload for signing in helper");
-    let bytes_to_sign = bincode::serialize(&payload_struct).expect("Failed to serialize payload for signing in helper");
+    let payload_struct = receipt
+        .get_payload_for_signing()
+        .expect("Failed to get payload for signing in helper");
+    let bytes_to_sign = bincode::serialize(&payload_struct)
+        .expect("Failed to serialize payload for signing in helper");
     let signature = keypair.sign(&bytes_to_sign);
     receipt.signature = Some(signature.to_bytes().to_vec());
 }
@@ -57,7 +70,8 @@ impl httpmock::Predicate for ReputationSubmissionBodyPredicate {
         // Assuming serde_json is available in this scope, or use ::serde_json if necessary
         match serde_json::from_slice::<serde_json::Value>(&request.body) {
             Ok(submitted_data) => {
-                let subject_ok = submitted_data["subject"].as_str() == Some(self.expected_subject_did.as_str());
+                let subject_ok =
+                    submitted_data["subject"].as_str() == Some(self.expected_subject_did.as_str());
                 let success_ok = submitted_data["success"].as_bool() == Some(true);
                 subject_ok && success_ok
             }
@@ -81,12 +95,12 @@ async fn test_anchor_receipt_triggers_reputation_submission_success() -> Result<
     let runtime_did = Did::from_str(&runtime_identity_keypair.did.to_string()).unwrap();
 
     let http_reputation_updater = Arc::new(HttpReputationUpdater::new(
-        server.base_url(), 
-        runtime_did.clone()
+        server.base_url(),
+        runtime_did.clone(),
     ));
 
     let dag_store = Arc::new(SharedDagStore::new());
-    
+
     let context = RuntimeContextBuilder::new()
         .with_identity(runtime_identity_keypair.clone())
         .with_executor_id(runtime_did.to_string())
@@ -97,18 +111,25 @@ async fn test_anchor_receipt_triggers_reputation_submission_success() -> Result<
         .with_reputation_updater(http_reputation_updater.clone());
 
     // Instantiate predicate with the DID string
-    let predicate = ReputationSubmissionBodyPredicate { expected_subject_did: issuer_did_str.clone() };
+    let predicate = ReputationSubmissionBodyPredicate {
+        expected_subject_did: issuer_did_str.clone(),
+    };
 
-    let rep_submission_mock = server.mock_async(move |when, then| {
-        when.method(httpmock::Method::POST) // Method::POST is from the use line
-            .path("/")
-            .matches(predicate); // Use the custom predicate
-        then.status(200).body("{ \"status\": \"ok\" }");
-    }).await;
+    let rep_submission_mock = server
+        .mock_async(move |when, then| {
+            when.method(httpmock::Method::POST) // Method::POST is from the use line
+                .path("/")
+                .matches(predicate); // Use the custom predicate
+            then.status(200).body("{ \"status\": \"ok\" }");
+        })
+        .await;
 
-    runtime.anchor_receipt(&receipt).await.expect("Anchor receipt failed");
+    runtime
+        .anchor_receipt(&receipt)
+        .await
+        .expect("Anchor receipt failed");
 
-    rep_submission_mock.assert_async().await; 
+    rep_submission_mock.assert_async().await;
 
     Ok(())
 }
@@ -125,12 +146,12 @@ async fn test_anchor_receipt_reputation_submission_http_500() -> Result<()> {
     let runtime_did = Did::from_str(&runtime_identity_keypair.did.to_string()).unwrap();
 
     let http_reputation_updater = Arc::new(HttpReputationUpdater::new(
-        server.base_url(), 
-        runtime_did.clone()
+        server.base_url(),
+        runtime_did.clone(),
     ));
 
     let dag_store = Arc::new(SharedDagStore::new());
-    
+
     let context = RuntimeContextBuilder::new()
         .with_identity(runtime_identity_keypair.clone())
         .with_executor_id(runtime_did.to_string())
@@ -140,17 +161,26 @@ async fn test_anchor_receipt_reputation_submission_http_500() -> Result<()> {
     let runtime = Runtime::with_context(Arc::new(MemStorage::default()), Arc::new(context))
         .with_reputation_updater(http_reputation_updater.clone());
 
-    let rep_submission_mock = server.mock_async(|when, then| {
-        when.method(httpmock::Method::POST).path("/");
-        then.status(500).body("Internal Server Error");
-    }).await;
+    let rep_submission_mock = server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/");
+            then.status(500).body("Internal Server Error");
+        })
+        .await;
 
-    let initial_http_errors = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS.with_label_values(&[receipt.issuer.as_str(), "500"]).get() as f64;
+    let initial_http_errors = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
+        .with_label_values(&[receipt.issuer.as_str(), "500"])
+        .get() as f64;
 
-    runtime.anchor_receipt(&receipt).await.expect("Anchor receipt should succeed even if reputation update fails");
+    runtime
+        .anchor_receipt(&receipt)
+        .await
+        .expect("Anchor receipt should succeed even if reputation update fails");
 
     rep_submission_mock.assert_async().await;
-    let final_http_errors = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS.with_label_values(&[receipt.issuer.as_str(), "500"]).get() as f64;
+    let final_http_errors = metrics::REPUTATION_SUBMISSION_HTTP_ERRORS
+        .with_label_values(&[receipt.issuer.as_str(), "500"])
+        .get() as f64;
     assert_eq!(final_http_errors, initial_http_errors + 1.0);
 
     Ok(())
@@ -158,7 +188,7 @@ async fn test_anchor_receipt_reputation_submission_http_500() -> Result<()> {
 
 #[tokio::test]
 async fn test_anchor_receipt_reputation_submission_client_error() -> Result<()> {
-    let invalid_url = "http://localhost:1"; 
+    let invalid_url = "http://localhost:1";
     let issuer_keypair = KeyPair::generate();
     let issuer_did_str = issuer_keypair.did.to_string();
     let mut receipt = create_basic_receipt(&issuer_did_str, "test_receipt_client_err", Some(20));
@@ -168,12 +198,12 @@ async fn test_anchor_receipt_reputation_submission_client_error() -> Result<()> 
     let runtime_did = Did::from_str(&runtime_identity_keypair.did.to_string()).unwrap();
 
     let reputation_updater = Arc::new(HttpReputationUpdater::new(
-        invalid_url.to_string(), 
-        runtime_did.clone()
+        invalid_url.to_string(),
+        runtime_did.clone(),
     ));
 
     let dag_store = Arc::new(SharedDagStore::new());
-    
+
     let context = RuntimeContextBuilder::new()
         .with_identity(runtime_identity_keypair.clone())
         .with_executor_id(runtime_did.to_string())
@@ -184,15 +214,24 @@ async fn test_anchor_receipt_reputation_submission_client_error() -> Result<()> 
         .with_reputation_updater(reputation_updater.clone());
 
     let initial_client_errors = metrics::REPUTATION_SUBMISSION_CLIENT_ERRORS
-        .get_metric_with_label_values(&[receipt.issuer.as_str(), "CLIENT_ERROR_PLACEHOLDER_WILL_NOT_MATCH_DYNAMIC_ERROR"])
+        .get_metric_with_label_values(&[
+            receipt.issuer.as_str(),
+            "CLIENT_ERROR_PLACEHOLDER_WILL_NOT_MATCH_DYNAMIC_ERROR",
+        ])
         .map_or(0.0, |m| m.get() as f64);
 
-    runtime.anchor_receipt(&receipt).await.expect("Anchor receipt should succeed");
+    runtime
+        .anchor_receipt(&receipt)
+        .await
+        .expect("Anchor receipt should succeed");
 
     let final_client_errors = metrics::REPUTATION_SUBMISSION_CLIENT_ERRORS
-        .get_metric_with_label_values(&[receipt.issuer.as_str(), "CLIENT_ERROR_PLACEHOLDER_WILL_NOT_MATCH_DYNAMIC_ERROR"])
+        .get_metric_with_label_values(&[
+            receipt.issuer.as_str(),
+            "CLIENT_ERROR_PLACEHOLDER_WILL_NOT_MATCH_DYNAMIC_ERROR",
+        ])
         .map_or(0.0, |m| m.get() as f64);
     assert!(final_client_errors > initial_client_errors, "Client error counter should have incremented. This assertion may fail due to dynamic error string mismatch.");
 
     Ok(())
-} 
+}

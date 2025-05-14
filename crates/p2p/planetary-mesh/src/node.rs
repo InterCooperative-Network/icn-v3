@@ -1,37 +1,50 @@
-use crate::behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC, RECEIPT_AVAILABILITY_TOPIC_HASH};
+use crate::behaviour::{
+    MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC, JOB_ANNOUNCEMENT_TOPIC,
+    RECEIPT_AVAILABILITY_TOPIC_HASH,
+};
 use crate::protocol::{MeshProtocolMessage, NodeCapability};
+use chrono::{TimeZone, Utc}; // For timestamp conversion
+use cid::Cid; // For storing receipt CIDs
 use futures::StreamExt;
+use icn_economics::ResourceType;
 use icn_identity::{Did, KeyPair as IcnKeyPair};
-use libp2p::identity::{Keypair as Libp2pKeypair, ed25519::SecretKey as Libp2pSecretKey};
-use libp2p::{Transport};
+use icn_mesh_receipts::{
+    sign_receipt_in_place, DagNode, ExecutionReceipt, ReceiptError, SignError as ReceiptSignError,
+};
+use icn_types::mesh::{
+    JobId as IcnJobId, JobStatus as StandardJobStatus, MeshJob, MeshJobParams,
+    OrganizationScopeIdentifier, QoSProfile,
+};
+use icn_types::reputation::{ReputationProfile, ReputationRecord, ReputationUpdateEvent}; // Added Reputation types
+use libp2p::identity::{ed25519::SecretKey as Libp2pSecretKey, Keypair as Libp2pKeypair};
+use libp2p::Transport;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tokio::time;
 use tokio::runtime;
-use icn_economics::ResourceType;
-use icn_types::mesh::{MeshJob, MeshJobParams, QoSProfile, JobId as IcnJobId, JobStatus as StandardJobStatus, OrganizationScopeIdentifier};
-use icn_mesh_receipts::{ExecutionReceipt, sign_receipt_in_place, ReceiptError, SignError as ReceiptSignError, DagNode};
-use icn_types::reputation::{ReputationProfile, ReputationRecord, ReputationUpdateEvent}; // Added Reputation types
-use cid::Cid; // For storing receipt CIDs
-use chrono::{TimeZone, Utc}; // For timestamp conversion
-use tokio::sync::mpsc; // <<< ADD IMPORT FOR MPSC
+use tokio::sync::mpsc;
+use tokio::time; // <<< ADD IMPORT FOR MPSC
 
 // Access to RuntimeContext for anchoring receipts locally
-use icn_runtime::context::RuntimeContext; 
+use icn_runtime::context::RuntimeContext;
 use icn_runtime::execute_mesh_job; // <<< ADD IMPORT
 use icn_runtime::host_environment::ConcreteHostEnvironment; // For calling anchor_receipt
 
 use libp2p::gossipsub::TopicHash;
-use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, ValidationMode};
+use libp2p::gossipsub::{
+    GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, ValidationMode,
+};
 use libp2p::swarm::{Swarm, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 // ADDITION: For the test listener channel
-use tokio::sync::broadcast as tokio_broadcast;
-use libp2p::kad::{store::MemoryStore, Kademlia, KademliaEvent, QueryResult, GetRecordOk, Record, Key as KadKey, QueryId};
-use icn_mesh_receipts::{verify_embedded_signature}; // Ensure verify_embedded_signature is imported
+use icn_mesh_receipts::verify_embedded_signature; // Ensure verify_embedded_signature is imported
+use libp2p::kad::{
+    store::MemoryStore, GetRecordOk, Kademlia, KademliaEvent, Key as KadKey, QueryId, QueryResult,
+    Record,
+};
 use serde_cbor; // For deserializing the receipt CBOR
+use tokio::sync::broadcast as tokio_broadcast;
 use tokio::sync::oneshot; // Added for Kademlia query response
 
 // If reqwest is added as a dependency for submitting reputation records
@@ -90,14 +103,15 @@ pub struct MeshNode {
     pub local_runtime_context: Option<Arc<RuntimeContext>>,
     pub discovered_receipt_announcements: Arc<RwLock<HashMap<IcnJobId, (Cid, Did)>>>,
     // ADDITION: Test hook for listening to JobStatusUpdateV1 messages received by this node
-    pub test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
+    pub test_job_status_listener_tx:
+        Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
     // 2. Add to MeshNode struct:
     pub internal_action_tx: mpsc::Sender<NodeInternalAction>,
     // For Kademlia receipt queries (complex type, allow lint at struct level)
     #[allow(clippy::type_complexity)]
     receipt_queries: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Vec<u8>, FetchError>>>>>,
     reputation_service_url: Option<String>, // Added for reputation service URL
-    http_client: reqwest::Client, // Added http_client
+    http_client: reqwest::Client,           // Added http_client
     pub bids: Arc<RwLock<HashMap<IcnJobId, Vec<crate::protocol::Bid>>>>, // Added for storing bids
 }
 
@@ -108,7 +122,9 @@ impl MeshNode {
         runtime_job_queue: Arc<Mutex<VecDeque<MeshJob>>>,
         local_runtime_context: Option<Arc<RuntimeContext>>,
         // ADDITION: Test listener sender parameter
-        test_job_status_listener_tx: Option<tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>>,
+        test_job_status_listener_tx: Option<
+            tokio_broadcast::Sender<super::protocol::MeshProtocolMessage>,
+        >,
         reputation_service_url: Option<String>, // Added parameter
     ) -> Result<(Self, mpsc::Receiver<NodeInternalAction>), Box<dyn Error>> {
         let local_libp2p_keypair = libp2p::identity::Keypair::generate_ed25519(); // Or convert from IcnKeyPair if compatible
@@ -117,18 +133,23 @@ impl MeshNode {
         let local_node_did = icn_keypair.did.clone();
         tracing::info!("Local Node DID (from ICN KeyPair): {}", local_node_did);
 
-        let (internal_action_tx, internal_action_rx_for_event_loop) = mpsc::channel::<NodeInternalAction>(32);
+        let (internal_action_tx, internal_action_rx_for_event_loop) =
+            mpsc::channel::<NodeInternalAction>(32);
 
         let transport = libp2p::development_transport(local_libp2p_keypair.clone()).await?;
 
         let mut gossipsub_config = gossipsub::GossipsubConfigBuilder::default();
         gossipsub_config.validation_mode(ValidationMode::Strict);
-        let gossipsub_config = gossipsub_config.build()
+        let gossipsub_config = gossipsub_config
+            .build()
             .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 
         let mut behaviour = MeshBehaviour {
-            gossipsub: Gossipsub::new(MessageAuthenticity::Signed(local_libp2p_keypair.clone()), gossipsub_config)
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?,
+            gossipsub: Gossipsub::new(
+                MessageAuthenticity::Signed(local_libp2p_keypair.clone()),
+                gossipsub_config,
+            )
+            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)))?,
             kademlia: Kademlia::new(local_peer_id, MemoryStore::new(local_peer_id)),
             mdns: Mdns::new(MdnsConfig::default()).await?,
         };
@@ -152,35 +173,38 @@ impl MeshNode {
             tracing::info!("Listening on default TCP IPv4 and IPv6 any port / any interface.");
         }
 
-        Ok((Self {
-            swarm,
-            local_peer_id,
-            local_node_did,
-            local_keypair: icn_keypair,
-            capability_gossip_topic,
-            job_announcement_topic,
-            receipt_announcement_topic,
-            job_interest_base_topic_prefix,
-            available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
-            runtime_job_queue,
-            job_interests_received: Arc::new(RwLock::new(HashMap::new())),
-            announced_originated_jobs: Arc::new(RwLock::new(HashMap::new())),
-            assigned_jobs: Arc::new(RwLock::new(HashMap::new())),
-            executing_jobs: Arc::new(RwLock::new(HashMap::new())),
-            completed_job_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
-            local_runtime_context,
-            discovered_receipt_announcements: Arc::new(RwLock::new(HashMap::new())),
-            // ADDITION: Store the test listener sender
-            test_job_status_listener_tx,
-            // Assign `internal_action_tx` to the struct
-            internal_action_tx,
-            // For Kademlia receipt queries (complex type, allow lint at struct level)
-            #[allow(clippy::type_complexity)]
-            receipt_queries: Arc::new(Mutex::new(HashMap::new())),
-            reputation_service_url, // Store the URL
-            http_client: reqwest::Client::new(), // Initialize the client
-            bids: Arc::new(RwLock::new(HashMap::new())), // Initialize bids
-        }, internal_action_rx_for_event_loop))
+        Ok((
+            Self {
+                swarm,
+                local_peer_id,
+                local_node_did,
+                local_keypair: icn_keypair,
+                capability_gossip_topic,
+                job_announcement_topic,
+                receipt_announcement_topic,
+                job_interest_base_topic_prefix,
+                available_jobs_on_mesh: Arc::new(RwLock::new(HashMap::new())),
+                runtime_job_queue,
+                job_interests_received: Arc::new(RwLock::new(HashMap::new())),
+                announced_originated_jobs: Arc::new(RwLock::new(HashMap::new())),
+                assigned_jobs: Arc::new(RwLock::new(HashMap::new())),
+                executing_jobs: Arc::new(RwLock::new(HashMap::new())),
+                completed_job_receipt_cids: Arc::new(RwLock::new(HashMap::new())),
+                local_runtime_context,
+                discovered_receipt_announcements: Arc::new(RwLock::new(HashMap::new())),
+                // ADDITION: Store the test listener sender
+                test_job_status_listener_tx,
+                // Assign `internal_action_tx` to the struct
+                internal_action_tx,
+                // For Kademlia receipt queries (complex type, allow lint at struct level)
+                #[allow(clippy::type_complexity)]
+                receipt_queries: Arc::new(Mutex::new(HashMap::new())),
+                reputation_service_url,                      // Store the URL
+                http_client: reqwest::Client::new(),         // Initialize the client
+                bids: Arc::new(RwLock::new(HashMap::new())), // Initialize bids
+            },
+            internal_action_rx_for_event_loop,
+        ))
     }
 
     fn construct_capability(&self) -> NodeCapability {
@@ -193,7 +217,7 @@ impl MeshNode {
             node_did: self.local_node_did.clone(),
             available_resources,
             supported_wasm_engines: vec!["wasmtime_v0.53".to_string()],
-            current_load_factor: 0.1, // Mock load
+            current_load_factor: 0.1,     // Mock load
             reputation_score: Some(1000), // Mock reputation
             geographical_region: Some("local-dev-machine".to_string()),
             custom_features: HashMap::new(),
@@ -203,10 +227,13 @@ impl MeshNode {
     async fn broadcast_capabilities(&mut self) -> Result<(), libp2p::gossipsub::PublishError> {
         let capability = self.construct_capability();
         let message = MeshProtocolMessage::CapabilityAdvertisementV1(capability);
-        
+
         match serde_cbor::to_vec(&message) {
             Ok(serialized_message) => {
-                println!("Broadcasting capabilities for PeerID: {}...", self.local_peer_id);
+                println!(
+                    "Broadcasting capabilities for PeerID: {}...",
+                    self.local_peer_id
+                );
                 self.swarm
                     .behaviour_mut()
                     .gossipsub
@@ -242,9 +269,13 @@ impl MeshNode {
         let manifest = super::JobManifest {
             id: job.job_id.clone(),
             submitter_did: job.originator_did.clone(),
-            description: job.params.description.clone().unwrap_or_else(|| "N/A".to_string()),
+            description: job
+                .params
+                .description
+                .clone()
+                .unwrap_or_else(|| "N/A".to_string()),
             created_at: chrono::Utc::now(), // Or convert from job.submitted_at if it exists and types match
-            expires_at: None, // MeshJob doesn't have this directly
+            expires_at: None,               // MeshJob doesn't have this directly
             wasm_cid: job.params.wasm_cid.clone(),
             ccl_cid: job.params.ccl_cid.clone(),
             input_data_cid: job.params.input_data_cid.clone(),
@@ -270,15 +301,26 @@ impl MeshNode {
 
                 let interest_topic_string = job_interest_topic_string(&job.job_id);
                 let interest_topic = Topic::new(interest_topic_string.clone());
-                match self.swarm.behaviour_mut().gossipsub.subscribe(&interest_topic) {
+                match self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .subscribe(&interest_topic)
+                {
                     Ok(_) => println!("Subscribed to interest topic: {}", interest_topic_string),
-                    Err(e) => eprintln!("Failed to subscribe to interest topic {}: {:?}", interest_topic_string, e),
+                    Err(e) => eprintln!(
+                        "Failed to subscribe to interest topic {}: {:?}",
+                        interest_topic_string, e
+                    ),
                 }
 
                 // Store the JobManifest in announced_originated_jobs
                 if let Ok(mut announced_jobs_map) = self.announced_originated_jobs.write() {
                     announced_jobs_map.insert(job.job_id.clone(), manifest.clone()); // Store the manifest
-                    println!("Added job manifest {} to announced_originated_jobs.", job.job_id);
+                    println!(
+                        "Added job manifest {} to announced_originated_jobs.",
+                        job.job_id
+                    );
                 } else {
                     eprintln!("Failed to get write lock for announced_originated_jobs while adding job {}.
 ", job.job_id);
@@ -298,15 +340,19 @@ impl MeshNode {
         // For now, let's assume we need to parse job.params.required_resources_json
         // and compare with local capabilities. This is a placeholder for more complex logic.
         let local_caps = self.construct_capability();
-        let required_resources: Result<HashMap<String, u64>, _> = serde_json::from_str(&job.params.required_resources_json);
-        
+        let required_resources: Result<HashMap<String, u64>, _> =
+            serde_json::from_str(&job.params.required_resources_json);
+
         let is_suitable = match required_resources {
             Ok(req_res) => {
                 let mut suitable = true;
                 // Example: Check CPU (assuming key "min_cpu_cores" in JSON and ResourceType::Cpu in local_caps)
                 if let Some(required_cpu_cores) = req_res.get("min_cpu_cores") {
-                    if let Some(available_cpu) = local_caps.available_resources.get(&ResourceType::Cpu) {
-                        if *required_cpu_cores > *available_cpu { // direct comparison, assuming units match
+                    if let Some(available_cpu) =
+                        local_caps.available_resources.get(&ResourceType::Cpu)
+                    {
+                        if *required_cpu_cores > *available_cpu {
+                            // direct comparison, assuming units match
                             suitable = false;
                         }
                     } else {
@@ -315,8 +361,11 @@ impl MeshNode {
                 }
                 // Example: Check Memory (assuming key "min_memory_mb" and ResourceType::Memory)
                 if let Some(required_memory_mb) = req_res.get("min_memory_mb") {
-                     if let Some(available_memory) = local_caps.available_resources.get(&ResourceType::Memory) {
-                        if *required_memory_mb > *available_memory { // direct comparison
+                    if let Some(available_memory) =
+                        local_caps.available_resources.get(&ResourceType::Memory)
+                    {
+                        if *required_memory_mb > *available_memory {
+                            // direct comparison
                             suitable = false;
                         }
                     } else {
@@ -327,7 +376,10 @@ impl MeshNode {
                 suitable
             }
             Err(e) => {
-                eprintln!("Failed to parse required_resources_json for job {}: {:?}", job.job_id, e);
+                eprintln!(
+                    "Failed to parse required_resources_json for job {}: {:?}",
+                    job.job_id, e
+                );
                 false // Not suitable if parsing fails
             }
         };
@@ -346,19 +398,31 @@ impl MeshNode {
                         .behaviour_mut()
                         .gossipsub
                         .publish(interest_topic, serialized_interest_message)?;
-                    println!("Published JobInterestV1 for JobID: {} to topic: {}", job.job_id, interest_topic_string);
+                    println!(
+                        "Published JobInterestV1 for JobID: {} to topic: {}",
+                        job.job_id, interest_topic_string
+                    );
                 }
                 Err(e) => {
-                    eprintln!("Error serializing job interest message for job {}: {:?}", job.job_id, e);
+                    eprintln!(
+                        "Error serializing job interest message for job {}: {:?}",
+                        job.job_id, e
+                    );
                 }
             }
         }
         Ok(())
     }
 
-    pub async fn simulate_execution_and_anchor_receipt(&mut self, job: MeshJob) -> Result<(), Box<dyn Error>> {
+    pub async fn simulate_execution_and_anchor_receipt(
+        &mut self,
+        job: MeshJob,
+    ) -> Result<(), Box<dyn Error>> {
         let job_id = job.job_id.clone(); // For logging and potential later use
-        tracing::info!("[Metrics] Attempting to simulate execution and anchor receipt for job {}", job_id);
+        tracing::info!(
+            "[Metrics] Attempting to simulate execution and anchor receipt for job {}",
+            job_id
+        );
         metrics::jobs_execution_attempted_inc();
         let overall_execution_start_time = std::time::Instant::now();
 
@@ -372,32 +436,58 @@ impl MeshNode {
         let execution_start_time = Utc::now().timestamp_micros() as u64 / 1000 - 2000; // mock 2s ago in ms
         let execution_end_time_dt = Utc::now();
         let execution_end_time = execution_end_time_dt.timestamp_micros() as u64 / 1000; // current time in ms
-        
+
         // Mock resource usage (ensure ResourceType can be converted from string or use actual types)
         let mut resource_usage_actual: HashMap<icn_economics::ResourceType, u64> = HashMap::new();
         resource_usage_actual.insert(icn_economics::ResourceType::Cpu, 500); // Example: 500 mCPU seconds or similar unit
         resource_usage_actual.insert(icn_economics::ResourceType::Memory, 128 * 1024 * 1024); // Example: 128MiB in bytes
 
         // Simulate success for this path, error handling would set this to false
-        let mut job_execution_successful = true; 
+        let mut job_execution_successful = true;
         // --- End of simulated job execution ---
 
         metrics::receipts_created_inc(); // Receipt object is about to be populated
 
         let mut receipt = ExecutionReceipt {
             job_id: job.job_id.clone(),
-            executor: self.local_node_did.clone(), 
-            status: if job_execution_successful { StandardJobStatus::CompletedSuccess } else { StandardJobStatus::Failed { error: "Simulated execution failure".to_string(), stage_index: Some(0), stage_id: Some("execution".to_string()) }}, 
-            result_data_cid: Some("bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()), // mock
-            logs_cid: Some("bafybeigcafecafebeeffeedbeeffeedbeeffeedbeeffeedbeeffeedbeeffeed".to_string()), // mock
+            executor: self.local_node_did.clone(),
+            status: if job_execution_successful {
+                StandardJobStatus::CompletedSuccess
+            } else {
+                StandardJobStatus::Failed {
+                    error: "Simulated execution failure".to_string(),
+                    stage_index: Some(0),
+                    stage_id: Some("execution".to_string()),
+                }
+            },
+            result_data_cid: Some(
+                "bafybeigdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                    .to_string(),
+            ), // mock
+            logs_cid: Some(
+                "bafybeigcafecafebeeffeedbeeffeedbeeffeedbeeffeedbeeffeedbeeffeed".to_string(),
+            ), // mock
             resource_usage: resource_usage_actual,
-            execution_start_time, // u64, ms precision if possible, or seconds
-            execution_end_time,   // u64, ms precision if possible, or seconds
+            execution_start_time,  // u64, ms precision if possible, or seconds
+            execution_end_time,    // u64, ms precision if possible, or seconds
             execution_end_time_dt, // DateTime<Utc>
             signature: Vec::new(), // Will be filled by sign_receipt_in_place
-            coop_id: job.originator_org_scope.as_ref().and_then(|s| s.coop_id.clone()),
-            community_id: job.originator_org_scope.as_ref().and_then(|s| s.community_id.clone()),
-            mana_cost: Some(job.params.resources_required.iter().map(|(_,v)| v).sum::<u64>().max(10)), // Example mana cost
+            coop_id: job
+                .originator_org_scope
+                .as_ref()
+                .and_then(|s| s.coop_id.clone()),
+            community_id: job
+                .originator_org_scope
+                .as_ref()
+                .and_then(|s| s.community_id.clone()),
+            mana_cost: Some(
+                job.params
+                    .resources_required
+                    .iter()
+                    .map(|(_, v)| v)
+                    .sum::<u64>()
+                    .max(10),
+            ), // Example mana cost
         };
 
         let signing_start_time = std::time::Instant::now();
@@ -412,53 +502,72 @@ impl MeshNode {
                 metrics::receipt_signing_observe(signing_duration, false);
                 tracing::error!("Failed to sign receipt for job {}: {:?}", job.job_id, e);
                 job_execution_successful = false; // Mark overall job as failed
-                                          // No early return here, record overall job execution metrics first
+                                                  // No early return here, record overall job execution metrics first
             }
         }
-        
+
         let anchored_receipt_cid_str: Option<String>; // To store the final CID string for announcement
 
-        if job_execution_successful { // Proceed to anchoring only if signing (and simulated execution) was successful
+        if job_execution_successful {
+            // Proceed to anchoring only if signing (and simulated execution) was successful
             // Anchor receipt via local runtime context
             if let Some(rt_ctx) = &self.local_runtime_context {
-                let host_env = ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
-                
+                let host_env =
+                    ConcreteHostEnvironment::new(rt_ctx.clone(), self.local_node_did.clone());
+
                 let receipt_cid_for_anchor = match receipt.cid() {
                     Ok(cid) => cid,
                     Err(e) => {
-                        tracing::error!("Failed to get CID of receipt for job {}: {:?}. Cannot anchor.", job.job_id, e);
+                        tracing::error!(
+                            "Failed to get CID of receipt for job {}: {:?}. Cannot anchor.",
+                            job.job_id,
+                            e
+                        );
                         metrics::receipt_local_processing_error_inc("cid_generation");
                         job_execution_successful = false; // Mark overall job as failed
                         Cid::default() // Dummy CID, won't proceed to anchor
                     }
                 };
 
-                if job_execution_successful { // Check again if CID generation failed
-                    match host_env.anchor_receipt(receipt.clone()).await { // anchor_receipt expects the receipt by value
+                if job_execution_successful {
+                    // Check again if CID generation failed
+                    match host_env.anchor_receipt(receipt.clone()).await {
+                        // anchor_receipt expects the receipt by value
                         Ok(_) => {
                             tracing::info!("Receipt successfully anchored call initiated for JobId: {}, Receipt CID: {}", job.job_id, receipt_cid_for_anchor);
-                            self.completed_job_receipt_cids.write().unwrap().insert(job.job_id.clone(), receipt_cid_for_anchor.clone());
+                            self.completed_job_receipt_cids
+                                .write()
+                                .unwrap()
+                                .insert(job.job_id.clone(), receipt_cid_for_anchor.clone());
                             anchored_receipt_cid_str = Some(receipt_cid_for_anchor.to_string());
-                            
+
                             // Announce receipt availability (moved here to ensure it happens after successful anchoring attempt)
-                            if let Err(e) = self.internal_action_tx.send(NodeInternalAction::AnnounceReceipt {
-                                job_id: job.job_id.clone(),
-                                receipt_cid: receipt_cid_for_anchor.clone(),
-                                executor_did: self.local_node_did.clone(),
-                            }).await {
+                            if let Err(e) = self
+                                .internal_action_tx
+                                .send(NodeInternalAction::AnnounceReceipt {
+                                    job_id: job.job_id.clone(),
+                                    receipt_cid: receipt_cid_for_anchor.clone(),
+                                    executor_did: self.local_node_did.clone(),
+                                })
+                                .await
+                            {
                                 tracing::error!("[ExecutionTrigger] Failed to enqueue receipt announcement for job {}: {:?}", job.job_id, e);
                                 // This is an internal error, might not mark the job itself as failed if anchoring was ok.
                             }
                         }
                         Err(e) => {
-                            tracing::error!("Failed to anchor receipt for JobId {}: {:?}", job.job_id, e);
+                            tracing::error!(
+                                "Failed to anchor receipt for JobId {}: {:?}",
+                                job.job_id,
+                                e
+                            );
                             metrics::receipt_local_processing_error_inc("anchor_initiation");
                             job_execution_successful = false; // Mark overall job as failed
                             anchored_receipt_cid_str = None;
                         }
                     }
                 } else {
-                     anchored_receipt_cid_str = None; // CID generation failed
+                    anchored_receipt_cid_str = None; // CID generation failed
                 }
             } else {
                 tracing::warn!("No runtime_context available to anchor receipt for JobID: {}. Skipping anchoring.", job.job_id);
@@ -467,9 +576,11 @@ impl MeshNode {
                 // However, without anchoring, the receipt is of limited use.
                 metrics::receipt_local_processing_error_inc("anchor_skip_no_rt_ctx");
                 // Depending on policy, could set job_execution_successful = false;
-                anchored_receipt_cid_str = receipt.cid().ok().map(|c| c.to_string()); // Use unanchored CID for announcement if available
+                anchored_receipt_cid_str = receipt.cid().ok().map(|c| c.to_string());
+                // Use unanchored CID for announcement if available
             }
-        } else { // job_execution_successful was already false (e.g. signing failed)
+        } else {
+            // job_execution_successful was already false (e.g. signing failed)
             anchored_receipt_cid_str = None;
         }
 
@@ -478,10 +589,17 @@ impl MeshNode {
         metrics::job_execution_observe(overall_execution_duration, job_execution_successful);
 
         if !job_execution_successful {
-             tracing::error!("Simulated execution and anchoring failed for job {}", job_id);
-             return Err(format!("Simulated execution and anchoring failed for job {}", job_id).into());
+            tracing::error!(
+                "Simulated execution and anchoring failed for job {}",
+                job_id
+            );
+            return Err(format!(
+                "Simulated execution and anchoring failed for job {}",
+                job_id
+            )
+            .into());
         }
-        
+
         // Clean up from executing_jobs needs to happen regardless of success/failure of this specific method,
         // perhaps handled by the caller or a broader state machine.
         // self.executing_jobs.write().unwrap().remove(&job.job_id);
@@ -492,9 +610,11 @@ impl MeshNode {
             tracing::info!("Receipt announcement for job {} with CID {} will be handled by internal action queue.", job.job_id, final_receipt_cid_str);
         } else if job_execution_successful {
             // Execution was "successful" but no CID for announcement (e.g. anchoring skipped but job 'done')
-            tracing::warn!("Job {} considered successful but no receipt CID was finalized for announcement.", job.job_id);
+            tracing::warn!(
+                "Job {} considered successful but no receipt CID was finalized for announcement.",
+                job.job_id
+            );
         }
-
 
         // Final status update also seems to be handled by the event loop or other mechanisms.
         Ok(())
@@ -522,11 +642,16 @@ impl MeshNode {
         };
 
         let serialized_message = serde_cbor::to_vec(&assignment_message)?;
-        
+
         let topic_str = crate::utils::direct_message_topic_string(&target_executor_did);
         let topic = Topic::new(topic_str.clone());
 
-        match self.swarm.behaviour_mut().gossipsub.publish(topic.clone(), serialized_message) {
+        match self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), serialized_message)
+        {
             Ok(message_id) => {
                 tracing::info!(
                     "Published AssignJobV1 to topic '{}' (for executor {}). Message ID: {:?}",
@@ -538,7 +663,12 @@ impl MeshNode {
                 // ADDITION: Subscribe to the job's interest topic to listen for status updates
                 let job_interest_topic_str = crate::utils::job_interest_topic_string(job_id);
                 let job_interest_topic = Topic::new(job_interest_topic_str.clone());
-                match self.swarm.behaviour_mut().gossipsub.subscribe(&job_interest_topic) {
+                match self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .subscribe(&job_interest_topic)
+                {
                     Ok(subscribed) => {
                         if subscribed {
                             tracing::info!("Node {} successfully subscribed to job interest topic '{}' for status updates.", self.local_node_did, job_interest_topic_str);
@@ -547,7 +677,12 @@ impl MeshNode {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Node {} error subscribing to job interest topic '{}': {:?}", self.local_node_did, job_interest_topic_str, e);
+                        tracing::error!(
+                            "Node {} error subscribing to job interest topic '{}': {:?}",
+                            self.local_node_did,
+                            job_interest_topic_str,
+                            e
+                        );
                         // Not returning error, as assignment was published. This is best-effort.
                     }
                 }
@@ -558,25 +693,39 @@ impl MeshNode {
                 let self_clone = self.clone_for_async_tasks(); // Use self.clone() as MeshNode derives Clone
                 tokio::spawn(async move {
                     // Note: trigger_execution_for_job now takes &self
-                    if let Err(e) = self_clone.trigger_execution_for_job(&job_id_clone_for_trigger).await {
-                        tracing::error!("[ExecutionTrigger] Failed to trigger execution for job {}: {:?}", job_id_clone_for_trigger, e);
+                    if let Err(e) = self_clone
+                        .trigger_execution_for_job(&job_id_clone_for_trigger)
+                        .await
+                    {
+                        tracing::error!(
+                            "[ExecutionTrigger] Failed to trigger execution for job {}: {:?}",
+                            job_id_clone_for_trigger,
+                            e
+                        );
                     }
                 });
 
                 Ok(())
             }
             Err(e) => {
-                tracing::error!("Failed to publish AssignJobV1 to topic '{}': {:?}", topic_str, e);
+                tracing::error!(
+                    "Failed to publish AssignJobV1 to topic '{}': {:?}",
+                    topic_str,
+                    e
+                );
                 Err(Box::new(e))
             }
         }
     }
 
     pub async fn trigger_execution_for_job(&self, job_id: &IcnJobId) -> Result<(), String> {
-        tracing::info!("[ExecutionTrigger] Attempting to trigger execution for job {}", job_id);
+        tracing::info!(
+            "[ExecutionTrigger] Attempting to trigger execution for job {}",
+            job_id
+        );
         // metrics::jobs_execution_attempted_inc(); // This is tricky. Is this an *attempt* or *decision*?
-                                            // Moved `jobs_execution_attempted_inc` to the actual execution function like `simulate_execution_and_anchor_receipt`
-                                            // or where `icn_runtime::execute_mesh_job` is directly called by this node for its own execution.
+        // Moved `jobs_execution_attempted_inc` to the actual execution function like `simulate_execution_and_anchor_receipt`
+        // or where `icn_runtime::execute_mesh_job` is directly called by this node for its own execution.
 
         let job_details_opt: Option<MeshJob>;
         {
@@ -585,7 +734,10 @@ impl MeshNode {
         }
 
         if let Some(job_details) = job_details_opt {
-            tracing::info!("[ExecutionTrigger] Preparing to execute job: {} locally", job_id);
+            tracing::info!(
+                "[ExecutionTrigger] Preparing to execute job: {} locally",
+                job_id
+            );
 
             // If this node is executing it directly (e.g. not via runtime module primarily for this metric)
             // This is a conceptual placement. The actual local execution might be
@@ -604,7 +756,7 @@ impl MeshNode {
             // ).await {
             //     Ok(executed_receipt) => {
             //         metrics::job_execution_observe(exec_start_time.elapsed().as_secs_f64(), true);
-            //         metrics::receipts_created_inc(); 
+            //         metrics::receipts_created_inc();
             //         // The signing metrics for `sign_receipt_in_place` are ideally inside `icn_runtime::execute_mesh_job`
             //         // However, if `planetary-mesh` needs to know the outcome of that *specific* call it makes to runtime,
             //         // it could count a "runtime_job_submission_successful".
@@ -623,36 +775,42 @@ impl MeshNode {
             //     }
             // }
 
-
             // The existing code calls `self.simulate_execution_and_anchor_receipt` if the job is found in assigned_jobs
             // This implies `simulate_execution_and_anchor_receipt` is the local execution path.
             // So, the metrics for actual execution should be within that function.
             // `jobs_execution_attempted_inc` is already at the start of `simulate_execution_and_anchor_receipt`.
             let mut self_mut_clone = self.clone_for_async_tasks(); // Assuming this provides mutability if needed or refactor simulate
-            
-            // This is how it seems to be structured from test_utils and previous context:
-            // tokio::spawn(async move {
-            //    if let Err(e) = self_mut_clone.simulate_execution_and_anchor_receipt(job_details).await {
-            //        tracing::error!("[ExecutionTrigger] Simulating execution and anchoring failed for job {}: {:?}", job_id, e);
-            //    }
-            // });
-            // For direct instrumentation, let's assume we are modifying the direct call path.
-            // The actual execution flow might be more complex involving task spawning.
-            // The key is that `simulate_execution_and_anchor_receipt` will be called.
-            // `trigger_execution_for_job`'s role here is more about dispatching.
-            // It seems metrics are best placed inside `simulate_execution_and_anchor_receipt` as done above.
 
-
+        // This is how it seems to be structured from test_utils and previous context:
+        // tokio::spawn(async move {
+        //    if let Err(e) = self_mut_clone.simulate_execution_and_anchor_receipt(job_details).await {
+        //        tracing::error!("[ExecutionTrigger] Simulating execution and anchoring failed for job {}: {:?}", job_id, e);
+        //    }
+        // });
+        // For direct instrumentation, let's assume we are modifying the direct call path.
+        // The actual execution flow might be more complex involving task spawning.
+        // The key is that `simulate_execution_and_anchor_receipt` will be called.
+        // `trigger_execution_for_job`'s role here is more about dispatching.
+        // It seems metrics are best placed inside `simulate_execution_and_anchor_receipt` as done above.
         } else {
-            tracing::warn!("[ExecutionTrigger] Job details not found for job_id: {}. Cannot execute.", job_id);
+            tracing::warn!(
+                "[ExecutionTrigger] Job details not found for job_id: {}. Cannot execute.",
+                job_id
+            );
             return Err(format!("Job details not found for {}", job_id));
         }
         Ok(())
     }
 
-    pub async fn fetch_receipt_cbor_via_kad(&mut self, receipt_cid: &Cid) -> Result<Vec<u8>, FetchError> {
+    pub async fn fetch_receipt_cbor_via_kad(
+        &mut self,
+        receipt_cid: &Cid,
+    ) -> Result<Vec<u8>, FetchError> {
         let key = KadKey::new(&receipt_cid.to_bytes());
-        tracing::info!("[MeshNode] Initiating Kademlia get_record for receipt CID: {}", receipt_cid);
+        tracing::info!(
+            "[MeshNode] Initiating Kademlia get_record for receipt CID: {}",
+            receipt_cid
+        );
 
         let (tx, rx) = oneshot::channel::<Result<Vec<u8>, FetchError>>();
         let query_id = self.swarm.behaviour_mut().kademlia.get_record(key);
@@ -660,26 +818,41 @@ impl MeshNode {
         {
             let mut queries = self.receipt_queries.lock().unwrap();
             queries.insert(query_id, tx);
-            tracing::debug!("[MeshNode] Stored Kademlia query_id {:?} for receipt CID: {}", query_id, receipt_cid);
+            tracing::debug!(
+                "[MeshNode] Stored Kademlia query_id {:?} for receipt CID: {}",
+                query_id,
+                receipt_cid
+            );
         }
 
         // Wait for the Kademlia query to complete or timeout
-        match tokio::time::timeout(Duration::from_secs(30), rx).await { // 30 second timeout
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            // 30 second timeout
             Ok(Ok(Ok(data))) => {
                 tracing::info!("[MeshNode] Kademlia get_record successful for receipt CID: {}. Data length: {}", receipt_cid, data.len());
                 Ok(data)
             }
             Ok(Ok(Err(fetch_err))) => {
-                tracing::warn!("[MeshNode] Kademlia get_record failed for receipt CID {}: {:?}", receipt_cid, fetch_err);
+                tracing::warn!(
+                    "[MeshNode] Kademlia get_record failed for receipt CID {}: {:?}",
+                    receipt_cid,
+                    fetch_err
+                );
                 Err(fetch_err)
             }
             Ok(Err(_recv_err)) => {
                 // Oneshot channel was dropped, likely because Kademlia handler couldn't send a result (e.g. panic or unexpected shutdown)
                 tracing::error!("[MeshNode] Kademlia get_record query oneshot channel dropped for receipt CID {}. This is unexpected.", receipt_cid);
-                Err(FetchError::KadQueryError(*receipt_cid, "Oneshot channel receiver error".to_string()))
+                Err(FetchError::KadQueryError(
+                    *receipt_cid,
+                    "Oneshot channel receiver error".to_string(),
+                ))
             }
             Err(_timeout_err) => {
-                tracing::warn!("[MeshNode] Kademlia get_record timed out for receipt CID: {}", receipt_cid);
+                tracing::warn!(
+                    "[MeshNode] Kademlia get_record timed out for receipt CID: {}",
+                    receipt_cid
+                );
                 // Remove the query from the map to prevent stale entries if Kademlia eventually responds
                 {
                     let mut queries = self.receipt_queries.lock().unwrap();
@@ -707,10 +880,16 @@ impl MeshNode {
 
             match bids_map_guard.get(job_id) {
                 Some(bids_for_job) => {
-                    if let Some(winning_bid) = bids_for_job.iter().find(|b| b.bidder == receipt.executor) {
+                    if let Some(winning_bid) =
+                        bids_for_job.iter().find(|b| b.bidder == receipt.executor)
+                    {
                         actual_bid_price = winning_bid.price;
-                        tracing::info!("[MeshNode] Found winning bid for JobID {}: Price = {}, Bidder = {}", 
-                                     job_id, actual_bid_price, receipt.executor);
+                        tracing::info!(
+                            "[MeshNode] Found winning bid for JobID {}: Price = {}, Bidder = {}",
+                            job_id,
+                            actual_bid_price,
+                            receipt.executor
+                        );
                     } else {
                         tracing::warn!(
                             "[MeshNode] Economic settlement failed for JobID {}: No bid found from executor {} in the stored bids.",
@@ -736,7 +915,7 @@ impl MeshNode {
         // 1. Retrieve all bids for the given `job_id`.
         // 2. Find the specific bid where `bid.bidder == receipt.executor`.
         // 3. Use `bid.price` (or equivalent field from the implemented Bid struct) for the transfer amount.
-        // const MOCK_BID_PRICE: u64 = 100; 
+        // const MOCK_BID_PRICE: u64 = 100;
         // tracing::warn!(
         //     "[MeshNode] Using MOCK_BID_PRICE: {} for job {}. This is a placeholder until bidding system is implemented.",
         //     MOCK_BID_PRICE, job_id
@@ -744,7 +923,9 @@ impl MeshNode {
 
         let originator_did_opt: Option<Did> = {
             let originated_jobs_guard = self.announced_originated_jobs.read().unwrap();
-            originated_jobs_guard.get(job_id).map(|manifest| manifest.submitter_did.clone())
+            originated_jobs_guard
+                .get(job_id)
+                .map(|manifest| manifest.submitter_did.clone())
         };
 
         if originator_did_opt.is_none() {
@@ -760,22 +941,29 @@ impl MeshNode {
         }
 
         if let Some(rt_ctx) = &self.local_runtime_context {
-            tracing::info!("[MeshNode] Attempting to transfer {} ICN from {} to {} for job {}",
-                actual_bid_price, originator_did, executor_did, job_id
+            tracing::info!(
+                "[MeshNode] Attempting to transfer {} ICN from {} to {} for job {}",
+                actual_bid_price,
+                originator_did,
+                executor_did,
+                job_id
             );
 
-            let transfer_result = rt_ctx.economics.transfer_balance_direct(
-                &originator_did,      // from_org_did
-                None,                 // from_ledger_scope_id
-                None,                 // from_key_scope
-                executor_did,         // to_org_did
-                None,                 // to_ledger_scope_id
-                None,                 // to_key_scope
-                &icn_economics::ResourceType::Token("ICN".to_string()), // resource_type
-                actual_bid_price,       // amount - USE THE ACTUAL BID PRICE
-                &rt_ctx.resource_ledger,
-                &rt_ctx.transaction_log,
-            ).await;
+            let transfer_result = rt_ctx
+                .economics
+                .transfer_balance_direct(
+                    &originator_did,                                        // from_org_did
+                    None,                                                   // from_ledger_scope_id
+                    None,                                                   // from_key_scope
+                    executor_did,                                           // to_org_did
+                    None,                                                   // to_ledger_scope_id
+                    None,                                                   // to_key_scope
+                    &icn_economics::ResourceType::Token("ICN".to_string()), // resource_type
+                    actual_bid_price, // amount - USE THE ACTUAL BID PRICE
+                    &rt_ctx.resource_ledger,
+                    &rt_ctx.transaction_log,
+                )
+                .await;
 
             match transfer_result {
                 Ok(_) => {
@@ -825,9 +1013,12 @@ impl MeshNode {
 
         let reputation_event = match &receipt.status {
             StandardJobStatus::CompletedSuccess => {
-                let execution_duration_ms = receipt.execution_end_time.saturating_sub(receipt.execution_start_time) * 1000; // Assuming s to ms
+                let execution_duration_ms = receipt
+                    .execution_end_time
+                    .saturating_sub(receipt.execution_start_time)
+                    * 1000; // Assuming s to ms
                 ReputationUpdateEvent::JobCompletedSuccessfully {
-                    job_id: event_job_cid, // Using receipt's CID
+                    job_id: event_job_cid,                               // Using receipt's CID
                     execution_duration_ms: execution_duration_ms as u32, // Ensure type cast is safe
                     bid_accuracy: 1.0, // Placeholder: TODO: Requires actual bid vs. resource usage
                     on_time: true,     // Placeholder: TODO: Requires definition of "on time"
@@ -853,7 +1044,7 @@ impl MeshNode {
             issuer: self.local_node_did.clone(), // The node verifying the receipt and issuing the record
             subject: executor_did.clone(),       // The node whose reputation is being updated
             event: reputation_event,
-            anchor: Some(event_job_cid),         // Anchoring to the receipt itself
+            anchor: Some(event_job_cid), // Anchoring to the receipt itself
             signature: None, // TODO: Consider signing this record with self.local_keypair if needed by reputation system
         };
 
@@ -881,20 +1072,31 @@ impl MeshNode {
 
             tracing::info!(
                 "[MeshNode] Submitting {}ReputationRecord for JobID: {} to URL: {}",
-                if signed_record.signature.is_some() { "SIGNED " } else { "UNSIGNED " },
-                job_id_str, url
+                if signed_record.signature.is_some() {
+                    "SIGNED "
+                } else {
+                    "UNSIGNED "
+                },
+                job_id_str,
+                url
             );
 
-            match client.post(&url).json(&signed_record).send().await { // Submit the signed_record
+            match client.post(&url).json(&signed_record).send().await {
+                // Submit the signed_record
                 Ok(response) => {
-                    if response.status().is_success() || response.status() == reqwest::StatusCode::CREATED {
+                    if response.status().is_success()
+                        || response.status() == reqwest::StatusCode::CREATED
+                    {
                         tracing::info!(
                             "[MeshNode] Reputation record submitted successfully for JobID: {}, Executor: {}. Status: {}",
                             job_id_str, executor_did, response.status()
                         );
                     } else {
                         let status = response.status();
-                        let error_body = response.text().await.unwrap_or_else(|_| "<no body>".to_string());
+                        let error_body = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "<no body>".to_string());
                         tracing::error!(
                             "[MeshNode] Failed to submit reputation record for JobID: {}, Executor: {}. Status: {}. Body: {}",
                             job_id_str, executor_did, status, error_body
@@ -916,7 +1118,10 @@ impl MeshNode {
         }
     }
 
-    pub async fn run_event_loop(&mut self, mut internal_action_rx: mpsc::Receiver<NodeInternalAction>) -> Result<(), Box<dyn Error>> {
+    pub async fn run_event_loop(
+        &mut self,
+        mut internal_action_rx: mpsc::Receiver<NodeInternalAction>,
+    ) -> Result<(), Box<dyn Error>> {
         // Periodic tasks setup
         let mut capabilities_interval = time::interval(Duration::from_secs(60)); // Broadcast capabilities every 60s
         let mut job_queue_interval = time::interval(Duration::from_secs(10)); // Check job queue every 10s
@@ -950,7 +1155,7 @@ impl MeshNode {
                         }
                     }
                 }
-                
+
                 // Timer for selecting executors for originated jobs
                 _ = executor_selection_interval.tick() => {
                     let mut assignments_to_make: Vec<(IcnJobId, Did, MeshJob)> = Vec::new();
@@ -1181,7 +1386,7 @@ impl MeshNode {
                                                             "This node ({}) IS the target_executor for job {}. Processing assignment...",
                                                             self.local_node_did, job_id
                                                         );
-                                                        
+
                                                         // 1. Store the job locally for execution.
                                                         {
                                                             let mut assigned_jobs_map = self.assigned_jobs.write().unwrap_or_else(|e| {
@@ -1193,7 +1398,7 @@ impl MeshNode {
                                                         }
 
                                                         // 2. Send JobStatusUpdateV1 (Assigned) back to originator.
-                                                        let assigned_status = super::JobStatus::Assigned { 
+                                                        let assigned_status = super::JobStatus::Assigned {
                                                             node_id: self.local_node_did.to_string(), // Use local node's DID string as node_id
                                                         };
                                                         let status_update_msg = MeshProtocolMessage::JobStatusUpdateV1 {
@@ -1264,7 +1469,7 @@ impl MeshNode {
                                                         // Call the updated Kademlia fetch function
                                                         let cbor_data_result = self.fetch_receipt_cbor_via_kad(&parsed_receipt_cid).await;
 
-                                                        match cbor_data_result { 
+                                                        match cbor_data_result {
                                                             Ok(cbor_data) => {
                                                                 println!("[MeshNode] Successfully fetched CBOR data for receipt CID: {}", parsed_receipt_cid);
                                                                 match serde_cbor::from_slice::<ExecutionReceipt>(&cbor_data) {
@@ -1379,7 +1584,7 @@ impl MeshNode {
                                                             // for the originator to track detailed status.
                                                             // For now, we just log the reception.
                                                             println!("Originator received status update for job {}: {:?}", job_id, status);
-                                                            
+
                                                             // Example of how it *could* look if MeshJob had a status field:
                                                             // originated_job_entry.status = status.into_standard_job_status(); // Assuming a conversion method
 
@@ -1426,7 +1631,7 @@ impl MeshNode {
                                                     match self.bids.write() {
                                                         Ok(mut bids_map) => {
                                                             bids_map.entry(job_id.clone()).or_default().push(new_bid);
-                                                            tracing::info!("[MeshNode] Stored bid for JobID: {}. Total bids for job: {}", 
+                                                            tracing::info!("[MeshNode] Stored bid for JobID: {}. Total bids for job: {}",
                                                                          job_id, bids_map.get(&job_id).map_or(0, |b_vec| b_vec.len()));
                                                         }
                                                         Err(e) => {
@@ -1452,9 +1657,9 @@ impl MeshNode {
                             MeshBehaviourEvent::Kademlia(kademlia_event) => {
                                 match kademlia_event {
                                     KademliaEvent::OutboundQueryProgressed {
-                                        id, 
+                                        id,
                                         result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(record))),
-                                        .. 
+                                        ..
                                     } => {
                                         tracing::debug!("[KAD] GetRecord FoundRecord for QueryId: {:?}. PeerId: {:?}", id, record.peer);
                                         if let Some(tx) = self.receipt_queries.lock().unwrap().remove(&id) {
@@ -1467,9 +1672,9 @@ impl MeshNode {
                                         }
                                     }
                                     KademliaEvent::OutboundQueryProgressed {
-                                        id, 
+                                        id,
                                         result: QueryResult::GetRecord(Ok(GetRecordOk::FinishedWithNoRecords)),
-                                        .. 
+                                        ..
                                     } => {
                                         tracing::debug!("[KAD] GetRecord FinishedWithNoRecords for QueryId: {:?}", id);
                                         if let Some(tx) = self.receipt_queries.lock().unwrap().remove(&id) {
@@ -1486,9 +1691,9 @@ impl MeshNode {
                                         }
                                     }
                                     KademliaEvent::OutboundQueryProgressed {
-                                        id, 
+                                        id,
                                         result: QueryResult::GetRecord(Err(err)),
-                                        .. 
+                                        ..
                                     } => {
                                         tracing::warn!("[KAD] GetRecord errored for QueryId: {:?}: {:?}", id, err);
                                         if let Some(tx) = self.receipt_queries.lock().unwrap().remove(&id) {
@@ -1502,7 +1707,7 @@ impl MeshNode {
                                         }
                                     }
                                     // Handle other Kademlia events like PutRecord results, routing updates etc. if needed.
-                                    _ => { 
+                                    _ => {
                                         // tracing::trace!("[KAD] Unhandled KademliaEvent: {:?}", kademlia_event);
                                     }
                                 }
@@ -1555,7 +1760,7 @@ impl MeshNode {
             }
         }
     }
-    
+
     // Helper to clone necessary Arcs for async tasks spawned from event loop
     // This is a simplified clone; a real one might need more careful consideration of what needs to be Arc<Mutex/RwLock<T>> vs what can be cloned directly.
     // For MeshNode methods that take `&self` or `&mut self` and are called from spawned tasks, `self` needs to be Arc-wrapped.
@@ -1564,7 +1769,9 @@ impl MeshNode {
 
 // Helper function to get the canonical CBOR payload for signing a ReputationRecord
 // This ensures that the signature is over a stable representation of the record's content.
-fn get_reputation_record_signing_payload(record: &ReputationRecord) -> Result<Vec<u8>, serde_cbor::Error> {
+fn get_reputation_record_signing_payload(
+    record: &ReputationRecord,
+) -> Result<Vec<u8>, serde_cbor::Error> {
     // Create a temporary record with signature explicitly set to None for serialization
     let record_for_signing = ReputationRecord {
         timestamp: record.timestamp,

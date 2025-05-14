@@ -1,10 +1,10 @@
+use crate::protocol::MeshProtocolMessage;
 use libp2p::{
     gossipsub::{self, IdentTopic as Topic, MessageId, PublishError, TopicHash},
     mdns::tokio::Behaviour as Mdns,
     swarm::NetworkBehaviour,
 };
 use serde::{Deserialize, Serialize};
-use crate::protocol::MeshProtocolMessage;
 
 // Define a topic for capability advertisements
 // It's crucial that all nodes use the same topic string.
@@ -15,7 +15,8 @@ pub const JOB_ANNOUNCEMENT_TOPIC: &str = "/icn/mesh/jobs/announce/v1";
 
 /// Topic for broadcasting node capabilities.
 pub const CAPABILITY_BROADCAST_TOPIC: &'static str = "/icn/mesh/capabilities/v1";
-pub const CAPABILITY_BROADCAST_TOPIC_HASH: TopicHash = TopicHash::from_raw(CAPABILITY_BROADCAST_TOPIC);
+pub const CAPABILITY_BROADCAST_TOPIC_HASH: TopicHash =
+    TopicHash::from_raw(CAPABILITY_BROADCAST_TOPIC);
 
 /// Topic for announcing new jobs.
 pub const JOB_ANNOUNCEMENT_TOPIC_HASH: TopicHash = TopicHash::from_raw(JOB_ANNOUNCEMENT_TOPIC);
@@ -26,7 +27,8 @@ pub const JOB_INTEREST_TOPIC_HASH: TopicHash = TopicHash::from_raw(JOB_INTEREST_
 
 /// Topic for announcing receipt availability.
 pub const RECEIPT_AVAILABILITY_TOPIC: &'static str = "/icn/mesh/receipts/available/v1";
-pub const RECEIPT_AVAILABILITY_TOPIC_HASH: TopicHash = TopicHash::from_raw(RECEIPT_AVAILABILITY_TOPIC);
+pub const RECEIPT_AVAILABILITY_TOPIC_HASH: TopicHash =
+    TopicHash::from_raw(RECEIPT_AVAILABILITY_TOPIC);
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "MeshBehaviourEvent")]
@@ -63,10 +65,16 @@ impl MeshBehaviour {
 
         // Subscribe to topics
         let topics = [
-            (&CAPABILITY_BROADCAST_TOPIC_HASH, "CAPABILITY_BROADCAST_TOPIC"),
+            (
+                &CAPABILITY_BROADCAST_TOPIC_HASH,
+                "CAPABILITY_BROADCAST_TOPIC",
+            ),
             (&JOB_ANNOUNCEMENT_TOPIC_HASH, "JOB_ANNOUNCEMENT_TOPIC"),
             (&JOB_INTEREST_TOPIC_HASH, "JOB_INTEREST_TOPIC"),
-            (&RECEIPT_AVAILABILITY_TOPIC_HASH, "RECEIPT_AVAILABILITY_TOPIC"),
+            (
+                &RECEIPT_AVAILABILITY_TOPIC_HASH,
+                "RECEIPT_AVAILABILITY_TOPIC",
+            ),
         ];
 
         for (topic_hash, topic_name) in topics.iter() {
@@ -82,10 +90,7 @@ impl MeshBehaviour {
         let mdns = Mdns::new(libp2p::mdns::Config::default())
             .map_err(|e| format!("Failed to create mDNS behaviour: {}", e))?;
 
-        Ok(Self {
-            gossipsub,
-            mdns,
-        })
+        Ok(Self { gossipsub, mdns })
     }
 }
 
@@ -106,4 +111,4 @@ impl From<libp2p::mdns::Event> for MeshBehaviourEvent {
     fn from(event: libp2p::mdns::Event) -> Self {
         MeshBehaviourEvent::Mdns(event)
     }
-} 
+}

@@ -2,12 +2,12 @@
 // The full code was moved out of the default build to unblock compilation.
 // Enable with: `--features full_host_abi` in icn-runtime.
 
-use anyhow::Result;
-use wasmtime::{Caller, Linker, Trap, Memory};
 use crate::host_environment::ConcreteHostEnvironment;
+use anyhow::Result;
+use icn_identity::ScopeKey;
 use icn_mesh_receipts::ExecutionReceipt;
 use serde_cbor;
-use icn_identity::ScopeKey;
+use wasmtime::{Caller, Linker, Memory, Trap};
 
 /// Minimal host_anchor_receipt implementation. Reads CBOR bytes from guest
 /// memory, decodes an `ExecutionReceipt`, and calls `anchor_receipt` on the
@@ -28,8 +28,8 @@ async fn host_anchor_receipt(
         .read(&caller, ptr as usize, &mut buf)
         .map_err(|e| Trap::new(format!("memory read failed: {e}")))?;
 
-    let receipt: ExecutionReceipt = serde_cbor::from_slice(&buf)
-        .map_err(|e| Trap::new(format!("CBOR decode failed: {e}")))?;
+    let receipt: ExecutionReceipt =
+        serde_cbor::from_slice(&buf).map_err(|e| Trap::new(format!("CBOR decode failed: {e}")))?;
 
     caller
         .data()
@@ -104,4 +104,4 @@ pub fn register_host_functions(linker: &mut Linker<ConcreteHostEnvironment>) -> 
     linker.func_wrap_async("icn", "host_account_get_mana", host_account_get_mana)?;
     linker.func_wrap_async("icn", "host_account_spend_mana", host_account_spend_mana)?;
     Ok(())
-} 
+}

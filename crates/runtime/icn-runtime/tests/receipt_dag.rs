@@ -1,26 +1,28 @@
 #![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use chrono::Utc;
 use cid::Cid;
-use icn_identity::{KeyPair, Did};
+use icn_identity::{Did, KeyPair};
 use icn_mesh_receipts::ExecutionReceipt as MeshExecutionReceipt;
 use icn_runtime::{
-    Runtime, RuntimeContext, RuntimeContextBuilder, RuntimeStorage, VmContext,
-    Proposal, ProposalState, QuorumStatus
+    Proposal, ProposalState, QuorumStatus, Runtime, RuntimeContext, RuntimeContextBuilder,
+    RuntimeStorage, VmContext,
 };
 use icn_types::dag_store::{DagStore, SharedDagStore};
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
 use icn_types::mesh::JobStatus as MeshJobStatus;
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use serde_cbor;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use wasm_encoder::{
-    CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection, ValType
+    CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
+    FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection,
+    ValType,
 };
-use chrono::Utc;
-use std::pin::Pin;
-use std::future::Future;
 
 #[derive(Clone, Default)]
 struct MockStorage {
@@ -33,31 +35,55 @@ struct MockStorage {
 #[async_trait]
 impl RuntimeStorage for MockStorage {
     async fn load_proposal(&self, id: &str) -> Result<Proposal> {
-        self.proposals.lock().unwrap().get(id).cloned().ok_or_else(|| anyhow!("Proposal not found"))
+        self.proposals
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Proposal not found"))
     }
 
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
-        self.proposals.lock().unwrap().insert(proposal.id.clone(), proposal.clone());
+        self.proposals
+            .lock()
+            .unwrap()
+            .insert(proposal.id.clone(), proposal.clone());
         Ok(())
     }
 
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
-        self.wasm_modules.lock().unwrap().get(cid).cloned().ok_or_else(|| anyhow!("WASM not found"))
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .get(cid)
+            .cloned()
+            .ok_or_else(|| anyhow!("WASM not found"))
     }
 
     async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
         let id = receipt.id.clone();
-        self.receipts.lock().unwrap().insert(id.clone(), receipt.clone());
+        self.receipts
+            .lock()
+            .unwrap()
+            .insert(id.clone(), receipt.clone());
         Ok(id)
     }
 
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
-        self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .insert(cid.to_string(), bytes.to_vec());
         Ok(())
     }
 
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
-        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt not found"))
+        self.receipts
+            .lock()
+            .unwrap()
+            .get(receipt_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Receipt not found"))
     }
 
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
@@ -105,24 +131,30 @@ async fn test_receipt_dag_anchoring() -> Result<()> {
     let anchored_cid = Cid::from_str(&anchored_cid_str)?;
 
     let dag_nodes = receipt_store.list().await?;
-    let found_in_dag = dag_nodes.iter().any(|dag_node| {
-        match dag_node.cid() {
-            Ok(cid_from_node) => {
-                let cid_str_from_node = cid_from_node.to_string();
-                if let Ok(cid_from_store_parsed) = Cid::from_str(&cid_str_from_node) {
-                    cid_from_store_parsed == anchored_cid
-                } else {
-                    tracing::warn!("Failed to re-parse CID string {} from DAG node {:?}", cid_str_from_node, dag_node);
-                    false
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to get CID from DAG node {:?}: {}", dag_node, e);
+    let found_in_dag = dag_nodes.iter().any(|dag_node| match dag_node.cid() {
+        Ok(cid_from_node) => {
+            let cid_str_from_node = cid_from_node.to_string();
+            if let Ok(cid_from_store_parsed) = Cid::from_str(&cid_str_from_node) {
+                cid_from_store_parsed == anchored_cid
+            } else {
+                tracing::warn!(
+                    "Failed to re-parse CID string {} from DAG node {:?}",
+                    cid_str_from_node,
+                    dag_node
+                );
                 false
             }
         }
+        Err(e) => {
+            tracing::warn!("Failed to get CID from DAG node {:?}: {}", dag_node, e);
+            false
+        }
     });
-    assert!(found_in_dag, "Anchored CID {} not found in DAG store", anchored_cid_str);
+    assert!(
+        found_in_dag,
+        "Anchored CID {} not found in DAG store",
+        anchored_cid_str
+    );
 
     Ok(())
 }
@@ -144,7 +176,12 @@ fn build_receipt_wasm_module(receipt_cbor: &[u8]) -> Result<Vec<u8>> {
     module.section(&functions);
 
     let mut memories = MemorySection::new();
-    memories.memory(MemoryType { minimum: 1, maximum: None, memory64: false, shared: false });
+    memories.memory(MemoryType {
+        minimum: 1,
+        maximum: None,
+        memory64: false,
+        shared: false,
+    });
     module.section(&memories);
 
     let mut exports = ExportSection::new();
@@ -211,10 +248,15 @@ async fn test_wasm_anchors_receipt() -> Result<()> {
         coop_id: None,
         community_id: None,
     };
-    let _result = runtime.execute_wasm(&wasm, "_start".to_string(), Vec::new()).await?;
+    let _result = runtime
+        .execute_wasm(&wasm, "_start".to_string(), Vec::new())
+        .await?;
 
     let dag_nodes = receipt_store.list().await?;
-    assert!(!dag_nodes.is_empty(), "Expected DAG store to have at least one entry after WASM execution");
+    assert!(
+        !dag_nodes.is_empty(),
+        "Expected DAG store to have at least one entry after WASM execution"
+    );
 
     Ok(())
-} 
+}

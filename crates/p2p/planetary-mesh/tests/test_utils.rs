@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use cid::Cid;
 use icn_types::reputation::ReputationRecord;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 // Assuming MeshNode is accessible from this path, adjust if necessary
 // For a test utility within the same crate's tests/ directory, you might access MeshNode via crate::node::MeshNode
 // However, the user's snippet used `use crate::node::MeshNode;` which implies it might be a module within src or lib.rs is re-exporting it.
@@ -25,7 +25,7 @@ pub fn get_verified_reputation_records_arc(
 // The previous accessor for test_observed_reputation_submissions also used NodeController.
 // Let's provide a version that expects NodeController to be consistent.
 
-/* 
+/*
 // If NodeController is the common way to access MeshNode in tests:
 pub fn get_verified_reputation_records_arc_with_controller(
     node_controller: &super::NodeController, // Assuming NodeController is defined in the parent (tests module) or accessible via super
@@ -34,4 +34,4 @@ pub fn get_verified_reputation_records_arc_with_controller(
         mesh_node.verified_reputation_records.clone()
     })
 }
-*/ 
+*/

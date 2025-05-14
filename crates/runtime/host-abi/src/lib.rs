@@ -12,8 +12,8 @@ pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submi
 
 // Using core::ffi::c_void for potential opaque handles in the future, though not strictly used by current function signatures.
 // use core::ffi::c_void;
-use serde::Serialize;
 use async_trait::async_trait;
+use serde::Serialize;
 // No wasmer imports needed
 
 // Need Display for Trap::new
@@ -24,7 +24,9 @@ use thiserror::Error;
 use anyhow::Error as AnyhowError;
 
 // Corrected import: only include types that exist in icn_types::mesh
-use icn_types::mesh::{JobStatus, StageInputSource, WorkflowType, OrgScopeIdentifier, MeshJobParams};
+use icn_types::mesh::{
+    JobStatus, MeshJobParams, OrgScopeIdentifier, StageInputSource, WorkflowType,
+};
 // use wasmtime::Memory; // Commenting out as per new compiler warning
 use std::sync::Arc;
 // use wasmtime::AsContextMut; // Commenting out as per new compiler warning
@@ -50,7 +52,7 @@ pub struct JobPermissions {} // Defined a placeholder
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ReceivedInputType {
     InlineData = 0, // The data is provided directly after ReceivedInputInfo.
-    Cid = 1,        // The data provided after ReceivedInputInfo is a CID string pointing to the actual input.
+    Cid = 1, // The data provided after ReceivedInputInfo is a CID string pointing to the actual input.
 }
 
 /// Information about received interactive input.
@@ -158,7 +160,7 @@ pub struct AbiBytes {
 // This is a simplified version. The actual one might be more complex and involve Arcs/Mutexes.
 pub struct MinimalJobContext {
     pub job_id: String,
-    pub originator_did: String, // Assuming DID is a string here
+    pub originator_did: String,      // Assuming DID is a string here
     pub permissions: JobPermissions, // Using the local placeholder
     pub workflow_params: Option<MeshJobParams>, // Changed from WorkflowDefinition to MeshJobParams
     pub current_stage_index: Option<usize>,
@@ -174,61 +176,113 @@ pub const INLINE_PAYLOAD_MAX_SIZE: usize = 1024; // 1KB, example value
 pub const MAX_INTERACTIVE_INPUT_BUFFER_PEEK: usize = 256;
 
 /// Trait defining the Host ABI functions callable from WASM modules.
-/// 
+///
 /// # Error Handling
 /// Most functions return an `i32` status code. `0` generally means success.
 /// Negative values correspond to `HostAbiError` variants.
-/// 
+///
 /// # String/CID Handling
 /// CIDs and other string-like data are passed as `*const c_char` (null-terminated C strings).
 /// Buffers provided by WASM for host functions to write into should be of adequate size.
 /// The host will write a null terminator if the buffer is large enough.
 /// Functions returning string data will indicate the required buffer size if the provided one is too small.
-/// 
+///
 /// # Binary Data Handling
 /// Binary data is passed using `AbiBytes` (pointer and length).
 #[async_trait::async_trait]
 pub trait HostEnvironment: Send + Sync + Clone + 'static {
-    // --- Job Context & Info --- 
+    // --- Job Context & Info ---
     fn get_job_id(&self, job_id_buf_ptr: *mut c_char, job_id_buf_len: u32) -> i32;
     fn get_originator_did(&self, did_buf_ptr: *mut c_char, did_buf_len: u32) -> i32;
     fn get_current_epoch(&self, epoch_buf_ptr: *mut c_char, epoch_buf_len: u32) -> i32;
     fn get_current_timestamp(&self) -> i64; // Unix timestamp in seconds
 
-    // --- Workflow & Stage Info --- 
+    // --- Workflow & Stage Info ---
     fn get_workflow_type(&self) -> i32; // Returns WorkflowType variant as i32, or -1 if no workflow context
     fn get_current_stage_index(&self) -> i32; // Returns stage index, or -1 if not in a multi-stage workflow
     fn get_current_stage_id(&self, stage_id_buf_ptr: *mut c_char, stage_id_buf_len: u32) -> i32;
     fn get_stage_input_cid(&self, cid_buf_ptr: *mut c_char, cid_buf_len: u32) -> i32;
 
-    // --- Logging & Diagnostics --- 
+    // --- Logging & Diagnostics ---
     fn log_msg(&self, level: i32, msg_ptr: *const c_char, msg_len: u32) -> i32;
 
-    // --- Data Storage & Anchoring --- 
-    fn read_cid_data(&self, cid_ptr: *const c_char, offset: u64, buffer_ptr: *mut u8, buffer_len: u32) -> i32;
-    fn write_data_and_get_cid(&self, data_ptr: *const u8, data_len: u32, cid_buf_ptr: *mut c_char, cid_buf_len: u32) -> i32;
-    fn anchor_cid(&self, cid_ptr: *const c_char, metadata_ptr: *const c_char, metadata_len: u32) -> i32;
+    // --- Data Storage & Anchoring ---
+    fn read_cid_data(
+        &self,
+        cid_ptr: *const c_char,
+        offset: u64,
+        buffer_ptr: *mut u8,
+        buffer_len: u32,
+    ) -> i32;
+    fn write_data_and_get_cid(
+        &self,
+        data_ptr: *const u8,
+        data_len: u32,
+        cid_buf_ptr: *mut c_char,
+        cid_buf_len: u32,
+    ) -> i32;
+    fn anchor_cid(
+        &self,
+        cid_ptr: *const c_char,
+        metadata_ptr: *const c_char,
+        metadata_len: u32,
+    ) -> i32;
 
-    // --- Cryptography & Identity --- 
-    fn verify_signature(&self, did_ptr: *const c_char, data_ptr: *const u8, data_len: u32, sig_ptr: *const u8, sig_len: u32) -> i32;
-    fn sign_data(&self, data_ptr: *const u8, data_len: u32, sig_buf_ptr: *mut u8, sig_buf_len: u32) -> i32;
+    // --- Cryptography & Identity ---
+    fn verify_signature(
+        &self,
+        did_ptr: *const c_char,
+        data_ptr: *const u8,
+        data_len: u32,
+        sig_ptr: *const u8,
+        sig_len: u32,
+    ) -> i32;
+    fn sign_data(
+        &self,
+        data_ptr: *const u8,
+        data_len: u32,
+        sig_buf_ptr: *mut u8,
+        sig_buf_len: u32,
+    ) -> i32;
 
-    // --- Resource Management --- 
+    // --- Resource Management ---
     fn consume_resource(&self, rt_type_val: i32, amt: u64) -> i32;
     fn remaining_resource(&self, rt_type_val: i32) -> i64;
 
     // --- Interactive Job Support --- (Optional, host may not support)
     fn send_interactive_output(&self, data_ptr: *const u8, data_len: u32) -> i32;
-    fn receive_interactive_input(&self, buffer_ptr: *mut u8, buffer_len: u32, timeout_ms: u32) -> i32;
+    fn receive_interactive_input(
+        &self,
+        buffer_ptr: *mut u8,
+        buffer_len: u32,
+        timeout_ms: u32,
+    ) -> i32;
     fn peek_interactive_input_buffer_size(&self) -> i32;
     fn clear_interactive_input_buffer(&self) -> i32;
-    
+
     // --- Network & P2P --- (Optional)
-    async fn p2p_send_message(&self, peer_did_ptr: *const c_char, data_ptr: *const u8, data_len: u32) -> i32;
-    async fn p2p_receive_message(&self, buffer_ptr: *mut u8, buffer_len: u32, timeout_ms: u32) -> i32;
+    async fn p2p_send_message(
+        &self,
+        peer_did_ptr: *const c_char,
+        data_ptr: *const u8,
+        data_len: u32,
+    ) -> i32;
+    async fn p2p_receive_message(
+        &self,
+        buffer_ptr: *mut u8,
+        buffer_len: u32,
+        timeout_ms: u32,
+    ) -> i32;
 
     // --- Dynamic Linking / Capability Invocation --- (Optional)
-    async fn call_capability(&self, capability_cid_ptr: *const c_char, input_ptr: *const u8, input_len: u32, output_buf_ptr: *mut u8, output_buf_len: u32) -> i32;
+    async fn call_capability(
+        &self,
+        capability_cid_ptr: *const c_char,
+        input_ptr: *const u8,
+        input_len: u32,
+        output_buf_ptr: *mut u8,
+        output_buf_len: u32,
+    ) -> i32;
 }
 
 /// Helper to safely copy a Rust string into a C buffer provided by WASM.
@@ -240,7 +294,8 @@ pub fn copy_string_to_c_buf(rust_str: &str, c_buf: *mut c_char, c_buf_len: u32) 
     let bytes = rust_str.as_bytes();
     let len_to_write = bytes.len();
 
-    if (len_to_write + 1) > c_buf_len as usize { // +1 for null terminator
+    if (len_to_write + 1) > c_buf_len as usize {
+        // +1 for null terminator
         return HostAbiError::BufferTooSmall as i32;
     }
 
@@ -274,9 +329,7 @@ pub fn vec_from_abi_bytes(abi_bytes: AbiBytes) -> Result<Vec<u8>, HostAbiError> 
             return Err(HostAbiError::InvalidArguments); // Null ptr with non-zero length is invalid
         }
     }
-    unsafe {
-        Ok(slice::from_raw_parts(abi_bytes.ptr, abi_bytes.len as usize).to_vec())
-    }
+    unsafe { Ok(slice::from_raw_parts(abi_bytes.ptr, abi_bytes.len as usize).to_vec()) }
 }
 
 // --- The Host ABI Trait (Using Wasmtime concepts) ---
@@ -284,7 +337,8 @@ pub fn vec_from_abi_bytes(abi_bytes: AbiBytes) -> Result<Vec<u8>, HostAbiError> 
 // Memory access uses Caller::get_export("memory").and_then(|mem| mem.into_memory())
 // Caller provides access to host state via caller.data() or caller.data_mut()
 
-pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
+pub trait MeshHostAbi<T: Sized> {
+    // Generic over Host State T
     // **I. Job & Workflow Information **
 
     /// Gets the unique ID of the current job.
@@ -298,7 +352,12 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: Number of bytes written for the Job ID string if successful.
     ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
     ///            Other negative `HostAbiError` codes on other failures.
-    fn host_job_get_id(&self, caller: wasmtime::Caller<T>, job_id_buf_ptr: u32, job_id_buf_len: u32) -> Result<i32, AnyhowError>;
+    fn host_job_get_id(
+        &self,
+        caller: wasmtime::Caller<T>,
+        job_id_buf_ptr: u32,
+        job_id_buf_len: u32,
+    ) -> Result<i32, AnyhowError>;
 
     /// Gets the CID of the initial input data specified when the job was submitted (from `MeshJobParams.input_data_cid`).
     /// The CID is written as a UTF-8 string into `cid_buf_ptr`.
@@ -312,7 +371,12 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     ///            Returns 0 if `input_data_cid` was `None` for the job.
     ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
     ///            Other negative `HostAbiError` codes on other failures.
-    fn host_job_get_initial_input_cid(&self, caller: wasmtime::Caller<T>, cid_buf_ptr: u32, cid_buf_len: u32) -> Result<i32, AnyhowError>;
+    fn host_job_get_initial_input_cid(
+        &self,
+        caller: wasmtime::Caller<T>,
+        cid_buf_ptr: u32,
+        cid_buf_len: u32,
+    ) -> Result<i32, AnyhowError>;
 
     /// Checks if the current job has been marked as interactive (from `MeshJobParams.is_interactive`).
     ///
@@ -332,7 +396,10 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: The current stage index if the job is in a workflow.
     ///            Returns -1 if the job is a `SingleWasmModule` type (not a multi-stage workflow).
     ///            Other negative `HostAbiError` codes on failures.
-    fn host_workflow_get_current_stage_index(&self, caller: wasmtime::Caller<T>) -> Result<i32, AnyhowError>;
+    fn host_workflow_get_current_stage_index(
+        &self,
+        caller: wasmtime::Caller<T>,
+    ) -> Result<i32, AnyhowError>;
 
     /// Gets the user-defined ID of the current stage, if available and if the job is in a multi-stage workflow.
     /// The stage ID is written as a UTF-8 string into `stage_id_buf_ptr`.
@@ -489,7 +556,10 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
     /// * `i32`: Required size in bytes if input is available.
     ///            Returns 0 if no input is currently available in the queue.
     ///            Negative `HostAbiError` codes on failure.
-    fn host_interactive_peek_input_len(&self, caller: wasmtime::Caller<T>) -> Result<i32, AnyhowError>;
+    fn host_interactive_peek_input_len(
+        &self,
+        caller: wasmtime::Caller<T>,
+    ) -> Result<i32, AnyhowError>;
 
     /// Signals to the host that the job is now expecting user input and may pause or yield execution.
     /// The host typically uses this to transition the job's status to `JobStatus::PendingUserInput`
@@ -608,4 +678,4 @@ pub trait MeshHostAbi<T: Sized> { // Generic over Host State T
         did_len: u32,
         amount: u64,
     ) -> Result<i32, AnyhowError>;
-} 
+}

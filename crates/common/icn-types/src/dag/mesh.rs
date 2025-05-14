@@ -15,13 +15,13 @@ pub struct ReceiptNode {
         deserialize_with = "crate::dag::deserialize_cid"
     )]
     pub receipt_cid: Cid,
-    
+
     /// The CBOR-encoded receipt bytes
     pub receipt_cbor: Vec<u8>,
-    
+
     /// The timestamp of when this receipt was anchored
     pub anchor_timestamp: u64,
-    
+
     /// The federation ID that anchored this receipt
     pub federation_id: String,
 }
@@ -51,4 +51,4 @@ impl fmt::Display for ReceiptNode {
             self.federation_id
         )
     }
-} 
+}

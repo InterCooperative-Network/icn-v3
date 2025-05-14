@@ -1,12 +1,12 @@
-pub use prometheus::{IntCounter, register_int_counter, opts};
-pub use prometheus::{Histogram, register_histogram};
-pub use prometheus::{IntCounterVec, register_int_counter_vec};
-pub use prometheus::{HistogramVec, register_histogram_vec};
-pub use prometheus::{GaugeVec, register_gauge_vec, Registry};
-use lazy_static::lazy_static;
-use std::sync::Arc;
-use icn_identity::ScopeKey;
 use icn_economics::mana::ManaMetricsHook;
+use icn_identity::ScopeKey;
+use lazy_static::lazy_static;
+pub use prometheus::{opts, register_int_counter, IntCounter};
+pub use prometheus::{register_gauge_vec, GaugeVec, Registry};
+pub use prometheus::{register_histogram, Histogram};
+pub use prometheus::{register_histogram_vec, HistogramVec};
+pub use prometheus::{register_int_counter_vec, IntCounterVec};
+use std::sync::Arc;
 
 // Define standard label names
 const LABEL_COOP_ID: &str = "coop_id";
@@ -18,7 +18,9 @@ const LABEL_SUCCESS: &str = "success";
 const LABEL_ERROR_TYPE: &str = "error_type";
 
 // Example buckets for score deltas, adjust as needed
-const SCORE_DELTA_BUCKETS: &[f64] = &[-100.0, -50.0, -25.0, -10.0, 0.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0];
+const SCORE_DELTA_BUCKETS: &[f64] = &[
+    -100.0, -50.0, -25.0, -10.0, 0.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0,
+];
 
 lazy_static! {
     // --- Reputation System Metrics ---
@@ -42,13 +44,13 @@ lazy_static! {
             opts!("icn_runtime_receipt_verifications_total", "Total receipts processed for verification, tagged by result and federation/issuer identifiers."),
             &[LABEL_RESULT, LABEL_COOP_ID, LABEL_COMMUNITY_ID, LABEL_ISSUER_DID]
         ).unwrap();
-        
+
     pub static ref RECEIPT_MANA_COST_TOTAL: IntCounterVec =
         register_int_counter_vec!(
             opts!("icn_runtime_receipt_mana_cost_total", "Total mana cost recorded from executed receipts, tagged by federation/issuer identifiers."),
             &[LABEL_COOP_ID, LABEL_COMMUNITY_ID, LABEL_ISSUER_DID]
         ).unwrap();
-        
+
     pub static ref ANCHOR_RECEIPT_DURATION_SECONDS: HistogramVec =
         register_histogram_vec!(
             "icn_runtime_anchor_receipt_duration_seconds",
@@ -98,13 +100,20 @@ lazy_static! {
 /// * `coop_id` - Identifier for the cooperative.
 /// * `community_id` - Identifier for the community.
 /// * `executor_did` - DID of the executor node whose reputation is being updated.
-pub fn increment_reputation_submission(success: bool, coop_id: &str, community_id: &str, executor_did: &str) {
-    REPUTATION_SUBMISSIONS_BY_RESULT.with_label_values(&[
-        if success { "true" } else { "false" },
-        coop_id,
-        community_id,
-        executor_did
-    ]).inc();
+pub fn increment_reputation_submission(
+    success: bool,
+    coop_id: &str,
+    community_id: &str,
+    executor_did: &str,
+) {
+    REPUTATION_SUBMISSIONS_BY_RESULT
+        .with_label_values(&[
+            if success { "true" } else { "false" },
+            coop_id,
+            community_id,
+            executor_did,
+        ])
+        .inc();
 }
 
 /// Observes the delta of a reputation score change.
@@ -114,14 +123,16 @@ pub fn increment_reputation_submission(success: bool, coop_id: &str, community_i
 /// * `coop_id` - Identifier for the cooperative.
 /// * `community_id` - Identifier for the community.
 /// * `executor_did` - DID of the executor node whose reputation score changed.
-pub fn observe_reputation_score_delta(delta: f64, coop_id: &str, community_id: &str, executor_did: &str) {
-    REPUTATION_SCORE_DELTA_HISTOGRAM.with_label_values(&[
-        coop_id,
-        community_id,
-        executor_did
-    ]).observe(delta);
+pub fn observe_reputation_score_delta(
+    delta: f64,
+    coop_id: &str,
+    community_id: &str,
+    executor_did: &str,
+) {
+    REPUTATION_SCORE_DELTA_HISTOGRAM
+        .with_label_values(&[coop_id, community_id, executor_did])
+        .observe(delta);
 }
-
 
 // --- Helper Functions for Receipt Processing Metrics ---
 
@@ -132,13 +143,20 @@ pub fn observe_reputation_score_delta(delta: f64, coop_id: &str, community_id: &
 /// * `coop_id` - Identifier for the cooperative.
 /// * `community_id` - Identifier for the community.
 /// * `issuer_did` - DID of the receipt issuer.
-pub fn record_receipt_verification_outcome(is_successful: bool, coop_id: &str, community_id: &str, issuer_did: &str) {
-    RECEIPT_VERIFICATIONS_TOTAL.with_label_values(&[
-        if is_successful { "success" } else { "failure" },
-        coop_id,
-        community_id,
-        issuer_did
-    ]).inc();
+pub fn record_receipt_verification_outcome(
+    is_successful: bool,
+    coop_id: &str,
+    community_id: &str,
+    issuer_did: &str,
+) {
+    RECEIPT_VERIFICATIONS_TOTAL
+        .with_label_values(&[
+            if is_successful { "success" } else { "failure" },
+            coop_id,
+            community_id,
+            issuer_did,
+        ])
+        .inc();
 }
 
 /// Adds the mana cost from a receipt to the total, tagged with identifiers.
@@ -149,11 +167,9 @@ pub fn record_receipt_verification_outcome(is_successful: bool, coop_id: &str, c
 /// * `community_id` - Identifier for the community.
 /// * `issuer_did` - DID of the receipt issuer.
 pub fn record_receipt_mana_cost(cost: u64, coop_id: &str, community_id: &str, issuer_did: &str) {
-    RECEIPT_MANA_COST_TOTAL.with_label_values(&[
-        coop_id,
-        community_id,
-        issuer_did
-    ]).inc_by(cost);
+    RECEIPT_MANA_COST_TOTAL
+        .with_label_values(&[coop_id, community_id, issuer_did])
+        .inc_by(cost);
 }
 
 /// Observes the duration of the anchor_receipt operation, tagged with identifiers.
@@ -163,12 +179,15 @@ pub fn record_receipt_mana_cost(cost: u64, coop_id: &str, community_id: &str, is
 /// * `coop_id` - Identifier for the cooperative.
 /// * `community_id` - Identifier for the community.
 /// * `issuer_did` - DID of the receipt issuer.
-pub fn observe_anchor_receipt_duration(duration_secs: f64, coop_id: &str, community_id: &str, issuer_did: &str) {
-    ANCHOR_RECEIPT_DURATION_SECONDS.with_label_values(&[
-        coop_id,
-        community_id,
-        issuer_did
-    ]).observe(duration_secs);
+pub fn observe_anchor_receipt_duration(
+    duration_secs: f64,
+    coop_id: &str,
+    community_id: &str,
+    issuer_did: &str,
+) {
+    ANCHOR_RECEIPT_DURATION_SECONDS
+        .with_label_values(&[coop_id, community_id, issuer_did])
+        .observe(duration_secs);
 }
 
 // PrometheusManaMetrics and its implementations as per user's latest request
@@ -202,4 +221,4 @@ impl ManaMetricsHook for PrometheusManaMetrics {
             .with_label_values(&[&scope_type, &scope_id_val])
             .set(balance as f64);
     }
-} 
+}

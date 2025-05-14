@@ -1,12 +1,12 @@
 use anyhow::Result;
+use cid::Cid;
 use icn_types::dag::{DagEventType, DagNode, DagNodeBuilder};
 use icn_types::dag_store::{DagStore, SharedDagStore};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
 use tokio::time::sleep;
-use cid::Cid;
-use std::collections::HashSet;
 
 /// Test helper: Create a sample DAG node
 fn create_test_node(id: usize, event_type: DagEventType) -> DagNode {
@@ -42,50 +42,50 @@ fn create_test_node_with_parent(
 async fn test_concurrent_inserts() -> Result<()> {
     let store = Arc::new(SharedDagStore::new());
     let barrier = Arc::new(Barrier::new(10)); // 10 concurrent tasks
-    
+
     // Task handles for all concurrent operations
     let mut handles = vec![];
-    
+
     // Spawn 10 tasks that each insert 10 nodes
     for i in 0..10 {
         let store_clone = store.clone();
         let barrier_clone = barrier.clone();
-        
+
         let handle = tokio::spawn(async move {
             // Wait for all tasks to be ready before starting
             barrier_clone.wait().await;
-            
+
             for j in 0..10 {
                 let node_id = i * 10 + j;
                 let node = create_test_node(node_id, DagEventType::Proposal);
                 store_clone.insert(node).await.unwrap();
-                
+
                 // Small delay to increase chance of race conditions
                 if j % 3 == 0 {
                     sleep(Duration::from_millis(1)).await;
                 }
             }
         });
-        
+
         handles.push(handle);
     }
-    
+
     // Wait for all tasks to complete
     for handle in handles {
         handle.await?;
     }
-    
+
     // Verify that all 100 nodes were correctly inserted
     let all_nodes = store.list().await?;
     assert_eq!(all_nodes.len(), 100, "Expected 100 nodes in the store");
-    
+
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_batch_operations() -> Result<()> {
     let store = Arc::new(SharedDagStore::new());
-    
+
     // Insert a batch of 50 nodes
     {
         let mut batch = store.begin_batch().await;
@@ -95,25 +95,25 @@ async fn test_batch_operations() -> Result<()> {
         }
         batch.commit().await?;
     }
-    
+
     // Verify we have exactly 50 nodes
     let nodes = store.list().await?;
     assert_eq!(nodes.len(), 50, "Expected 50 nodes after batch commit");
-    
+
     // Start two competing batch operations
     let barrier = Arc::new(Barrier::new(2));
-    
+
     // Task 1: Add 25 more nodes
     let store_clone = store.clone();
     let barrier_clone = barrier.clone();
     let add_task = tokio::spawn(async move {
         barrier_clone.wait().await;
-        
+
         let mut batch = store_clone.begin_batch().await;
         for i in 50..75 {
             let node = create_test_node(i, DagEventType::Proposal);
             batch.insert(node).await.unwrap();
-            
+
             // Add some delay to increase chance of race conditions
             if i % 5 == 0 {
                 sleep(Duration::from_millis(1)).await;
@@ -121,22 +121,22 @@ async fn test_batch_operations() -> Result<()> {
         }
         batch.commit().await.unwrap();
     });
-    
+
     // Task 2: Remove 10 existing nodes
     let store_clone = store.clone();
     let barrier_clone = barrier.clone();
     let remove_task = tokio::spawn(async move {
         barrier_clone.wait().await;
-        
+
         let nodes = store_clone.list().await.unwrap();
         let mut batch = store_clone.begin_batch().await;
-        
+
         // Remove the first 10 nodes
         for i in 0..10 {
             let node = &nodes[i];
             let node_id = node.cid().unwrap().to_string();
             batch.remove(&node_id).await.unwrap();
-            
+
             // Add some delay to increase chance of race conditions
             if i % 3 == 0 {
                 sleep(Duration::from_millis(1)).await;
@@ -144,28 +144,32 @@ async fn test_batch_operations() -> Result<()> {
         }
         batch.commit().await.unwrap();
     });
-    
+
     // Wait for both tasks to complete
     add_task.await?;
     remove_task.await?;
-    
+
     // Verify final node count: 50 (initial) + 25 (added) - 10 (removed) = 65
     let final_nodes = store.list().await?;
-    assert_eq!(final_nodes.len(), 65, "Expected 65 nodes after concurrent batch operations");
-    
+    assert_eq!(
+        final_nodes.len(),
+        65,
+        "Expected 65 nodes after concurrent batch operations"
+    );
+
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_concurrent_reads_during_writes() -> Result<()> {
     let store = Arc::new(SharedDagStore::new());
-    
+
     // Pre-populate with 20 nodes
     for i in 0..20 {
         let node = create_test_node(i, DagEventType::Proposal);
         store.insert(node).await?;
     }
-    
+
     // Continuously read while writing
     let read_store = store.clone();
     let read_handle = tokio::spawn(async move {
@@ -177,32 +181,39 @@ async fn test_concurrent_reads_during_writes() -> Result<()> {
         }
         read_count
     });
-    
+
     // Perform writes in parallel
     let write_store = store.clone();
     let write_handle = tokio::spawn(async move {
         for i in 20..70 {
             let node = create_test_node(i, DagEventType::Proposal);
             write_store.insert(node).await.unwrap();
-            
+
             if i % 5 == 0 {
                 sleep(Duration::from_millis(2)).await;
             }
         }
     });
-    
+
     // Wait for both operations to complete
     let total_reads = read_handle.await?;
     write_handle.await?;
-    
+
     // Verify all 70 nodes are present
     let final_nodes = store.list().await?;
-    assert_eq!(final_nodes.len(), 70, "Expected 70 nodes after concurrent operations");
-    
-    // Total reads should be non-zero (we don't know exact count due to race conditions, 
+    assert_eq!(
+        final_nodes.len(),
+        70,
+        "Expected 70 nodes after concurrent operations"
+    );
+
+    // Total reads should be non-zero (we don't know exact count due to race conditions,
     // but it confirms reads were happening)
-    assert!(total_reads > 0, "Expected some successful reads during concurrent writes");
-    
+    assert!(
+        total_reads > 0,
+        "Expected some successful reads during concurrent writes"
+    );
+
     Ok(())
 }
 
@@ -228,15 +239,19 @@ async fn test_concurrent_dag_formation() {
                 let node = create_test_node_with_parent(
                     i * nodes_per_task + j, // Unique ID for the node
                     &node_content_suffix,
-                    DagEventType::Anchor, // Corrected event type
+                    DagEventType::Anchor,             // Corrected event type
                     parent_cid_for_next_node.clone(), // Use cloned parent_cid for node creation
                 );
                 // Get the CID before attempting to insert
-                let current_node_cid = node.cid().expect("Failed to calculate node CID before insert");
-                
+                let current_node_cid = node
+                    .cid()
+                    .expect("Failed to calculate node CID before insert");
+
                 // Insert the node
-                match store_clone.insert(node.clone()).await { // node.clone() is important if used after insert
-                    Ok(()) => { // insert returns Ok(()) on success
+                match store_clone.insert(node.clone()).await {
+                    // node.clone() is important if used after insert
+                    Ok(()) => {
+                        // insert returns Ok(()) on success
                         task_generated_cids.push(current_node_cid.clone());
                         parent_cid_for_next_node = Some(current_node_cid); // Next node in this task will reference this one
                     }
@@ -244,10 +259,10 @@ async fn test_concurrent_dag_formation() {
                         panic!("Failed to insert node: {:?}", e);
                     }
                 }
-                
+
                 // Small delay to increase chance of interleaving
                 if j % 2 == 0 {
-                    sleep(Duration::from_millis( (i % 3 + 1) as u64)).await;
+                    sleep(Duration::from_millis((i % 3 + 1) as u64)).await;
                 }
             }
             task_generated_cids // Return CIDs generated by this task
@@ -287,25 +302,36 @@ async fn test_concurrent_dag_formation() {
         "Mismatch in total number of unique CIDs generated by tasks."
     );
 
-
     // 2. Verify each generated CID can be fetched and parent links are correct
     for task_cids_group in results_from_tasks {
         let mut expected_parent_cid: Option<Cid> = None;
         for cid in task_cids_group {
-            let node_from_store = store.get(&cid.to_string()).await
+            let node_from_store = store
+                .get(&cid.to_string())
+                .await
                 .expect("Failed to get node by CID")
                 .expect("Node with generated CID not found in store");
 
             // Check parent CID
-            assert_eq!(node_from_store.parent, expected_parent_cid, "Parent CID mismatch for node {}", cid); // Removed .as_ref()
-            
+            assert_eq!(
+                node_from_store.parent, expected_parent_cid,
+                "Parent CID mismatch for node {}",
+                cid
+            ); // Removed .as_ref()
+
             expected_parent_cid = Some(cid.clone()); // For the next node in this task's chain
         }
     }
-    
+
     // Optional: Verify all CIDs in store are among those generated
-    let store_cids_set: HashSet<Cid> = all_nodes_in_store.into_iter().map(|n| n.cid().unwrap()).collect();
-    assert_eq!(store_cids_set, all_generated_cids, "Mismatch between CIDs in store and CIDs generated by tasks.");
+    let store_cids_set: HashSet<Cid> = all_nodes_in_store
+        .into_iter()
+        .map(|n| n.cid().unwrap())
+        .collect();
+    assert_eq!(
+        store_cids_set, all_generated_cids,
+        "Mismatch between CIDs in store and CIDs generated by tasks."
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -330,14 +356,18 @@ async fn test_concurrent_inserts_duplicate_cids() -> Result<()> {
             // Attempt to insert the common node.
             // We expect this to succeed for one task and be a no-op (or idempotent success) for others.
             match store_clone.insert(node_to_insert).await {
-                Ok(()) => { // insert returns Ok(()) on success
+                Ok(()) => {
+                    // insert returns Ok(()) on success
                     // The CID is already known (common_node_cid).
                     // The act of insertion (or re-insertion) is what's being tested for idempotency.
                     Ok(())
                 }
                 Err(e) => {
                     // SharedDagStore::insert currently overwrites, so an error here would be unexpected.
-                    eprintln!("Insert failed unexpectedly in duplicate test: {:?}, for CID: {}", e, common_node_cid);
+                    eprintln!(
+                        "Insert failed unexpectedly in duplicate test: {:?}, for CID: {}",
+                        e, common_node_cid
+                    );
                     Err(anyhow::Error::new(e).context("Insert failed unexpectedly"))
                 }
             }
@@ -353,11 +383,22 @@ async fn test_concurrent_inserts_duplicate_cids() -> Result<()> {
 
     // Verification: Only one copy of the node should be in the store.
     let all_nodes = store.list().await?;
-    assert_eq!(all_nodes.len(), 1, "Expected only one node in the store after duplicate inserts.");
+    assert_eq!(
+        all_nodes.len(),
+        1,
+        "Expected only one node in the store after duplicate inserts."
+    );
 
     // And that node should be the one we tried to insert.
-    let retrieved_node = store.get(&common_node_cid.to_string()).await?.expect("Common node not found by CID.");
-    assert_eq!(retrieved_node.cid()?, common_node_cid, "Retrieved node CID mismatch.");
+    let retrieved_node = store
+        .get(&common_node_cid.to_string())
+        .await?
+        .expect("Common node not found by CID.");
+    assert_eq!(
+        retrieved_node.cid()?,
+        common_node_cid,
+        "Retrieved node CID mismatch."
+    );
     // Optionally, check content if DagNode equality is well-defined
     // assert_eq!(retrieved_node, common_node, "Retrieved node content mismatch.");
 
@@ -378,15 +419,15 @@ async fn test_concurrent_anchoring_to_pending_cids() -> Result<()> {
         .timestamp(1)
         .build()?;
     let node_x_cid = node_x_to_build.cid()?;
-    
+
     // Task A: Inserts Node X
     let store_a = store.clone();
     let barrier_a = barrier.clone();
     let node_x_for_a = node_x_to_build.clone();
     // Capture node_x_cid for return, as node_x_for_a is moved
-    let captured_node_x_cid_for_task_a = node_x_cid.clone(); 
+    let captured_node_x_cid_for_task_a = node_x_cid.clone();
     let handle_a = tokio::spawn(async move {
-        barrier_a.wait().await; 
+        barrier_a.wait().await;
         sleep(Duration::from_millis(5)).await; // Simulate delay
         store_a.insert(node_x_for_a).await?;
         Ok::<Cid, anyhow::Error>(captured_node_x_cid_for_task_a) // Return Result<Cid, Error>
@@ -399,10 +440,10 @@ async fn test_concurrent_anchoring_to_pending_cids() -> Result<()> {
     let handle_b = tokio::spawn(async move {
         barrier_b.wait().await;
         let node_y = create_test_node_with_parent(
-            2, 
-            "node_y_references_x", 
+            2,
+            "node_y_references_x",
             DagEventType::Anchor, // Changed from Generic
-            Some(referenced_cid_for_y.clone())
+            Some(referenced_cid_for_y.clone()),
         );
         let current_node_y_cid = node_y.cid()?;
         store_b.insert(node_y.clone()).await?;
@@ -413,21 +454,43 @@ async fn test_concurrent_anchoring_to_pending_cids() -> Result<()> {
     let result_cid_y = handle_b.await??; // Should now work as task B returns Result<Cid, Error>
 
     // Ensure both inserts were successful and CIDs match expected
-    assert_eq!(result_cid_x, node_x_cid, "Node X CID mismatch after task A completion");
+    assert_eq!(
+        result_cid_x, node_x_cid,
+        "Node X CID mismatch after task A completion"
+    );
     // For Node Y, its CID was generated inside task B, so we verify against that task's successful return.
     // No need to re-calculate node_y_cid outside if we trust the task output.
 
     // Verify both nodes are present
-    let fetched_node_x = store.get(&result_cid_x.to_string()).await?
+    let fetched_node_x = store
+        .get(&result_cid_x.to_string())
+        .await?
         .expect("Node X not found in store");
-    let fetched_node_y = store.get(&result_cid_y.to_string()).await?
+    let fetched_node_y = store
+        .get(&result_cid_y.to_string())
+        .await?
         .expect("Node Y not found in store");
 
-    assert_eq!(fetched_node_x.cid()?, result_cid_x, "Fetched Node X CID mismatch");
-    assert!(fetched_node_x.parent.is_none(), "Node X should not have a parent");
+    assert_eq!(
+        fetched_node_x.cid()?,
+        result_cid_x,
+        "Fetched Node X CID mismatch"
+    );
+    assert!(
+        fetched_node_x.parent.is_none(),
+        "Node X should not have a parent"
+    );
 
-    assert_eq!(fetched_node_y.cid()?, result_cid_y, "Fetched Node Y CID mismatch");
-    assert_eq!(fetched_node_y.parent, Some(result_cid_x), "Node Y does not correctly reference Node X's CID as parent");
+    assert_eq!(
+        fetched_node_y.cid()?,
+        result_cid_y,
+        "Fetched Node Y CID mismatch"
+    );
+    assert_eq!(
+        fetched_node_y.parent,
+        Some(result_cid_x),
+        "Node Y does not correctly reference Node X's CID as parent"
+    );
 
     Ok(())
-} 
+}

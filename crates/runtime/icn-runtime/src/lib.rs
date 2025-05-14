@@ -1,34 +1,38 @@
 pub mod config;
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
-use wasmtime::{Module, Caller, Config, Engine, Instance, Linker, Store, TypedFunc, Val, Trap, Func};
-use icn_types::runtime_receipt::{RuntimeExecutionReceipt, RuntimeExecutionMetrics};
-use icn_types::VerifiableReceipt;
-use icn_types::dag::{DagNode, DagEventType};
-use icn_types::dag_store::DagStore;
-use icn_identity::{TrustBundle, TrustValidationError, Did, DidError, KeyPair as IcnKeyPair};
-use icn_economics::{ResourceType, Economics};
-use icn_economics::mana::{ManaLedger, InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
+use chrono::{DateTime, Utc};
+use cid::Cid;
 use ed25519_dalek::VerifyingKey;
+use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
+use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, RegenerationPolicy};
+use icn_economics::{Economics, ResourceType};
+use icn_identity::ScopeKey;
+use icn_identity::{Did, DidError, KeyPair as IcnKeyPair, TrustBundle, TrustValidationError};
+use icn_mesh_protocol::P2PJobStatus;
+use icn_mesh_receipts::{sign_receipt_in_place, ExecutionReceipt as MeshExecutionReceipt};
+use icn_types::dag::{DagEventType, DagNode};
+use icn_types::dag_store::DagStore;
+use icn_types::mesh::{
+    JobStatus as IcnJobStatus, MeshJob, MeshJobParams, QoSProfile, WorkflowType,
+};
+use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
+use icn_types::VerifiableReceipt;
 use serde::{Deserialize, Serialize};
+use serde_cbor;
+use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use uuid::Uuid;
-use std::str::FromStr;
-use std::collections::HashMap;
-use chrono::{Utc, DateTime};
-use cid::Cid;
-use icn_types::mesh::{MeshJob, JobStatus as IcnJobStatus, MeshJobParams, QoSProfile, WorkflowType};
-use icn_mesh_receipts::{sign_receipt_in_place, ExecutionReceipt as MeshExecutionReceipt};
-use icn_mesh_protocol::P2PJobStatus;
-use icn_identity::ScopeKey;
-use tracing::{info, warn};
-use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
-use serde_cbor;
+use tracing::{info, warn};
+use uuid::Uuid;
+use wasmtime::{
+    Caller, Config, Engine, Func, Instance, Linker, Module, Store, Trap, TypedFunc, Val,
+};
 
 use crate::config::RuntimeConfig;
 
@@ -53,7 +57,9 @@ pub mod metrics;
 
 // Import reputation integration module
 pub mod reputation_integration;
-use reputation_integration::{ReputationUpdater, HttpReputationUpdater, NoopReputationUpdater, ReputationScoringConfig};
+use reputation_integration::{
+    HttpReputationUpdater, NoopReputationUpdater, ReputationScoringConfig, ReputationUpdater,
+};
 
 /// Distribution worker for periodic mana payouts
 pub mod distribution_worker;
@@ -63,16 +69,16 @@ mod sled_storage;
 use sled_storage::SledStorage;
 
 // Add imports for keypair loading/saving
+use bincode;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use bincode;
 
 /// Module cache trait for caching compiled WASM modules
 #[async_trait]
 pub trait ModuleCache: Send + Sync {
     /// Get a cached module by its CID
     async fn get_module(&self, cid: &str) -> Option<Module>;
-    
+
     /// Store a module in the cache
     async fn store_module(&self, cid: &str, module: Module) -> Result<()>;
 }
@@ -94,10 +100,10 @@ pub enum RuntimeError {
 
     #[error("Resource authorization failed: {0}")]
     AuthorizationFailed(String),
-    
+
     #[error("Trust bundle verification failed: {0}")]
     TrustBundleVerificationError(#[from] TrustValidationError),
-    
+
     #[error("No trust validator configured")]
     NoTrustValidator,
 
@@ -137,10 +143,10 @@ pub struct VmContext {
 
     /// Resource limits
     pub resource_limits: Option<ResourceLimits>,
-    
+
     /// Optional cooperative ID that this execution is associated with
     pub coop_id: Option<String>,
-    
+
     /// Optional community ID that this execution is associated with
     pub community_id: Option<String>,
 }
@@ -229,7 +235,7 @@ pub trait RuntimeStorage: Send + Sync {
 
     /// Load a WASM module by CID
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>>;
-    
+
     /// Store WASM bytes by CID (Added for tests/sled impl)
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()>;
 
@@ -276,20 +282,36 @@ impl MemStorage {
 #[async_trait]
 impl RuntimeStorage for MemStorage {
     async fn load_proposal(&self, id: &str) -> Result<Proposal> {
-        self.proposals.lock().unwrap().get(id).cloned().ok_or_else(|| anyhow!("Proposal {} not found", id))
+        self.proposals
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Proposal {} not found", id))
     }
 
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
-        self.proposals.lock().unwrap().insert(proposal.id.clone(), proposal.clone());
+        self.proposals
+            .lock()
+            .unwrap()
+            .insert(proposal.id.clone(), proposal.clone());
         Ok(())
     }
 
     async fn load_wasm(&self, cid: &str) -> Result<Vec<u8>> {
-        self.wasm_modules.lock().unwrap().get(cid).cloned().ok_or_else(|| anyhow!("WASM {} not found", cid))
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .get(cid)
+            .cloned()
+            .ok_or_else(|| anyhow!("WASM {} not found", cid))
     }
 
     async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
-        self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        self.wasm_modules
+            .lock()
+            .unwrap()
+            .insert(cid.to_string(), bytes.to_vec());
         Ok(())
     }
 
@@ -297,12 +319,20 @@ impl RuntimeStorage for MemStorage {
         let receipt_id = receipt.id.clone();
         // Simple hash for mock storage ID - replace with proper CID generation if needed
         let cid = format!("mock-receipt-{}", receipt_id);
-        self.receipts.lock().unwrap().insert(cid.clone(), receipt.clone());
+        self.receipts
+            .lock()
+            .unwrap()
+            .insert(cid.clone(), receipt.clone());
         Ok(cid)
     }
 
     async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
-        self.receipts.lock().unwrap().get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt {} not found", receipt_id))
+        self.receipts
+            .lock()
+            .unwrap()
+            .get(receipt_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Receipt {} not found", receipt_id))
     }
 
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
@@ -317,13 +347,13 @@ impl RuntimeStorage for MemStorage {
 pub struct Runtime<L: ManaLedger + Send + Sync + 'static> {
     /// Runtime configuration
     config: RuntimeConfig,
-    
+
     /// CoVM instance for executing WASM
     vm: CoVm,
 
     /// Storage backend
     storage: Arc<dyn RuntimeStorage>,
-    
+
     /// Runtime context (now Arc'd and generic)
     context: Arc<RuntimeContext<L>>,
 
@@ -338,7 +368,7 @@ pub struct Runtime<L: ManaLedger + Send + Sync + 'static> {
 
     /// Host environment
     host_env: Option<Arc<Mutex<ConcreteHostEnvironment>>>,
-    
+
     /// Optional reputation updater
     reputation_updater: Option<Arc<dyn ReputationUpdater>>,
 }
@@ -346,7 +376,8 @@ pub struct Runtime<L: ManaLedger + Send + Sync + 'static> {
 impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
     /// Create a new runtime with specified storage, typically for InMemoryManaLedger
     pub fn new(storage: Arc<dyn RuntimeStorage>) -> Result<Self, anyhow::Error>
-    where L: Default // L must be Default for this constructor
+    where
+        L: Default, // L must be Default for this constructor
     {
         let default_keypair = IcnKeyPair::generate();
         let default_did = default_keypair.did.clone();
@@ -357,18 +388,18 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         let engine = Engine::default();
         let vm = CoVm::new(ResourceLimits::default());
         let linker = Linker::new(&engine);
-        
+
         let ledger = Arc::new(L::default()); // Create default ledger
         let policy = RegenerationPolicy::FixedRatePerTick(10); // Default policy
         let regenerator = Arc::new(ManaRegenerator::new(ledger.clone(), policy));
 
         let context: Arc<RuntimeContext<L>> = Arc::new(
             // RuntimeContextBuilder::new is also generic and requires L: Default
-            RuntimeContextBuilder::<L>::new() 
+            RuntimeContextBuilder::<L>::new()
                 .with_identity(default_keypair)
                 .with_executor_id(default_did.to_string())
                 .with_mana_regenerator(regenerator) // Set the regenerator
-                .build()
+                .build(),
         );
 
         Ok(Self {
@@ -383,18 +414,18 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             reputation_updater: None,
         })
     }
-    
+
     /// Set a reputation updater for this runtime
     pub fn with_reputation_updater(mut self, updater: Arc<dyn ReputationUpdater>) -> Self {
         self.reputation_updater = Some(updater);
         self
     }
-    
+
     /// Get a reference to the runtime context
     pub fn context(&self) -> &RuntimeContext<L> {
         &self.context
     }
-    
+
     /// Get the shared DAG store
     pub fn dag_store(&self) -> Arc<icn_types::dag_store::SharedDagStore> {
         self.context.dag_store.clone()
@@ -429,7 +460,11 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
         let _wasm_bytes = self.storage.load_wasm(&proposal.wasm_cid).await?;
 
-        let executor_did_str = self.context.executor_id.clone().unwrap_or_else(|| "did:icn:system".to_string());
+        let executor_did_str = self
+            .context
+            .executor_id
+            .clone()
+            .unwrap_or_else(|| "did:icn:system".to_string());
         let executor_did = Did::from_str(&executor_did_str)?;
 
         let job_id = format!("proposal-{}", proposal_id);
@@ -437,11 +472,12 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         let execution_start_time = Utc::now().timestamp() - 2;
         let execution_end_time_dt = Utc::now();
         let execution_end_time = execution_end_time_dt.timestamp();
-        
-        let fake_resource_map: HashMap<ResourceType, u64> = [
-            (ResourceType::Cpu, 150),
-            (ResourceType::Memory, 256),
-        ].iter().cloned().collect();
+
+        let fake_resource_map: HashMap<ResourceType, u64> =
+            [(ResourceType::Cpu, 150), (ResourceType::Memory, 256)]
+                .iter()
+                .cloned()
+                .collect();
 
         let mut receipt = MeshExecutionReceipt {
             job_id: job_id.clone(),
@@ -458,14 +494,14 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             community_id: None,
             mana_cost: None,
         };
-        
+
         // Store the receipt - Temporarily commented out due to type mismatch
         // let _receipt_cid_str = self
         //     .storage
         //     .store_receipt(&receipt) // Error: Expected &RuntimeExecutionReceipt, found &MeshExecutionReceipt
         //     .await
         //     .map_err(|e| RuntimeError::ReceiptError(format!("Failed to store receipt: {}", e)))?;
-        
+
         proposal.state = ProposalState::Executed;
         self.storage.update_proposal(&proposal).await?;
 
@@ -475,17 +511,23 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
     /// Load and execute a WASM module from a file (Simplified for test/dev)
     pub async fn execute_wasm_file(&mut self, path: &Path) -> Result<MeshExecutionReceipt> {
         let _wasm_bytes = std::fs::read(path)?;
-        
-        let fake_resource_map: HashMap<ResourceType, u64> = [
-            (ResourceType::Cpu, 50),
-        ].iter().cloned().collect();
 
-        let job_id = path.file_name().and_then(|n| n.to_str()).unwrap_or("local-file-job").to_string();
+        let fake_resource_map: HashMap<ResourceType, u64> =
+            [(ResourceType::Cpu, 50)].iter().cloned().collect();
+
+        let job_id = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("local-file-job")
+            .to_string();
         // Use the runtime's actual identity from the context
-        let executor_did = self.context.identity()
+        let executor_did = self
+            .context
+            .identity()
             .ok_or_else(|| anyhow!("Runtime identity not found in execute_wasm_file context"))?
-            .did.clone();
-            
+            .did
+            .clone();
+
         let execution_start_time = Utc::now().timestamp() - 1;
         let execution_end_time_dt = Utc::now();
         let execution_end_time = execution_end_time_dt.timestamp();
@@ -516,7 +558,6 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         function_name: String,
         args: Vec<Val>,
     ) -> Result<Box<[Val]>, RuntimeError> {
-        
         let mut store_data = wasm::StoreData::new();
         if let Some(host_env_arc) = &self.host_env {
             let host_env_clone = host_env_arc.lock().unwrap();
@@ -528,22 +569,31 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
         let module = self.load_module(wasm_bytes, &mut store).await?;
 
-        let instance = self.linker.instantiate_async(&mut store, &module).await
+        let instance = self
+            .linker
+            .instantiate_async(&mut store, &module)
+            .await
             .map_err(|e| RuntimeError::Instantiation(e.to_string()))?;
 
-        let func = instance.get_func(&mut store, &function_name)
+        let func = instance
+            .get_func(&mut store, &function_name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(function_name.clone()))?;
 
         let mut results = vec![Val::I32(0); func.ty(&store).results().len()];
 
-        func.call_async(&mut store, &args, &mut results).await
-             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
+        func.call_async(&mut store, &args, &mut results)
+            .await
+            .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         Ok(results.into_boxed_slice())
     }
 
     /// Helper to load (or get from cache) and compile module (made async)
-    async fn load_module(&self, wasm_bytes: &[u8], _store: &mut Store<wasm::StoreData>) -> Result<Module, RuntimeError> {
+    async fn load_module(
+        &self,
+        wasm_bytes: &[u8],
+        _store: &mut Store<wasm::StoreData>,
+    ) -> Result<Module, RuntimeError> {
         let module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| RuntimeError::LoadError(format!("Failed to compile WASM: {}", e)))?;
         Ok(module)
@@ -551,14 +601,24 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
     /// Execute a WASM binary with the given context in governance mode
     #[cfg(feature = "full_host_abi")]
-    pub async fn governance_execute_wasm(&mut self, wasm_bytes: &[u8], context: VmContext) -> Result<ExecutionResult, RuntimeError> {
+    pub async fn governance_execute_wasm(
+        &mut self,
+        wasm_bytes: &[u8],
+        context: VmContext,
+    ) -> Result<ExecutionResult, RuntimeError> {
         // Full implementation lives behind the feature flag.
         unimplemented!()
     }
 
     #[cfg(not(feature = "full_host_abi"))]
-    pub async fn governance_execute_wasm(&mut self, _wasm_bytes: &[u8], _context: VmContext) -> Result<ExecutionResult, RuntimeError> {
-        Err(RuntimeError::ExecutionError("governance WASM disabled in minimal build".into()))
+    pub async fn governance_execute_wasm(
+        &mut self,
+        _wasm_bytes: &[u8],
+        _context: VmContext,
+    ) -> Result<ExecutionResult, RuntimeError> {
+        Err(RuntimeError::ExecutionError(
+            "governance WASM disabled in minimal build".into(),
+        ))
     }
 
     /// Issue an execution receipt after successful execution
@@ -602,7 +662,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             .ok_or_else(|| RuntimeError::ReceiptError(
                 "Runtime identity not available for signing receipt. Ensure runtime is initialized with a keypair.".to_string()
             ))?;
-        
+
         // Use the new helper function to sign the receipt in place
         sign_runtime_receipt_in_place(&mut receipt, keypair)
             .context("Failed to sign runtime execution receipt")?;
@@ -612,32 +672,48 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
     /// Anchor a receipt to the DAG and return the CID
     pub async fn anchor_receipt(
-        &self, 
-        receipt: &RuntimeExecutionReceipt // Kept specific to RuntimeExecutionReceipt
+        &self,
+        receipt: &RuntimeExecutionReceipt, // Kept specific to RuntimeExecutionReceipt
     ) -> Result<String> // Returns receipt_cid as String
     {
         let start_time = std::time::Instant::now();
 
-        let federation_id = self.context.federation_id.as_deref().unwrap_or("unknown_federation");
+        let federation_id = self
+            .context
+            .federation_id
+            .as_deref()
+            .unwrap_or("unknown_federation");
         let coop_id_label = federation_id;
         let community_id_label = federation_id;
         let issuer_did_label = receipt.issuer.as_str();
-        
+
         // 1. Verify signature
         match receipt.verify_signature() {
             Ok(_) => {
-                metrics::record_receipt_verification_outcome(true, coop_id_label, community_id_label, issuer_did_label);
+                metrics::record_receipt_verification_outcome(
+                    true,
+                    coop_id_label,
+                    community_id_label,
+                    issuer_did_label,
+                );
             }
             Err(e) => {
-                metrics::record_receipt_verification_outcome(false, coop_id_label, community_id_label, issuer_did_label);
+                metrics::record_receipt_verification_outcome(
+                    false,
+                    coop_id_label,
+                    community_id_label,
+                    issuer_did_label,
+                );
                 // Re-throw error to halt anchoring on verification failure
-                return Err(e).context("Receipt signature verification failed during anchoring"); // Ensure this uses anyhow::Error context
+                return Err(e).context("Receipt signature verification failed during anchoring");
+                // Ensure this uses anyhow::Error context
             }
         };
 
         // 2. Generate the content-addressed CID for the receipt
         // This now assumes RuntimeExecutionReceipt has a working .cid() method.
-        let actual_receipt_cid = receipt.cid()
+        let actual_receipt_cid = receipt
+            .cid()
             .map_err(|e| anyhow!("Failed to generate CID for receipt: {}", e))?;
 
         // 3. Create a version of the receipt that includes its own CID
@@ -651,19 +727,19 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         // 5. Store the serialized receipt in the DAG Store using its actual CID
         // OLD: self.dag_store().put_raw_block(&actual_receipt_cid, receipt_bytes, 0x71u64).await
         //    .with_context(|| format!("Failed to anchor receipt CID {} to DAG store", actual_receipt_cid))?;
-        
+
         // NEW: Construct DagNode and insert
         let receipt_json_string = serde_json::to_string(&receipt_to_anchor)
             .context("Failed to serialize receipt to JSON string for DagNode content")?;
 
         let dag_node_for_receipt = DagNode {
-            content: receipt_json_string, 
+            content: receipt_json_string,
             parent: None, // TODO: Determine parent if applicable. For now, assuming root or standalone.
             event_type: DagEventType::Receipt,
-            timestamp: receipt_to_anchor.timestamp, 
+            timestamp: receipt_to_anchor.timestamp,
             scope_id: issuer_did_label.to_string(), // Using issuer's DID as scope for this example
         };
-        
+
         // The CID of this dag_node_for_receipt will be different from actual_receipt_cid if DagNode adds metadata.
         // The insert method will calculate it internally.
         self.dag_store().insert(dag_node_for_receipt).await
@@ -671,9 +747,11 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         tracing::info!(original_receipt_cid = %actual_receipt_cid, "Receipt (as DagNode) submitted to DAG store");
 
         // 6. Store in local Sled storage (optional, for quick lookups by ID if still needed)
-        self.storage.store_receipt(&receipt_to_anchor).await
+        self.storage
+            .store_receipt(&receipt_to_anchor)
+            .await
             .context("Failed to store receipt in local Sled storage after DAG anchoring")?;
-            
+
         // 7. Anchoring receipt.anchored_cids:
         // The loop `for cid_str in &receipt.anchored_cids` and its call to `self.storage.anchor_to_dag(cid_str).await`
         // is removed. Storing `receipt_to_anchor` (which contains `anchored_cids`) in the DAG
@@ -681,39 +759,49 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
         // 8. Submit reputation update
         if let Some(updater) = &self.reputation_updater {
-            match updater.submit_receipt_based_reputation(
-                &receipt_to_anchor, 
-                true, 
-                coop_id_label, 
-                community_id_label
-            ).await {
-                Ok(_) => tracing::info!(receipt_id = %receipt_to_anchor.id, "Reputation update submitted"),
-                Err(e) => tracing::warn!(receipt_id = %receipt_to_anchor.id, "Failed to submit reputation update: {}", e),
+            match updater
+                .submit_receipt_based_reputation(
+                    &receipt_to_anchor,
+                    true,
+                    coop_id_label,
+                    community_id_label,
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(receipt_id = %receipt_to_anchor.id, "Reputation update submitted")
+                }
+                Err(e) => {
+                    tracing::warn!(receipt_id = %receipt_to_anchor.id, "Failed to submit reputation update: {}", e)
+                }
             }
         } else {
             tracing::info!(receipt_id = %receipt_to_anchor.id, "No reputation updater configured, skipping submission");
         }
-        
+
         // Perform Mana Deduction if applicable
         if let Some(cost) = receipt_to_anchor.metrics.mana_cost {
             if cost > 0 {
                 if let Some(updater) = &self.reputation_updater {
                     match Did::from_str(&receipt_to_anchor.issuer) {
                         Ok(executor_did_val) => {
-                            match updater.submit_mana_deduction(
-                                &executor_did_val, 
-                                cost, 
-                                coop_id_label, 
-                                community_id_label
-                            ).await {
+                            match updater
+                                .submit_mana_deduction(
+                                    &executor_did_val,
+                                    cost,
+                                    coop_id_label,
+                                    community_id_label,
+                                )
+                                .await
+                            {
                                 Ok(_) => tracing::info!(
-                                    receipt_id = %receipt_to_anchor.id, 
+                                    receipt_id = %receipt_to_anchor.id,
                                     executor = %receipt_to_anchor.issuer,
                                     mana_deducted = cost,
                                     "Mana deduction submitted successfully."
                                 ),
                                 Err(e) => tracing::warn!(
-                                    receipt_id = %receipt_to_anchor.id, 
+                                    receipt_id = %receipt_to_anchor.id,
                                     executor = %receipt_to_anchor.issuer,
                                     "Failed to submit mana deduction: {}", e
                                 ),
@@ -721,7 +809,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                         }
                         Err(e) => {
                             tracing::error!(
-                                receipt_id = %receipt_to_anchor.id, 
+                                receipt_id = %receipt_to_anchor.id,
                                 issuer_did = %receipt_to_anchor.issuer,
                                 "Failed to parse issuer DID for mana deduction: {}. Skipping deduction.", e
                             );
@@ -736,17 +824,27 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                 );
             }
         } else {
-             tracing::debug!(
+            tracing::debug!(
                 receipt_id = %receipt_to_anchor.id,
                 "No mana cost found in receipt metrics, skipping deduction."
             );
         }
-        
+
         // 9. Record metrics
         let duration = start_time.elapsed();
-        metrics::observe_anchor_receipt_duration(duration.as_secs_f64(), coop_id_label, community_id_label, issuer_did_label);
+        metrics::observe_anchor_receipt_duration(
+            duration.as_secs_f64(),
+            coop_id_label,
+            community_id_label,
+            issuer_did_label,
+        );
         if let Some(mana_cost) = receipt.metrics.mana_cost {
-            metrics::record_receipt_mana_cost(mana_cost, coop_id_label, community_id_label, issuer_did_label);
+            metrics::record_receipt_mana_cost(
+                mana_cost,
+                coop_id_label,
+                community_id_label,
+                issuer_did_label,
+            );
             metrics::MANA_COST_HISTOGRAM
                 .with_label_values(&[issuer_did_label])
                 .observe(mana_cost as f64);
@@ -758,44 +856,56 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
     /// Helper function to convert VmContext (icn-runtime specific) to HostContext (icn-core-vm specific)
     fn vm_context_to_host_context(&self, vm_context: VmContext) -> HostContext {
         let mut host_context = HostContext::default();
-        
-        let coop_id = vm_context.coop_id.map(|id| icn_types::org::CooperativeId::new(id));
-        let community_id = vm_context.community_id.map(|id| icn_types::org::CommunityId::new(id));
-        
+
+        let coop_id = vm_context
+            .coop_id
+            .map(|id| icn_types::org::CooperativeId::new(id));
+        let community_id = vm_context
+            .community_id
+            .map(|id| icn_types::org::CommunityId::new(id));
+
         if coop_id.is_some() || community_id.is_some() {
             host_context = host_context.with_organization(coop_id, community_id);
         }
-        
+
         host_context
     }
 
     /// Verify a trust bundle using the configured trust validator
     pub fn verify_trust_bundle(&self, bundle: &TrustBundle) -> Result<(), RuntimeError> {
-        let validator = self.context.trust_validator()
+        let validator = self
+            .context
+            .trust_validator()
             .ok_or(RuntimeError::NoTrustValidator)?;
-            
-        validator.set_trust_bundle(bundle.clone())
+
+        validator
+            .set_trust_bundle(bundle.clone())
             .map_err(RuntimeError::TrustBundleVerificationError)
     }
-    
+
     /// Register a trusted signer with DID and verifying key
     pub fn register_trusted_signer(&self, did: Did, key: VerifyingKey) -> Result<(), RuntimeError> {
-        let validator = self.context.trust_validator()
+        let validator = self
+            .context
+            .trust_validator()
             .ok_or(RuntimeError::NoTrustValidator)?;
-        
+
         validator.register_signer(did, key);
         Ok(())
     }
-    
+
     /// Check if a signer is authorized
     pub fn is_authorized_signer(&self, did: &Did) -> Result<bool, RuntimeError> {
-        let validator = self.context.trust_validator()
+        let validator = self
+            .context
+            .trust_validator()
             .ok_or(RuntimeError::NoTrustValidator)?;
-            
-        validator.is_authorized_signer(did)
+
+        validator
+            .is_authorized_signer(did)
             .map_err(RuntimeError::TrustBundleVerificationError)
     }
-    
+
     /// Host function for WASM to retrieve a trust bundle from a given CID (Placeholder)
     pub async fn host_get_trust_bundle(&self, _cid: &str) -> Result<bool, RuntimeError> {
         Ok(true)
@@ -811,20 +921,26 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         // Placeholder: Actual job execution logic is more complex and involves CoVM.
         // This might need to be adjusted based on the actual structure.
         // For now, ensure it compiles and respects the Runtime<L> structure.
-        
+
         // Example: Construct a dummy receipt.
-        let job_id = _params.job_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        let job_id = _params
+            .job_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let executor_did = self.context.identity().map_or_else(
             || Did::from_str("did:error:no_identity").unwrap(), // Should handle error properly
-            |kp| kp.did.clone()
+            |kp| kp.did.clone(),
         );
 
         let fake_resource_map: HashMap<ResourceType, u64> = [
             (ResourceType::Cpu, 10), // Example values
             (ResourceType::Memory, 64),
-        ].iter().cloned().collect();
-        
-        let execution_start_time = Utc::now().timestamp() -1;
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
+        let execution_start_time = Utc::now().timestamp() - 1;
         let execution_end_time_dt = Utc::now();
         let execution_end_time = execution_end_time_dt.timestamp();
 
@@ -851,18 +967,18 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         // For simplicity, let's use a default config here if not available in context.
         // Or, this constructor might need to take a Config as well.
         // This needs to align with how Runtime is typically constructed with external contexts.
-        
+
         let node_did_str = context.executor_id.clone().unwrap_or_else(|| {
             context.identity().map_or_else(
                 || IcnKeyPair::generate().did.to_string(), // Fallback if no identity/executor_id
-                |kp| kp.did.to_string()
+                |kp| kp.did.to_string(),
             )
         });
 
         let config = RuntimeConfig {
             node_did: node_did_str,
             // Other fields might need to be derived or defaulted
-            ..Default::default() 
+            ..Default::default()
         };
 
         let engine = Engine::default();
@@ -881,11 +997,14 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             reputation_updater: None, // Can be set later via with_reputation_updater
         }
     }
-    
+
     /// Main loop for the runtime node service
     pub async fn run_forever(self) -> Result<()> {
-        info!("ICN Runtime node started with DID: {}", self.config.node_did);
-        
+        info!(
+            "ICN Runtime node started with DID: {}",
+            self.config.node_did
+        );
+
         loop {
             let maybe_job = self.poll_for_job().await;
 
@@ -931,9 +1050,12 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         }
     }
 
-    async fn process_polled_job(&self, job: icn_types::mesh::MeshJob) -> Result<MeshExecutionReceipt> {
+    async fn process_polled_job(
+        &self,
+        job: icn_types::mesh::MeshJob,
+    ) -> Result<MeshExecutionReceipt> {
         info!("Processing polled job ID: {:?}", job.job_id);
-        
+
         // Ensure wasm_bytes are loaded correctly for the job.
         // This might involve fetching from IPFS via job.job_params.wasm_cid or similar.
         // For now, this is a simplified path.
@@ -942,16 +1064,24 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         // let wasm_bytes = fetch_wasm_for_job(&job).await?; // You'd need a helper for this.
         // For demonstration, if job.job_params.wasm_cid exists, try to load from storage:
         let wasm_bytes = if let Some(cid_str) = &job.job_params.wasm_cid {
-            self.storage.load_wasm(cid_str).await
-                .map_err(|e| anyhow!("Failed to load WASM for job {}: {}", job.job_id.as_deref().unwrap_or("unknown"), e))?
+            self.storage.load_wasm(cid_str).await.map_err(|e| {
+                anyhow!(
+                    "Failed to load WASM for job {}: {}",
+                    job.job_id.as_deref().unwrap_or("unknown"),
+                    e
+                )
+            })?
         } else {
             return Err(anyhow!("Job {:?} has no WASM CID specified", job.job_id));
         };
 
         // Using a mutable clone of self or restructuring execute_mesh_job call
         // Since execute_mesh_job is a free function now (or should be), we pass necessary parts of self.
-        let local_keypair = self.context.identity().ok_or_else(|| anyhow!("Runtime identity not set for job processing"))?;
-        
+        let local_keypair = self
+            .context
+            .identity()
+            .ok_or_else(|| anyhow!("Runtime identity not set for job processing"))?;
+
         // Call the standalone execute_mesh_job function
         // Note: execute_mesh_job takes Arc<RuntimeContext<InMemoryManaLedger>>
         // If process_polled_job is part of Runtime<L>, then self.context is Arc<RuntimeContext<L>>.
@@ -971,15 +1101,17 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
         // To proceed, let's use a placeholder for job execution that matches the method signature.
         // This highlights a deeper integration point for execute_mesh_job's genericity.
-         let originator_did_str = job.originator.as_ref().map(|o| o.to_string()).unwrap_or_else(|| "did:unknown:originator".to_string());
-         let originator_did = Did::from_str(&originator_did_str)?;
-
+        let originator_did_str = job
+            .originator
+            .as_ref()
+            .map(|o| o.to_string())
+            .unwrap_or_else(|| "did:unknown:originator".to_string());
+        let originator_did = Did::from_str(&originator_did_str)?;
 
         // This is a simplification. execute_mesh_job logic should be here or called.
         // The previous version of execute_mesh_job was a free function.
         // Let's assume there's a method like self.execute_job_internal
         let receipt = execute_mesh_job(job, local_keypair, self.context.clone()).await?;
-
 
         // Anchor the receipt (if successful)
         if receipt.status == IcnJobStatus::Completed {
@@ -993,18 +1125,30 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         info!("Anchoring mesh receipt for job ID: {}", receipt.job_id);
         // Example: Storing receipt CID or hash somewhere
         // self.storage.anchor_to_dag(&receipt.job_id).await?; // Assuming job_id is CID-like or used as key
-        
+
         // If reputation_updater is present and mana_cost is Some and > 0
         if let Some(updater) = &self.reputation_updater {
             if let Some(mana_cost) = receipt.mana_cost {
                 if mana_cost > 0 {
-                     let coop_id = receipt.coop_id.as_deref().unwrap_or("default_coop");
-                     let community_id = receipt.community_id.as_deref().unwrap_or("default_community");
-                    if let Err(e) = updater.submit_mana_deduction(&receipt.executor, mana_cost, coop_id, community_id).await {
-                        error!("Failed to submit mana deduction for job {}: {}", receipt.job_id, e);
+                    let coop_id = receipt.coop_id.as_deref().unwrap_or("default_coop");
+                    let community_id = receipt
+                        .community_id
+                        .as_deref()
+                        .unwrap_or("default_community");
+                    if let Err(e) = updater
+                        .submit_mana_deduction(&receipt.executor, mana_cost, coop_id, community_id)
+                        .await
+                    {
+                        error!(
+                            "Failed to submit mana deduction for job {}: {}",
+                            receipt.job_id, e
+                        );
                         // Decide if this should be a hard error for anchoring
                     } else {
-                        info!("Submitted mana deduction of {} for job {} by executor {}", mana_cost, receipt.job_id, receipt.executor);
+                        info!(
+                            "Submitted mana deduction of {} for job {} by executor {}",
+                            mana_cost, receipt.job_id, receipt.executor
+                        );
                     }
                 }
             }
@@ -1067,27 +1211,35 @@ fn load_or_generate_keypair(key_path: Option<&Path>) -> Result<IcnKeyPair> {
                 let mut buffer = Vec::new();
                 file.read_to_end(&mut buffer)
                     .with_context(|| format!("Failed to read keypair file: {:?}", path))?;
-                
-                let keypair: IcnKeyPair = bincode::deserialize(&buffer)
-                    .with_context(|| format!("Failed to deserialize keypair from file: {:?}", path))?;
+
+                let keypair: IcnKeyPair = bincode::deserialize(&buffer).with_context(|| {
+                    format!("Failed to deserialize keypair from file: {:?}", path)
+                })?;
                 info!("Successfully loaded keypair from: {:?}", path);
                 Ok(keypair)
             } else {
                 info!("No keypair file found at {:?}, generating a new one.", path);
                 let keypair = IcnKeyPair::generate();
-                let serialized_keypair = bincode::serialize(&keypair)
-                    .context("Failed to serialize new keypair")?;
-                
+                let serialized_keypair =
+                    bincode::serialize(&keypair).context("Failed to serialize new keypair")?;
+
                 if let Some(parent_dir) = path.parent() {
-                    fs::create_dir_all(parent_dir)
-                        .with_context(|| format!("Failed to create parent directory for keypair: {:?}", parent_dir))?;
+                    fs::create_dir_all(parent_dir).with_context(|| {
+                        format!(
+                            "Failed to create parent directory for keypair: {:?}",
+                            parent_dir
+                        )
+                    })?;
                 }
 
                 let mut file = File::create(path)
                     .with_context(|| format!("Failed to create keypair file: {:?}", path))?;
                 file.write_all(&serialized_keypair)
                     .with_context(|| format!("Failed to write new keypair to file: {:?}", path))?;
-                info!("Successfully generated and saved new keypair to: {:?}", path);
+                info!(
+                    "Successfully generated and saved new keypair to: {:?}",
+                    path
+                );
                 Ok(keypair)
             }
         }
@@ -1106,27 +1258,28 @@ fn sign_runtime_receipt_in_place(
     // Note: This import assumes KeyPair::sign exists and returns ed25519_dalek::Signature
     // If KeyPair itself implements ed25519_dalek::Signer, adjust accordingly.
     // use ed25519_dalek::Signer;
-    use bincode; // Ensure bincode is available
-    use anyhow::Context; // Ensure Context is available
+    use anyhow::Context;
+    use bincode; // Ensure bincode is available // Ensure Context is available
 
-    // Ensure signature is None before signing to avoid confusion 
+    // Ensure signature is None before signing to avoid confusion
     // (or handle re-signing if necessary, though usually not desirable for receipts)
     if receipt.signature.is_some() {
         warn!("Receipt already has a signature before signing attempt. Overwriting is generally not recommended.");
         // Depending on policy, could return an error here instead:
         // bail!("Receipt already signed");
     }
-    
+
     // Corrected: Use get_payload_for_signing() from the VerifiableReceipt trait
-    let payload = receipt.get_payload_for_signing()
+    let payload = receipt
+        .get_payload_for_signing()
         .context("Failed to get payload from RuntimeExecutionReceipt for signing")?;
     let bytes = bincode::serialize(&payload)
         .context("Failed to serialize RuntimeExecutionReceipt payload for signing")?;
-    
+
     // Assumes icn_identity::KeyPair has a public method `sign`:
     // fn sign(&self, message: &[u8]) -> ed25519_dalek::Signature;
     let signature = keypair.sign(&bytes); // Use the assumed sign method
-    
+
     receipt.signature = Some(signature.to_bytes().to_vec());
     Ok(())
 }
@@ -1137,40 +1290,66 @@ pub async fn execute_mesh_job<L: ManaLedger + Send + Sync + 'static>(
     local_keypair: &IcnKeyPair,
     runtime_context: Arc<RuntimeContext<L>>,
 ) -> Result<MeshExecutionReceipt, anyhow::Error> {
-    info!("Executing mesh job: {:?} with executor {}", mesh_job.job_id, local_keypair.did);
+    info!(
+        "Executing mesh job: {:?} with executor {}",
+        mesh_job.job_id, local_keypair.did
+    );
     // ... (rest of the logic from the original execute_mesh_job)
     // ... using runtime_context.storage(), runtime_context.mana_regenerator if needed for cost calculation, etc.
 
     // Determine mana_cost (priority: explicit, then resource sum, then default)
     let calculated_mana_cost = mesh_job.job_params.explicit_mana_cost.unwrap_or_else(|| {
-        mesh_job.job_params.resources.as_ref().map_or(DEFAULT_MANA_COST, |resources| {
-            resources.iter().map(|r| r.value.unwrap_or(0)).sum()
-        })
+        mesh_job
+            .job_params
+            .resources
+            .as_ref()
+            .map_or(DEFAULT_MANA_COST, |resources| {
+                resources.iter().map(|r| r.value.unwrap_or(0)).sum()
+            })
     });
     // This is a simplified cost. Real calculation might involve resource types, duration, etc.
     // Ensure calculated_mana_cost is not zero if there are resources, to avoid free jobs unless intended.
-    let final_mana_cost = if calculated_mana_cost == 0 && mesh_job.job_params.resources.is_some() && !mesh_job.job_params.resources.as_ref().unwrap().is_empty() {
+    let final_mana_cost = if calculated_mana_cost == 0
+        && mesh_job.job_params.resources.is_some()
+        && !mesh_job.job_params.resources.as_ref().unwrap().is_empty()
+    {
         DEFAULT_MANA_COST // Ensure jobs with resources have some cost
     } else {
         calculated_mana_cost
     };
 
-
     // Simulate execution
     let execution_start_time = Utc::now().timestamp_millis() as u64;
     // Simulate some work
-    tokio::time::sleep(std::time::Duration::from_millis(100 + final_mana_cost as u64)).await; // Sleep proportional to cost
+    tokio::time::sleep(std::time::Duration::from_millis(
+        100 + final_mana_cost as u64,
+    ))
+    .await; // Sleep proportional to cost
     let execution_end_time_dt = Utc::now();
     let execution_end_time = execution_end_time_dt.timestamp_millis() as u64;
 
     // Dummy result CID and resource usage
-    let result_data_cid = Some(format!("bafyresimulatedresult{}", mesh_job.job_id.as_deref().unwrap_or("")));
-    let resource_usage = mesh_job.job_params.resources.as_ref().map_or_else(HashMap::new, |resources| {
-        resources.iter().map(|r| (r.resource_type.clone(), r.value.unwrap_or(0))).collect()
-    });
+    let result_data_cid = Some(format!(
+        "bafyresimulatedresult{}",
+        mesh_job.job_id.as_deref().unwrap_or("")
+    ));
+    let resource_usage =
+        mesh_job
+            .job_params
+            .resources
+            .as_ref()
+            .map_or_else(HashMap::new, |resources| {
+                resources
+                    .iter()
+                    .map(|r| (r.resource_type.clone(), r.value.unwrap_or(0)))
+                    .collect()
+            });
 
     let mut receipt = MeshExecutionReceipt {
-        job_id: mesh_job.job_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+        job_id: mesh_job
+            .job_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
         executor: local_keypair.did.clone(),
         status: IcnJobStatus::Completed, // Assume success for now
         result_data_cid,
@@ -1189,7 +1368,10 @@ pub async fn execute_mesh_job<L: ManaLedger + Send + Sync + 'static>(
     let receipt_bytes_for_signing = serde_json::to_vec(&receipt.signed_part())
         .context("Failed to serialize receipt for signing")?;
     receipt.signature = local_keypair.sign(&receipt_bytes_for_signing).to_vec();
-    
-    info!("Finished executing mesh job: {:?}, Mana cost: {}", receipt.job_id, final_mana_cost);
+
+    info!(
+        "Finished executing mesh job: {:?}, Mana cost: {}",
+        receipt.job_id, final_mana_cost
+    );
     Ok(receipt)
 }

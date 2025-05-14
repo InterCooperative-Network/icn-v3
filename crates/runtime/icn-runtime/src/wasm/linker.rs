@@ -26,17 +26,21 @@ pub struct StoreData {
 
 #[cfg(not(feature = "full_host_abi"))]
 impl StoreData {
-    pub fn new() -> Self { Self { host_env: None } }
-    pub fn set_host(&mut self, host_env: ConcreteHostEnvironment) { self.host_env = Some(host_env); }
+    pub fn new() -> Self {
+        Self { host_env: None }
+    }
+    pub fn set_host(&mut self, host_env: ConcreteHostEnvironment) {
+        self.host_env = Some(host_env);
+    }
     #[allow(dead_code)]
-    pub fn host(&self) -> &ConcreteHostEnvironment { self.host_env.as_ref().expect("host env not set") }
+    pub fn host(&self) -> &ConcreteHostEnvironment {
+        self.host_env.as_ref().expect("host env not set")
+    }
 }
 
 /// Register host functions – no-op in the minimal build.
 #[cfg(not(feature = "full_host_abi"))]
-pub fn register_host_functions(
-    _linker: &mut Linker<StoreData>
-) -> Result<(), anyhow::Error> {
+pub fn register_host_functions(_linker: &mut Linker<StoreData>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
@@ -59,4 +63,4 @@ pub use legacy_linker_impl::*;
 pub type StoreData = ConcreteHostEnvironment;
 
 #[cfg(feature = "full_host_abi")]
-pub use full::register_host_functions; 
+pub use full::register_host_functions;

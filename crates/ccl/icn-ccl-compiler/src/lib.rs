@@ -55,13 +55,18 @@ impl CclCompiler {
     /// Create a new CCL compiler
     pub fn new() -> Result<Self> {
         let temp_dir = TempDir::new()?;
-        Ok(Self { _temp_dir: temp_dir })
+        Ok(Self {
+            _temp_dir: temp_dir,
+        })
     }
 
     /// Lowers CCL source to an intermediate DSL AST representation.
     fn lower_ccl_to_dsl_ast(&self, ccl_source: &str) -> Result<Vec<icn_ccl_dsl::DslModule>> {
         lower::lower_str(ccl_source).map_err(|e| {
-            anyhow!(CompilerError::LoweringError(format!("Lowering failed: {}", e)))
+            anyhow!(CompilerError::LoweringError(format!(
+                "Lowering failed: {}",
+                e
+            )))
         })
     }
 
@@ -69,7 +74,10 @@ impl CclCompiler {
     pub fn compile_to_dsl_string(&self, ccl_source: &str) -> Result<String> {
         let dsl_modules = self.lower_ccl_to_dsl_ast(ccl_source)?;
         serde_json::to_string_pretty(&dsl_modules).map_err(|e| {
-            anyhow!(CompilerError::DslGenerationError(format!("Failed to serialize DSL modules: {}", e)))
+            anyhow!(CompilerError::DslGenerationError(format!(
+                "Failed to serialize DSL modules: {}",
+                e
+            )))
         })
     }
 
@@ -104,7 +112,7 @@ impl CclCompiler {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::lower::lower_str;
     use insta::assert_json_snapshot;
 

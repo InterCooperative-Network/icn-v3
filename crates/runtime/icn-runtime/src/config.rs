@@ -1,6 +1,6 @@
+use icn_economics::mana::RegenerationPolicy;
 use serde::Deserialize;
 use std::path::PathBuf;
-use icn_economics::mana::RegenerationPolicy;
 
 /// Configuration for the ICN Runtime
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -45,4 +45,4 @@ pub struct RuntimeConfig {
 
 fn default_mana_tick_interval() -> Option<u64> {
     Some(30)
-} 
+}

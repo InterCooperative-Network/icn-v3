@@ -248,10 +248,18 @@ impl DagNodeBuilder {
 
     /// Builds a DagNode if all required fields are set
     pub fn build(self) -> Result<DagNode, DagError> {
-        let content = self.content.ok_or_else(|| DagError::InvalidStructure("Content is required".to_string()))?;
-        let event_type = self.event_type.ok_or_else(|| DagError::InvalidStructure("Event type is required".to_string()))?;
-        let timestamp = self.timestamp.ok_or_else(|| DagError::InvalidStructure("Timestamp is required".to_string()))?;
-        let scope_id = self.scope_id.ok_or_else(|| DagError::InvalidStructure("Scope ID is required".to_string()))?;
+        let content = self
+            .content
+            .ok_or_else(|| DagError::InvalidStructure("Content is required".to_string()))?;
+        let event_type = self
+            .event_type
+            .ok_or_else(|| DagError::InvalidStructure("Event type is required".to_string()))?;
+        let timestamp = self
+            .timestamp
+            .ok_or_else(|| DagError::InvalidStructure("Timestamp is required".to_string()))?;
+        let scope_id = self
+            .scope_id
+            .ok_or_else(|| DagError::InvalidStructure("Scope ID is required".to_string()))?;
 
         Ok(DagNode {
             content,
@@ -329,28 +337,36 @@ mod tests {
 
     #[test]
     fn test_lineage_attestation_serialization() {
-        let event_cid = Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
-        let prev_att_cid = Cid::try_from("bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku").unwrap(); // Example CID
+        let event_cid =
+            Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
+        let prev_att_cid =
+            Cid::try_from("bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku").unwrap(); // Example CID
 
         let attestation = LineageAttestation {
             event_cid,
             previous_attestations: vec![prev_att_cid],
-            signatures: vec!["placeholder_sig_1".to_string(), "placeholder_sig_2".to_string()],
+            signatures: vec![
+                "placeholder_sig_1".to_string(),
+                "placeholder_sig_2".to_string(),
+            ],
             quorum_method: QuorumMethod::Majority,
         };
 
         let serialized_cbor = serde_cbor::to_vec(&attestation).unwrap();
-        let deserialized_attestation: LineageAttestation = serde_cbor::from_slice(&serialized_cbor).unwrap();
+        let deserialized_attestation: LineageAttestation =
+            serde_cbor::from_slice(&serialized_cbor).unwrap();
         assert_eq!(attestation, deserialized_attestation);
 
         let serialized_json = serde_json::to_string(&attestation).unwrap();
-        let deserialized_attestation_json: LineageAttestation = serde_json::from_str(&serialized_json).unwrap();
+        let deserialized_attestation_json: LineageAttestation =
+            serde_json::from_str(&serialized_json).unwrap();
         assert_eq!(attestation, deserialized_attestation_json);
     }
 
     #[test]
     fn test_execution_receipt_serialization() {
-        let exec_cid = Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
+        let exec_cid =
+            Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
         let receipt = ExecutionReceipt {
             execution_cid: exec_cid,
             success: true,
@@ -360,17 +376,20 @@ mod tests {
         };
 
         let serialized_cbor = serde_cbor::to_vec(&receipt).unwrap();
-        let deserialized_receipt: ExecutionReceipt = serde_cbor::from_slice(&serialized_cbor).unwrap();
+        let deserialized_receipt: ExecutionReceipt =
+            serde_cbor::from_slice(&serialized_cbor).unwrap();
         assert_eq!(receipt, deserialized_receipt);
 
         let serialized_json = serde_json::to_string(&receipt).unwrap();
-        let deserialized_receipt_json: ExecutionReceipt = serde_json::from_str(&serialized_json).unwrap();
+        let deserialized_receipt_json: ExecutionReceipt =
+            serde_json::from_str(&serialized_json).unwrap();
         assert_eq!(receipt, deserialized_receipt_json);
     }
 
     #[test]
     fn test_anchor_credential_serialization() {
-        let root_cid = Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
+        let root_cid =
+            Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap(); // Example CID
         let anchor = AnchorCredential {
             dag_root: root_cid,
             epoch: 101,
@@ -379,14 +398,16 @@ mod tests {
         };
 
         let serialized_cbor = serde_cbor::to_vec(&anchor).unwrap();
-        let deserialized_anchor: AnchorCredential = serde_cbor::from_slice(&serialized_cbor).unwrap();
+        let deserialized_anchor: AnchorCredential =
+            serde_cbor::from_slice(&serialized_cbor).unwrap();
         assert_eq!(anchor, deserialized_anchor);
 
         let serialized_json = serde_json::to_string(&anchor).unwrap();
-        let deserialized_anchor_json: AnchorCredential = serde_json::from_str(&serialized_json).unwrap();
+        let deserialized_anchor_json: AnchorCredential =
+            serde_json::from_str(&serialized_json).unwrap();
         assert_eq!(anchor, deserialized_anchor_json);
     }
-    
+
     #[test]
     fn test_cid_serialization_helpers() {
         let cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
@@ -406,14 +427,17 @@ mod tests {
         // Test Option<Cid> serde
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         struct OptionCidWrapper {
-            #[serde(serialize_with = "serialize_cid_option", deserialize_with = "deserialize_cid_option")]
+            #[serde(
+                serialize_with = "serialize_cid_option",
+                deserialize_with = "deserialize_cid_option"
+            )]
             id: Option<Cid>,
         }
         let wrapper_some = OptionCidWrapper { id: Some(cid) };
         let serialized_some = serde_json::to_string(&wrapper_some).unwrap();
         let deserialized_some: OptionCidWrapper = serde_json::from_str(&serialized_some).unwrap();
         assert_eq!(deserialized_some.id, Some(cid));
-        
+
         let wrapper_none = OptionCidWrapper { id: None };
         let serialized_none = serde_json::to_string(&wrapper_none).unwrap();
         let deserialized_none: OptionCidWrapper = serde_json::from_str(&serialized_none).unwrap();
@@ -422,10 +446,15 @@ mod tests {
         // Test Vec<Cid> serde
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         struct VecCidWrapper {
-            #[serde(serialize_with = "serialize_cid_vec", deserialize_with = "deserialize_cid_vec")]
+            #[serde(
+                serialize_with = "serialize_cid_vec",
+                deserialize_with = "deserialize_cid_vec"
+            )]
             ids: Vec<Cid>,
         }
-        let wrapper_vec = VecCidWrapper { ids: vec![cid, cid] };
+        let wrapper_vec = VecCidWrapper {
+            ids: vec![cid, cid],
+        };
         let serialized_vec = serde_json::to_string(&wrapper_vec).unwrap();
         let deserialized_vec: VecCidWrapper = serde_json::from_str(&serialized_vec).unwrap();
         assert_eq!(deserialized_vec.ids, vec![cid, cid]);

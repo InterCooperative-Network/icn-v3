@@ -18,4 +18,4 @@ fn bench_verify(c: &mut Criterion) {
     });
 }
 criterion_group!(benches, bench_verify);
-criterion_main!(benches); 
+criterion_main!(benches);

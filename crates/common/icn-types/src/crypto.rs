@@ -1,8 +1,8 @@
 use crate::error::CryptoError;
 use ed25519_dalek::{Signature as DalekSignature, SigningKey, VerifyingKey};
-use signature::{Signer as DalekSigner, Verifier as DalekVerifier}; // Aliased to avoid conflict
 use rand_core::OsRng; // Changed from rand::rngs::OsRng
 use serde::{Deserialize, Serialize};
+use signature::{Signer as DalekSigner, Verifier as DalekVerifier}; // Aliased to avoid conflict
 
 /// A trait for objects that can sign messages
 pub trait Signer {
@@ -100,7 +100,8 @@ pub mod did {
     use base64::{engine::general_purpose, Engine};
 
     /// Creates a did:key identifier from a public key
-    pub fn key_to_did(public_key_bytes: &[u8]) -> String { // Changed arg name for clarity
+    pub fn key_to_did(public_key_bytes: &[u8]) -> String {
+        // Changed arg name for clarity
         let multicodec_prefix = [0xed, 0x01]; // ed25519-pub multicodec
         let mut prefixed = Vec::with_capacity(2 + public_key_bytes.len());
         prefixed.extend_from_slice(&multicodec_prefix);
@@ -111,7 +112,8 @@ pub mod did {
     }
 
     /// Extracts a public key from a did:key identifier
-    pub fn did_to_key(did_string: &str) -> Result<Vec<u8>, CryptoError> { // Changed arg name
+    pub fn did_to_key(did_string: &str) -> Result<Vec<u8>, CryptoError> {
+        // Changed arg name
         if !did_string.starts_with("did:key:z") {
             return Err(CryptoError::KeyGenError(
                 "Invalid DID key format".to_string(),
@@ -137,6 +139,6 @@ pub mod did {
 // It was previously clashing. Now DalekSignature is the alias for ed25519_dalek's one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Signature {
-    pub algorithm: String,     // e.g., "Ed25519"
+    pub algorithm: String, // e.g., "Ed25519"
     pub value: Vec<u8>,
 }

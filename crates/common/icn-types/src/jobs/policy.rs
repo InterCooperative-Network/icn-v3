@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::TokenAmount;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionPolicy {
@@ -13,4 +13,4 @@ pub struct ExecutionPolicy {
     pub min_reputation: Option<f64>,
     /// Optional maximum acceptable bid price (in TokenAmount).
     pub max_price: Option<TokenAmount>,
-} 
+}

@@ -10,7 +10,7 @@ type Did = String; // DIDs are strings in the format did:key:...
                    // use icn_identity_core::vc::ExecutionReceiptCredential;
 
 // Import standardized ExecutionReceipt and JobStatus
-use icn_mesh_receipts::{ExecutionReceipt, ReceiptError}; 
+use icn_mesh_receipts::{ExecutionReceipt, ReceiptError};
 use icn_types::mesh::JobStatus as StandardJobStatus; // Alias to avoid conflict with local JobStatus
 
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod protocol;
-pub use protocol::{MeshProtocolMessage, JobId};
+pub use protocol::{JobId, MeshProtocolMessage};
 
 pub mod behaviour;
 pub use behaviour::{MeshBehaviour, MeshBehaviourEvent, CAPABILITY_TOPIC};
@@ -31,7 +31,7 @@ pub mod node;
 pub use node::MeshNode;
 
 pub mod reputation_integration;
-pub use reputation_integration::{ReputationClient, DefaultReputationClient, BidEvaluatorConfig};
+pub use reputation_integration::{BidEvaluatorConfig, DefaultReputationClient, ReputationClient};
 
 // Add the new metrics module
 pub mod metrics;
@@ -77,9 +77,7 @@ pub enum JobStatus {
     Submitted,
 
     /// Job assigned to a node for execution
-    Assigned {
-        node_id: String,
-    },
+    Assigned { node_id: String },
 
     /// Job execution in progress
     Running {
@@ -311,16 +309,16 @@ pub struct JobExecutionReceipt {
 
     /// Verification timestamp
     pub verified_at: Option<DateTime<Utc>>,
-    
+
     /// Result status code (0 = success, non-zero = error)
     pub result_status: i32,
-    
+
     /// Result hash (hash of output data)
     pub result_hash: Option<String>,
-    
+
     /// Result metadata (JSON string with additional info)
     pub result_metadata: Option<String>,
-    
+
     /// Execution logs
     pub execution_logs: Vec<String>,
 }
@@ -408,12 +406,12 @@ impl PlanetaryMeshNode {
         &self,
         job_id: &str,
         job_status: StandardJobStatus, // Use standardized JobStatus for receipt
-        metrics: &ExecutionMetrics, // Pass by reference
+        metrics: &ExecutionMetrics,    // Pass by reference
         resource_usage_vec: Vec<(String, u64)>, // Changed from direct HashMap to allow conversion
         result_data_cid: Option<String>,
         logs_cid: Option<String>, // Added for logs
         execution_start_time_unix: u64, // Added start time
-        // signature will be generated internally if not provided, or taken as param if pre-signed
+                                  // signature will be generated internally if not provided, or taken as param if pre-signed
     ) -> Result<ExecutionReceipt> {
         let now_dt = Utc::now();
         let execution_end_time_unix = now_dt.timestamp() as u64;
@@ -438,7 +436,7 @@ impl PlanetaryMeshNode {
             };
             resource_usage_map.insert(key, amount);
         }
-        
+
         // Placeholder for actual signature generation
         let signature_bytes = Vec::new(); // In a real scenario, sign the relevant fields
 
@@ -453,8 +451,8 @@ impl PlanetaryMeshNode {
             execution_end_time: execution_end_time_unix,
             execution_end_time_dt: now_dt,
             signature: signature_bytes, // Placeholder
-            coop_id: None, // TODO: Determine how to populate these if needed
-            community_id: None, // TODO: Determine how to populate these if needed
+            coop_id: None,              // TODO: Determine how to populate these if needed
+            community_id: None,         // TODO: Determine how to populate these if needed
         };
 
         // Store the receipt locally
@@ -560,7 +558,8 @@ impl MeshNode for PlanetaryMeshNode {
         Ok(())
     }
 
-    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<ExecutionReceipt>> { // Updated return type
+    async fn get_job_receipt(&self, job_id: &str) -> Result<Option<ExecutionReceipt>> {
+        // Updated return type
         let receipts = self.receipts.lock().unwrap();
         let receipt = receipts.get(job_id).cloned();
 

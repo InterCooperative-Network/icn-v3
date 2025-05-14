@@ -11,4 +11,4 @@ pub enum ScopeKey {
     Cooperative(String),
     Community(String),
     Individual(String),
-} 
+}

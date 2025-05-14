@@ -1,13 +1,13 @@
-use icn_identity::{ScopeKey, IdentityIndex, Did};
-use icn_economics::mana::ManaManager;
-use icn_types::dag::{DagEventType, DagNodeBuilder};
-use icn_types::dag_store::{SharedDagStore, DagStore};
-use icn_runtime::distribution_worker::DistributionWorker;
-use std::sync::{Arc, Mutex};
 use chrono::Utc;
-use std::str::FromStr;
 use ed25519_dalek::SigningKey;
+use icn_economics::mana::ManaManager;
+use icn_identity::{Did, IdentityIndex, ScopeKey};
+use icn_runtime::distribution_worker::DistributionWorker;
+use icn_types::dag::{DagEventType, DagNodeBuilder};
+use icn_types::dag_store::{DagStore, SharedDagStore};
 use rand_core::OsRng;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 #[tokio::test]
 async fn test_distribution_with_identity_index() {
@@ -71,4 +71,4 @@ async fn test_distribution_with_identity_index() {
     // Origin DID should not receive individual credits
     let origin_scope = ScopeKey::Individual(origin_did.as_str().to_string());
     assert!(mgr.balance(&origin_scope).unwrap_or(0) == 0);
-} 
+}

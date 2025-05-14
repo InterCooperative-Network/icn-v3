@@ -1,29 +1,15 @@
 use crate::opcodes::{Opcode, Program};
-use icn_types::mesh::{MeshJobParams, QoSProfile, WorkflowType};
+use anyhow::{anyhow, Result};
 use icn_economics::ResourceType;
-use serde_json;
+use icn_types::mesh::{MeshJobParams, QoSProfile, WorkflowType};
 use serde_cbor;
+use serde_json;
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
 
 use wasm_encoder::{
-    CodeSection,
-    ConstExpr,
-    DataSection,
-    EntityType as WasmEntityType,
-    EntityType,
-    ExportKind,
-    ExportSection,
-    Function,
-    FunctionSection,
-    ImportSection,
-    Instruction,
-    MemArg,
-    MemorySection,
-    MemoryType,
-    Module,
-    TypeSection,
-    ValType,
+    CodeSection, ConstExpr, DataSection, EntityType as WasmEntityType, EntityType, ExportKind,
+    ExportSection, Function, FunctionSection, ImportSection, Instruction, MemArg, MemorySection,
+    MemoryType, Module, TypeSection, ValType,
 };
 
 pub const JOB_ID_BUFFER_SIZE: u32 = 128;
@@ -46,7 +32,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     // Find an existing ()->i32 type if host_submit_mesh_job (type 16) matches, or add new.
     // Type 16 is (i32, i32, i32, i32) -> i32. So, we need a new type for () -> i32.
     // Let's assume existing types are 0-16. New type for _start will be 17.
-    let main_func_signature_type_idx = 17; 
+    let main_func_signature_type_idx = 17;
     type_section.function(vec![], vec![ValType::I32]);
 
     // Define memory (memory 0)
@@ -72,7 +58,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     // Assuming host_fns has N items, imported functions are 0..N-1.
     // The first *defined* function in this module will be index N.
     let host_fns_count = 17; // As per current host_fns array (indices 0-16)
-    let main_function_idx = host_fns_count as u32; 
+    let main_function_idx = host_fns_count as u32;
 
     // Declare the main function in the FunctionSection
     functions_section.function(main_func_signature_type_idx);
@@ -82,7 +68,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     // 0: last_submit_job_result (i32)
     let locals = vec![(1, ValType::I32)]; // CORRECTED: Declare locals if needed, pass to Function::new
     let mut main_f = Function::new(locals); // CORRECTED: Use Function::new
-    // Initialize local(0) to 0 (default successful/neutral return if no SubmitJob happens or if it's not last)
+                                            // Initialize local(0) to 0 (default successful/neutral return if no SubmitJob happens or if it's not last)
     main_f.instruction(&Instruction::I32Const(0));
     main_f.instruction(&Instruction::LocalSet(0));
 
@@ -174,27 +160,35 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 // TODO: Define and use the correct range_check_func_idx, assuming 13 for now as it's next.
                 main_f.instruction(&Instruction::Call(13));
             }
-            Opcode::UseResource { resource_type, amount } => {
+            Opcode::UseResource {
+                resource_type,
+                amount,
+            } => {
                 encode_push_string(&mut main_f, resource_type);
                 main_f.instruction(&Instruction::I64Const(*amount as i64));
                 main_f.instruction(&Instruction::Call(14)); // host fn 14: use_resource
             }
-            Opcode::TransferToken { token_type, amount, sender, recipient } => {
+            Opcode::TransferToken {
+                token_type,
+                amount,
+                sender,
+                recipient,
+            } => {
                 encode_push_string(&mut main_f, token_type);
                 main_f.instruction(&Instruction::I64Const(*amount as i64));
                 encode_push_string(&mut main_f, sender.as_deref().unwrap_or_default());
                 encode_push_string(&mut main_f, recipient);
                 main_f.instruction(&Instruction::Call(15)); // host fn 15: transfer_token
             }
-            Opcode::SubmitJob { 
-                wasm_cid, 
-                description, 
-                input_data_cid, 
+            Opcode::SubmitJob {
+                wasm_cid,
+                description,
+                input_data_cid,
                 entry_function: _, // Not directly used in MeshJobParams, info for executor
-                required_resources_json, 
-                qos_profile_json, 
+                required_resources_json,
+                qos_profile_json,
                 max_acceptable_bid_tokens, // Destructure this field
-                deadline_utc_ms, 
+                deadline_utc_ms,
                 metadata_json: _, // Not directly used in MeshJobParams currently
             } => {
                 // 1. Construct MeshJobParams
@@ -237,16 +231,16 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                     wasm_cid: wasm_cid.clone(),
                     description: description.clone().unwrap_or_default(),
                     resources_required: resources_required_vec, // Use parsed vec
-                    qos_profile: qos_profile_val, // Use parsed value
-                    deadline: deadline_utc_ms.clone(), // Use destructured value
-                    input_data_cid: input_data_cid.clone(), // Use destructured value
+                    qos_profile: qos_profile_val,               // Use parsed value
+                    deadline: deadline_utc_ms.clone(),          // Use destructured value
+                    input_data_cid: input_data_cid.clone(),     // Use destructured value
                     max_acceptable_bid_tokens: max_acceptable_bid_tokens.clone(), // Use destructured value
-                    // --- Default standard fields --- 
-                    workflow_type: WorkflowType::SingleWasmModule, 
-                    stages: None, 
-                    is_interactive: false, 
-                    expected_output_schema_cid: None, 
-                    execution_policy: None, 
+                    // --- Default standard fields ---
+                    workflow_type: WorkflowType::SingleWasmModule,
+                    stages: None,
+                    is_interactive: false,
+                    expected_output_schema_cid: None,
+                    execution_policy: None,
                 };
 
                 // 2. Serialize MeshJobParams to CBOR
@@ -254,31 +248,31 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                     Ok(cbor) => cbor,
                     Err(_e) => {
                         // TODO: Emit trap or error handling WASM for CBOR serialization error
-                        Vec::new() 
+                        Vec::new()
                     }
                 };
-                
+
                 // 3. Add CBOR Payload as a Data Segment & Update next_data_offset
-                let params_cbor_ptr_val = next_data_offset; 
+                let params_cbor_ptr_val = next_data_offset;
                 let params_cbor_len_val = params_cbor.len() as i32;
 
-                if params_cbor_len_val > 0 { 
+                if params_cbor_len_val > 0 {
                     // CORRECTED: Use emit_data_segment helper
                     emit_data_segment(&mut data_section, params_cbor_ptr_val, &params_cbor);
-                    next_data_offset += params_cbor_len_val as u32; 
+                    next_data_offset += params_cbor_len_val as u32;
                 }
 
                 // 4. Prepare JobId Output Buffer Parameters
                 let job_id_buffer_ptr_val = JOB_ID_BUFFER_OFFSET as i32;
-                let job_id_buffer_len_val = JOB_ID_BUFFER_SIZE as i32; 
-                
+                let job_id_buffer_len_val = JOB_ID_BUFFER_SIZE as i32;
+
                 // 5. Emit WASM instructions to call host_submit_mesh_job
                 main_f.instruction(&Instruction::I32Const(params_cbor_ptr_val as i32));
                 main_f.instruction(&Instruction::I32Const(params_cbor_len_val));
                 main_f.instruction(&Instruction::I32Const(job_id_buffer_ptr_val));
                 main_f.instruction(&Instruction::I32Const(job_id_buffer_len_val));
                 main_f.instruction(&Instruction::Call(16)); // host_submit_mesh_job
-                
+
                 // Store result in local(0)
                 main_f.instruction(&Instruction::LocalSet(0));
             }
@@ -309,9 +303,15 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     type_section.function(vec![ValType::I32], vec![]); // 12: log_range_check(debug_str: ptr) - New
     type_section.function(vec![ValType::F64, ValType::F64], vec![]); // 13: range_check(start: f64, end: f64)
     type_section.function(vec![ValType::I32, ValType::I64], vec![]); // 14: use_resource(resource_type: ptr, amount: i64)
-    type_section.function(vec![ValType::I32, ValType::I64, ValType::I32, ValType::I32], vec![]); // 15: transfer_token(token_type: ptr, amount: i64, sender: ptr, recipient: ptr)
-    // Type 16: host_submit_mesh_job(params_ptr: i32, params_len: i32, job_id_buf_ptr: i32, job_id_buf_len: i32) -> written_len: i32
-    type_section.function(vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32], vec![ValType::I32]); 
+    type_section.function(
+        vec![ValType::I32, ValType::I64, ValType::I32, ValType::I32],
+        vec![],
+    ); // 15: transfer_token(token_type: ptr, amount: i64, sender: ptr, recipient: ptr)
+       // Type 16: host_submit_mesh_job(params_ptr: i32, params_len: i32, job_id_buf_ptr: i32, job_id_buf_len: i32) -> written_len: i32
+    type_section.function(
+        vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+        vec![ValType::I32],
+    );
 
     // Imports: Define all imported host functions
     let host_fns = [
@@ -326,15 +326,16 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
         ("log_endif", 8u32),
         ("set_property", 9u32),
         ("log_todo", 10u32),
-        ("on_event", 11u32),        // New
-        ("log_range_check", 12u32), // New
-        ("range_check", 13u32),     // New for actual range check
-        ("use_resource", 14u32),    // New for resource usage tracking
-        ("transfer_token", 15u32),  // New for token transfers
+        ("on_event", 11u32),             // New
+        ("log_range_check", 12u32),      // New
+        ("range_check", 13u32),          // New for actual range check
+        ("use_resource", 14u32),         // New for resource usage tracking
+        ("transfer_token", 15u32),       // New for token transfers
         ("host_submit_mesh_job", 16u32), // Added for mesh job submission
     ];
     for (name, type_idx) in host_fns.iter() {
-        import_section.import("icn_host", name, EntityType::Function(*type_idx)); // Changed module to "icn_host"
+        import_section.import("icn_host", name, EntityType::Function(*type_idx));
+        // Changed module to "icn_host"
     }
 
     // Exports: Export the main function as "_start"
@@ -358,13 +359,9 @@ fn encode_push_string(f: &mut Function, s: &str) {
 }
 
 // Helper to emit data segments correctly using ConstExpr
-fn emit_data_segment(
-    data_section: &mut DataSection,
-    offset: u32,
-    data: &[u8],
-) {
+fn emit_data_segment(data_section: &mut DataSection, offset: u32, data: &[u8]) {
     data_section.active(
-        0, // Memory index 0
+        0,                                    // Memory index 0
         &ConstExpr::i32_const(offset as i32), // CORRECTED: Use ConstExpr::i32_const
         data.iter().copied(),
     );
