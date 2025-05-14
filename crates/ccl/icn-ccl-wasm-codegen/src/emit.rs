@@ -1,5 +1,4 @@
 use crate::opcodes::{Opcode, Program};
-use anyhow::{anyhow, Result};
 use icn_economics::ResourceType;
 use icn_types::mesh::{MeshJobParams, QoSProfile, WorkflowType};
 use serde_cbor;
@@ -7,8 +6,8 @@ use serde_json;
 use std::collections::HashMap;
 
 use wasm_encoder::{
-    CodeSection, ConstExpr, DataSection, EntityType as WasmEntityType, EntityType, ExportKind,
-    ExportSection, Function, FunctionSection, ImportSection, Instruction, MemArg, MemorySection,
+    CodeSection, ConstExpr, DataSection, EntityType, ExportKind,
+    ExportSection, Function, FunctionSection, ImportSection, Instruction, MemorySection,
     MemoryType, Module, TypeSection, ValType,
 };
 
@@ -50,7 +49,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
     data_section.active(
         0, // Memory index 0
         &ConstExpr::i32_const(JOB_ID_BUFFER_OFFSET as i32),
-        job_id_buffer_data.into_iter(),
+        job_id_buffer_data,
     );
 
     // Determine the index for the main function we are about to define.
@@ -232,10 +231,10 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                     description: description.clone().unwrap_or_default(),
                     resources_required: resources_required_vec, // Use parsed vec
                     qos_profile: qos_profile_val,               // Use parsed value
-                    deadline: deadline_utc_ms.clone(),          // Use destructured value
-                    input_data_cid: input_data_cid.clone(),     // Use destructured value
-                    max_acceptable_bid_tokens: max_acceptable_bid_tokens.clone(), // Use destructured value
-                    // --- Default standard fields ---
+                    deadline: *deadline_utc_ms,
+                    input_data_cid: input_data_cid.clone(),
+                    max_acceptable_bid_tokens: *max_acceptable_bid_tokens,
+                    explicit_mana_cost: None,
                     workflow_type: WorkflowType::SingleWasmModule,
                     stages: None,
                     is_interactive: false,
@@ -244,13 +243,7 @@ pub fn program_to_wasm(prog: &Program) -> Vec<u8> {
                 };
 
                 // 2. Serialize MeshJobParams to CBOR
-                let params_cbor = match serde_cbor::to_vec(&params) {
-                    Ok(cbor) => cbor,
-                    Err(_e) => {
-                        // TODO: Emit trap or error handling WASM for CBOR serialization error
-                        Vec::new()
-                    }
-                };
+                let params_cbor = serde_cbor::to_vec(&params).unwrap_or_default();
 
                 // 3. Add CBOR Payload as a Data Segment & Update next_data_offset
                 let params_cbor_ptr_val = next_data_offset;

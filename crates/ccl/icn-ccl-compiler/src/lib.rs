@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 // use once_cell::sync::Lazy; // Removed
-use serde::{Deserialize, Serialize};
+// use serde::{Deserialize, Serialize};
 // use std::collections::HashMap; // Removed
-use std::path::{Path, PathBuf};
+use std::path::Path;
 // use std::process::Command; // To be removed if compile_dsl_to_wasm is removed
 use tempfile::TempDir; // Keeping TempDir for now
 use thiserror::Error;
@@ -15,10 +15,16 @@ use wasm_encoder::{
 };
 */
 
+use std::error::Error;
+use std::fs;
+use std::io::{self, Read};
+
+use pest::Parser;
+use pest_derive::Parser;
+
 pub mod lower;
 
-// Import for the new compilation path
-use icn_ccl_wasm_codegen;
+mod parser;
 
 /// Error types specific to the CCL compiler
 #[derive(Error, Debug)]

@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use icn_identity::Did;
 use sled::Db;
 use std::str::FromStr; // Added for Did::from_str
-use std::sync::Arc; // May not be needed directly here, but often with sled
-use tracing::{debug, error}; // Added for logging
+use tracing::{error}; // debug was unused // Added for logging
 
 use crate::mana::{ManaLedger, ManaState};
 
@@ -174,7 +173,6 @@ impl ManaLedger for SledManaLedger {
         let tree = tree_result.unwrap();
 
         let mut dids = Vec::new();
-        let mut operation_successful = true; // Assume success initially
 
         for item_result in tree.iter() {
             match item_result {
@@ -186,51 +184,36 @@ impl ManaLedger for SledManaLedger {
                                 Err(e) => {
                                     // This is an error in data format, not an I/O error for the overall operation
                                     MANA_LEDGER_ERRORS_TOTAL
-                                        .with_label_values(&[
-                                            "sled",
-                                            "list_parse_did",
-                                            "deserialization",
-                                        ])
+                                        .with_label_values(&["sled", "list_parse_key_utf8", "deserialization"])
                                         .inc();
-                                    error!(did_str = %did_str, error = %e, "Error parsing Did from Sled key");
-                                    // Optionally, continue collecting other valid DIDs
+                                    error!(error = %e, "Error parsing Sled key from UTF-8 in all_dids");
+                                    // Optionally, continue collecting other valid DIDs or mark overall operation as failed
                                 }
                             }
                         }
                         Err(e) => {
+                            // This is an error in data format, not an I/O error for the overall operation
                             MANA_LEDGER_ERRORS_TOTAL
-                                .with_label_values(&["sled", "list_utf8_key", "deserialization"])
+                                .with_label_values(&["sled", "list_parse_key_utf8", "deserialization"])
                                 .inc();
-                            error!(key = ?key_ivec, error = %e, "Sled key for mana state is not valid UTF-8");
+                            error!(error = %e, "Error parsing Sled key from UTF-8 in all_dids");
+                            // Optionally, continue collecting other valid DIDs or mark overall operation as failed
                         }
                     }
                 }
                 Err(e) => {
-                    // This is an I/O error during iteration
+                    // This is an I/O error for the overall operation
                     MANA_LEDGER_ERRORS_TOTAL
-                        .with_label_values(&["sled", "list_iterate", "io"])
+                        .with_label_values(&["sled", "list_iter_io", "io"])
                         .inc();
-                    error!(error = %e, "Sled tree iteration I/O error");
-                    operation_successful = false; // Mark operation as failed
-                                                  // Depending on desired behavior, we might stop or continue iteration
-                                                  // For now, let's stop and report the error for the whole operation
-                    return Err(anyhow!("Sled iteration failed: {}", e));
+                    error!(error = %e, "Error iterating Sled tree in all_dids");
+                    // Depending on desired behavior, could return early or collect partial list
+                    // For now, we stop and return the error, as the full list cannot be retrieved.
+                    return Err(anyhow!("Sled tree iteration I/O error in all_dids: {}", e));
                 }
             }
         }
 
-        if operation_successful {
-            MANA_LEDGER_OPERATIONS_TOTAL
-                .with_label_values(&["sled", "list", "success"])
-                .inc();
-        } else {
-            // If we didn't return early from an iteration error, but operation_successful is false
-            // (e.g. if we decided to continue iterating despite errors), this path would be hit.
-            // However, with current logic, an iteration error returns early.
-            MANA_LEDGER_OPERATIONS_TOTAL
-                .with_label_values(&["sled", "list", "error"])
-                .inc();
-        }
         Ok(dids)
     }
 }
@@ -239,7 +222,7 @@ impl ManaLedger for SledManaLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use icn_identity::did::generate_did_key;
+    use icn_identity::KeyPair;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -247,11 +230,12 @@ mod tests {
         let dir = tempdir()?;
         let ledger = SledManaLedger::open(dir.path())?;
 
-        let did1 = generate_did_key().unwrap();
+        let kp = KeyPair::generate();
+        let did1 = kp.did;
         let state1 = ManaState {
             current_mana: 100,
             max_mana: 200,
-            regen_rate_per_epoch: 10,
+            regen_rate_per_epoch: 10.0,
             last_updated_epoch: 1,
         };
 
@@ -266,7 +250,8 @@ mod tests {
     async fn test_sled_mana_ledger_get_non_existent() -> Result<()> {
         let dir = tempdir()?;
         let ledger = SledManaLedger::open(dir.path())?;
-        let did_non_existent = generate_did_key().unwrap();
+        let kp = KeyPair::generate();
+        let did_non_existent = kp.did;
 
         let retrieved_state = ledger.get_mana_state(&did_non_existent).await?;
         assert!(retrieved_state.is_none());
@@ -278,8 +263,10 @@ mod tests {
         let dir = tempdir()?;
         let ledger = SledManaLedger::open(dir.path())?;
 
-        let did1 = generate_did_key().unwrap();
-        let did2 = generate_did_key().unwrap();
+        let kp1 = KeyPair::generate();
+        let kp2 = KeyPair::generate();
+        let did1 = kp1.did;
+        let did2 = kp2.did;
         let state = ManaState::default(); // Assuming ManaState has a Default impl for simplicity
 
         ledger.update_mana_state(&did1, state.clone()).await?;
@@ -301,11 +288,12 @@ mod tests {
     async fn test_sled_mana_ledger_update_existing() -> Result<()> {
         let dir = tempdir()?;
         let ledger = SledManaLedger::open(dir.path())?;
-        let did1 = generate_did_key().unwrap();
+        let kp = KeyPair::generate();
+        let did1 = kp.did;
         let initial_state = ManaState {
             current_mana: 50,
             max_mana: 100,
-            regen_rate_per_epoch: 5,
+            regen_rate_per_epoch: 5.0,
             last_updated_epoch: 0,
         };
         ledger
@@ -315,7 +303,7 @@ mod tests {
         let updated_mana_state = ManaState {
             current_mana: 75,
             max_mana: 100,
-            regen_rate_per_epoch: 5,
+            regen_rate_per_epoch: 5.0,
             last_updated_epoch: 1, // Simulate an epoch update
         };
         ledger

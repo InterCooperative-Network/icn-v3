@@ -1,9 +1,9 @@
 use crate::ExecutionReceipt;
 use ed25519_dalek::Signature as DalekSignature;
 use icn_identity::KeyPair;
-use serde_cbor;
-use signature::Verifier;
 use thiserror::Error;
+use anyhow::Result;
+use signature::Verifier;
 
 /// Errors that can occur during receipt signing operations
 #[derive(Debug, Error)]
@@ -107,6 +107,7 @@ mod tests {
             signature: Vec::new(),
             coop_id: None,
             community_id: None,
+            mana_cost: None,
         }
     }
 

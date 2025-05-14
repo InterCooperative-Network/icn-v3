@@ -2,21 +2,16 @@ pub mod config;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use cid::Cid;
+use chrono::Utc;
 use ed25519_dalek::VerifyingKey;
 use icn_core_vm::{CoVm, ExecutionMetrics as CoreVmExecutionMetrics, HostContext, ResourceLimits};
 use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, RegenerationPolicy};
-use icn_economics::{Economics, ResourceType};
-use icn_identity::ScopeKey;
+use icn_economics::ResourceType;
 use icn_identity::{Did, DidError, KeyPair as IcnKeyPair, TrustBundle, TrustValidationError};
-use icn_mesh_protocol::P2PJobStatus;
-use icn_mesh_receipts::{sign_receipt_in_place, ExecutionReceipt as MeshExecutionReceipt};
+use icn_mesh_receipts::ExecutionReceipt as MeshExecutionReceipt;
 use icn_types::dag::{DagEventType, DagNode};
 use icn_types::dag_store::DagStore;
-use icn_types::mesh::{
-    JobStatus as IcnJobStatus, MeshJob, MeshJobParams, QoSProfile, WorkflowType,
-};
+use icn_types::mesh::{JobStatus as IcnJobStatus, MeshJob, MeshJobParams};
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use icn_types::VerifiableReceipt;
 use serde::{Deserialize, Serialize};
@@ -28,10 +23,10 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::time::{sleep, Duration};
-use tracing::{info, warn};
+use tracing::{info, warn, debug, error};
 use uuid::Uuid;
 use wasmtime::{
-    Caller, Config, Engine, Func, Instance, Linker, Module, Store, Trap, TypedFunc, Val,
+    Engine, Linker, Module, Store, Val,
 };
 
 use crate::config::RuntimeConfig;
@@ -58,7 +53,7 @@ pub mod metrics;
 // Import reputation integration module
 pub mod reputation_integration;
 use reputation_integration::{
-    HttpReputationUpdater, NoopReputationUpdater, ReputationScoringConfig, ReputationUpdater,
+    ReputationUpdater,
 };
 
 /// Distribution worker for periodic mana payouts
@@ -72,6 +67,9 @@ use sled_storage::SledStorage;
 use bincode;
 use std::fs::{self, File};
 use std::io::{Read, Write};
+
+// Add at the top with other constants
+const DEFAULT_MANA_COST: u64 = 100;
 
 /// Module cache trait for caching compiled WASM modules
 #[async_trait]
@@ -479,7 +477,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                 .cloned()
                 .collect();
 
-        let mut receipt = MeshExecutionReceipt {
+        let receipt = MeshExecutionReceipt {
             job_id: job_id.clone(),
             executor: executor_did.clone(),
             status: IcnJobStatus::Completed,
@@ -721,7 +719,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         receipt_to_anchor.receipt_cid = Some(actual_receipt_cid.to_string());
 
         // 4. Serialize the receipt_to_anchor for DAG storage
-        let receipt_bytes = serde_cbor::to_vec(&receipt_to_anchor)
+        let _receipt_bytes = serde_cbor::to_vec(&receipt_to_anchor)
             .context("Failed to serialize receipt for DAG storage")?;
 
         // 5. Store the serialized receipt in the DAG Store using its actual CID
@@ -923,10 +921,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         // For now, ensure it compiles and respects the Runtime<L> structure.
 
         // Example: Construct a dummy receipt.
-        let job_id = _params
-            .job_id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let job_id = Uuid::new_v4().to_string();
         let executor_did = self.context.identity().map_or_else(
             || Did::from_str("did:error:no_identity").unwrap(), // Should handle error properly
             |kp| kp.did.clone(),
@@ -955,8 +950,8 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             execution_end_time: execution_end_time as u64,
             execution_end_time_dt,
             signature: Vec::new(),
-            coop_id: _params.cooperative_id.clone(),
-            community_id: _params.community_id.clone(),
+            coop_id: None,
+            community_id: None,
             mana_cost: _params.explicit_mana_cost, // Or calculated cost
         })
     }
@@ -1063,11 +1058,11 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         // Placeholder: assume wasm_bytes are part of job or fetched.
         // let wasm_bytes = fetch_wasm_for_job(&job).await?; // You'd need a helper for this.
         // For demonstration, if job.job_params.wasm_cid exists, try to load from storage:
-        let wasm_bytes = if let Some(cid_str) = &job.job_params.wasm_cid {
-            self.storage.load_wasm(cid_str).await.map_err(|e| {
+        let wasm_bytes = if let Some(cid_string) = &job.params.wasm_cid { // Get Option<&String>
+            self.storage.load_wasm(cid_string.as_str()).await.map_err(|e| { // Pass &str to load_wasm
                 anyhow!(
                     "Failed to load WASM for job {}: {}",
-                    job.job_id.as_deref().unwrap_or("unknown"),
+                    job.job_id.as_str(),
                     e
                 )
             })?
@@ -1101,12 +1096,8 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
         // To proceed, let's use a placeholder for job execution that matches the method signature.
         // This highlights a deeper integration point for execute_mesh_job's genericity.
-        let originator_did_str = job
-            .originator
-            .as_ref()
-            .map(|o| o.to_string())
-            .unwrap_or_else(|| "did:unknown:originator".to_string());
-        let originator_did = Did::from_str(&originator_did_str)?;
+        let originator_did_str = job.originator_did.as_str();
+        let originator_did = Did::from_str(originator_did_str)?;
 
         // This is a simplification. execute_mesh_job logic should be here or called.
         // The previous version of execute_mesh_job was a free function.
@@ -1130,11 +1121,8 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         if let Some(updater) = &self.reputation_updater {
             if let Some(mana_cost) = receipt.mana_cost {
                 if mana_cost > 0 {
-                    let coop_id = receipt.coop_id.as_deref().unwrap_or("default_coop");
-                    let community_id = receipt
-                        .community_id
-                        .as_deref()
-                        .unwrap_or("default_community");
+                    let coop_id = receipt.coop_id.as_ref().map(|id| id.0.as_str()).unwrap_or("default_coop");
+                    let community_id = receipt.community_id.as_ref().map(|id| id.0.as_str()).unwrap_or("default_community");
                     if let Err(e) = updater
                         .submit_mana_deduction(&receipt.executor, mana_cost, coop_id, community_id)
                         .await
@@ -1161,17 +1149,15 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             debug!("Ticking mana regeneration...");
             match regenerator.tick().await {
                 Ok(details) => {
-                    if !details.regenerated_dids.is_empty() || !details.errors.is_empty() {
-                        info!(
-                            "Mana tick processed. Regenerated for {} DIDs. {} errors.",
-                            details.regenerated_dids.len(),
+                    if !details.errors.is_empty() {
+                        debug!(
+                            "Mana tick: Processed {} DIDs, regenerated {} DIDs, {} errors",
+                            details.processed_dids_count,
+                            details.regenerated_dids_count,
                             details.errors.len()
                         );
-                        for (did, old_mana, new_mana) in details.regenerated_dids {
-                            trace!("Mana for DID {}: {} -> {}", did, old_mana, new_mana);
-                        }
-                        for (did, error) in details.errors {
-                            warn!("Error regenerating mana for DID {}: {}", did, error);
+                        for error in &details.errors {
+                            error!("Mana regeneration error: {:?}", error);
                         }
                     } else {
                         debug!("Mana tick: No DIDs to regenerate or no errors.");
@@ -1288,7 +1274,7 @@ fn sign_runtime_receipt_in_place(
 pub async fn execute_mesh_job<L: ManaLedger + Send + Sync + 'static>(
     mesh_job: MeshJob,
     local_keypair: &IcnKeyPair,
-    runtime_context: Arc<RuntimeContext<L>>,
+    _runtime_context: Arc<RuntimeContext<L>>, // Prefix unused variable
 ) -> Result<MeshExecutionReceipt, anyhow::Error> {
     info!(
         "Executing mesh job: {:?} with executor {}",
@@ -1298,22 +1284,15 @@ pub async fn execute_mesh_job<L: ManaLedger + Send + Sync + 'static>(
     // ... using runtime_context.storage(), runtime_context.mana_regenerator if needed for cost calculation, etc.
 
     // Determine mana_cost (priority: explicit, then resource sum, then default)
-    let calculated_mana_cost = mesh_job.job_params.explicit_mana_cost.unwrap_or_else(|| {
-        mesh_job
-            .job_params
-            .resources
-            .as_ref()
-            .map_or(DEFAULT_MANA_COST, |resources| {
-                resources.iter().map(|r| r.value.unwrap_or(0)).sum()
-            })
+    let calculated_mana_cost = mesh_job.params.explicit_mana_cost.unwrap_or_else(|| {
+        if !mesh_job.params.resources_required.is_empty() {
+            mesh_job.params.resources_required.iter().map(|(_, amount)| *amount).sum()
+        } else {
+            DEFAULT_MANA_COST
+        }
     });
-    // This is a simplified cost. Real calculation might involve resource types, duration, etc.
-    // Ensure calculated_mana_cost is not zero if there are resources, to avoid free jobs unless intended.
-    let final_mana_cost = if calculated_mana_cost == 0
-        && mesh_job.job_params.resources.is_some()
-        && !mesh_job.job_params.resources.as_ref().unwrap().is_empty()
-    {
-        DEFAULT_MANA_COST // Ensure jobs with resources have some cost
+    let final_mana_cost = if calculated_mana_cost == 0 && !mesh_job.params.resources_required.is_empty() {
+        DEFAULT_MANA_COST
     } else {
         calculated_mana_cost
     };
@@ -1329,44 +1308,30 @@ pub async fn execute_mesh_job<L: ManaLedger + Send + Sync + 'static>(
     let execution_end_time = execution_end_time_dt.timestamp_millis() as u64;
 
     // Dummy result CID and resource usage
-    let result_data_cid = Some(format!(
+    let result_cid = Some(format!(
         "bafyresimulatedresult{}",
-        mesh_job.job_id.as_deref().unwrap_or("")
+        mesh_job.job_id.as_str()
     ));
-    let resource_usage =
-        mesh_job
-            .job_params
-            .resources
-            .as_ref()
-            .map_or_else(HashMap::new, |resources| {
-                resources
-                    .iter()
-                    .map(|r| (r.resource_type.clone(), r.value.unwrap_or(0)))
-                    .collect()
-            });
+    let resource_usage = mesh_job.params.resources_required.iter().map(|(rt, amount)| (rt.clone(), *amount)).collect();
 
     let mut receipt = MeshExecutionReceipt {
-        job_id: mesh_job
-            .job_id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string()),
-        executor: local_keypair.did.clone(),
-        status: IcnJobStatus::Completed, // Assume success for now
-        result_data_cid,
-        logs_cid: None, // Populate if logs are generated
+        job_id: mesh_job.job_id.clone(),
+        executor: mesh_job.originator_did.clone(),
+        status: IcnJobStatus::Completed,
+        result_data_cid: result_cid,
+        logs_cid: None,
         resource_usage,
         execution_start_time,
         execution_end_time,
         execution_end_time_dt,
-        signature: Vec::new(), // Signature will be added next
-        coop_id: mesh_job.job_params.cooperative_id.clone(),
-        community_id: mesh_job.job_params.community_id.clone(),
-        mana_cost: Some(final_mana_cost), // Set the determined mana_cost
+        signature: Vec::new(),
+        coop_id: None,
+        community_id: None,
+        mana_cost: Some(final_mana_cost),
     };
 
     // Sign the receipt
-    let receipt_bytes_for_signing = serde_json::to_vec(&receipt.signed_part())
-        .context("Failed to serialize receipt for signing")?;
+    let receipt_bytes_for_signing = serde_cbor::to_vec(&receipt).unwrap_or_default();
     receipt.signature = local_keypair.sign(&receipt_bytes_for_signing).to_vec();
 
     info!(

@@ -30,6 +30,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+pub type UsageKey = (String, String, String);
+pub type UsageData = Vec<(u64, u64)>;
+
 /// Error types specific to the economics module
 #[derive(Error, Debug)]
 pub enum EconomicsError {
@@ -249,10 +252,10 @@ impl PolicyEnforcer for ResourcePolicyEnforcer {
 }
 
 /// In-memory implementation of the ResourceRepository trait for testing
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct InMemoryResourceRepository {
     /// Usage records (did, resource_type, scope) -> [(timestamp, amount)]
-    usage: Mutex<HashMap<(String, String, String), Vec<(u64, u64)>>>,
+    usage: Mutex<HashMap<UsageKey, UsageData>>,
 }
 
 impl InMemoryResourceRepository {

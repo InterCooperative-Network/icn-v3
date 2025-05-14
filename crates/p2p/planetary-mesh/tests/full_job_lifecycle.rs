@@ -1227,7 +1227,7 @@ async fn run_job_flow_and_verify_reputation(
 
     println!("[{}] Waiting for reputation record submission to be observed by originator (Executor: {}, Outcome: {:?})", job_id, executor_did, expected_outcome);
     let mut observed_rep_submission_cid: Option<Cid> = None;
-    timeout(Duration::from_secs(15), async { 
+    timeout(Duration::from_secs(15), async {
         loop {
             let submissions = originator_observed_reputations.read().unwrap();
             if let Some(submission) = submissions.iter().find(|s| {
@@ -1276,7 +1276,7 @@ async fn run_job_flow_and_verify_reputation(
         "[{}] Executor {} waiting to verify reputation record (CID: {}) about itself...",
         job_id, executor_did, rep_record_cid
     );
-    timeout(Duration::from_secs(15), async { 
+    timeout(Duration::from_secs(15), async {
         loop {
             let records = executor_verified_reputations.read().unwrap();
             if let Some(record) = records.get(&rep_record_cid) {
@@ -1293,7 +1293,7 @@ async fn run_job_flow_and_verify_reputation(
                  println!("[{}] Executor {} successfully verified reputation record (CID: {}) about itself.", job_id, executor_did, rep_record_cid);
                  break;
             }
-            tokio::time::sleep(Duration::from_millis(500)).await; 
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }).await.map_err(|_| format!("[{}] Executor {} timed out waiting to verify reputation record {}", job_id, executor_did, rep_record_cid))?;
 

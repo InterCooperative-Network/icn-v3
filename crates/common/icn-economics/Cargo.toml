@@ -23,3 +23,9 @@ bincode = "1.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] } 
+criterion = "0.5.1"
+tempfile = "3.8"
+
+# [[bench]]
+# name = "economics_bench"
+# harness = false 

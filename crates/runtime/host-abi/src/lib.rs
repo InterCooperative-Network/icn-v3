@@ -3,7 +3,7 @@ pub mod bindings;
 // Export all bindings at the crate root for easy access
 pub use bindings::*;
 
-pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submission ABI change
+// pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submission ABI change
 
 // InterCooperative Network (ICN) - Host ABI Definitions
 // This crate defines the Application Binary Interface (ABI) that WASM modules (e.g., CCL contracts)
@@ -12,7 +12,7 @@ pub const ICN_HOST_ABI_VERSION: u32 = 8; // bump from 7 → 8 for mesh job submi
 
 // Using core::ffi::c_void for potential opaque handles in the future, though not strictly used by current function signatures.
 // use core::ffi::c_void;
-use async_trait::async_trait;
+// use async_trait::async_trait; // Already removed by user
 use serde::Serialize;
 // No wasmer imports needed
 
@@ -25,17 +25,17 @@ use anyhow::Error as AnyhowError;
 
 // Corrected import: only include types that exist in icn_types::mesh
 use icn_types::mesh::{
-    JobStatus, MeshJobParams, OrgScopeIdentifier, StageInputSource, WorkflowType,
+    JobStatus, MeshJobParams, // OrgScopeIdentifier, StageInputSource, WorkflowType, // These were unused
 };
 // use wasmtime::Memory; // Commenting out as per new compiler warning
-use std::sync::Arc;
+// use std::sync::Arc; // This seems to be unused now.
 // use wasmtime::AsContextMut; // Commenting out as per new compiler warning
-use tracing::{debug, error, info, warn};
+use tracing::{error}; // debug, info, warn were unused
 
 use std::collections::HashMap;
-use std::convert::TryInto;
-use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int, c_void};
+// use std::convert::TryInto; // Unused
+use std::ffi::CStr; // CString was unused
+use std::os::raw::{c_char}; // c_int, c_void were unused
 use std::ptr;
 use std::slice;
 use std::str;
@@ -307,17 +307,22 @@ pub fn copy_string_to_c_buf(rust_str: &str, c_buf: *mut c_char, c_buf_len: u32) 
     len_to_write as i32
 }
 
-/// Helper to safely create a Rust String from a C string provided by WASM.
-pub fn string_from_c_str(c_str_ptr: *const c_char) -> Result<String, HostAbiError> {
+/// Helper for converting a C string (UTF-8 assumed) from WASM memory to a Rust String.
+/// The caller must ensure `c_str_ptr` is valid and null-terminated.
+///
+/// # Safety
+///
+/// - `c_str_ptr` must be a valid pointer to a null-terminated C string.
+/// - The memory pointed to by `c_str_ptr` must be valid for reads up to the null terminator.
+/// - The string data must be valid UTF-8.
+pub unsafe fn string_from_c_str(c_str_ptr: *const c_char) -> Result<String, HostAbiError> {
     if c_str_ptr.is_null() {
         return Err(HostAbiError::InvalidArguments);
     }
-    unsafe {
-        CStr::from_ptr(c_str_ptr)
-            .to_str()
-            .map(|s| s.to_owned())
-            .map_err(|_| HostAbiError::InvalidArguments) // UTF-8 conversion error
-    }
+    CStr::from_ptr(c_str_ptr)
+        .to_str()
+        .map(|s| s.to_owned())
+        .map_err(|_| HostAbiError::InvalidArguments) // UTF-8 conversion error
 }
 
 /// Helper to safely create a Rust Vec<u8> from AbiBytes provided by WASM.
@@ -350,8 +355,8 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `job_id_buf_len` (u32): Length of the provided buffer.
     /// # Returns
     /// * `i32`: Number of bytes written for the Job ID string if successful.
-    ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
-    ///            Other negative `HostAbiError` codes on other failures.
+    ///   Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
+    ///   Other negative `HostAbiError` codes on other failures.
     fn host_job_get_id(
         &self,
         caller: wasmtime::Caller<T>,
@@ -368,9 +373,9 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `cid_buf_len` (u32): Length of the buffer.
     /// # Returns
     /// * `i32`: Number of bytes written for the CID string.
-    ///            Returns 0 if `input_data_cid` was `None` for the job.
-    ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
-    ///            Other negative `HostAbiError` codes on other failures.
+    ///   Returns 0 if `input_data_cid` was `None` for the job.
+    ///   Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
+    ///   Other negative `HostAbiError` codes on other failures.
     fn host_job_get_initial_input_cid(
         &self,
         caller: wasmtime::Caller<T>,
@@ -384,8 +389,8 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `caller` (Caller<'a, T>): Reference to the WASM caller environment.
     /// # Returns
     /// * `i32`: 1 if the job is interactive.
-    ///            0 if the job is not interactive.
-    ///            Negative `HostAbiError` codes on failure (e.g., job context not found).
+    ///   0 if the job is not interactive.
+    ///   Negative `HostAbiError` codes on failure (e.g., job context not found).
     fn host_job_is_interactive(&self, caller: wasmtime::Caller<T>) -> Result<i32, AnyhowError>;
 
     /// Gets the current stage index (0-based) if the job is part of a multi-stage workflow.
@@ -394,8 +399,8 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `caller` (Caller<'a, T>): Reference to the WASM caller environment.
     /// # Returns
     /// * `i32`: The current stage index if the job is in a workflow.
-    ///            Returns -1 if the job is a `SingleWasmModule` type (not a multi-stage workflow).
-    ///            Other negative `HostAbiError` codes on failures.
+    ///   Returns -1 if the job is a `SingleWasmModule` type (not a multi-stage workflow).
+    ///   Other negative `HostAbiError` codes on failures.
     fn host_workflow_get_current_stage_index(
         &self,
         caller: wasmtime::Caller<T>,
@@ -410,9 +415,9 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `stage_id_buf_len` (u32): Length of the buffer.
     /// # Returns
     /// * `i32`: Number of bytes written for the stage ID string.
-    ///            Returns 0 if no stage ID is defined for the current stage, or if not in a multi-stage workflow.
-    ///            Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
-    ///            Other negative `HostAbiError` codes on other failures.
+    ///   Returns 0 if no stage ID is defined for the current stage, or if not in a multi-stage workflow.
+    ///   Returns `HostAbiError::BufferTooSmall` if the buffer is insufficient.
+    ///   Other negative `HostAbiError` codes on other failures.
     fn host_workflow_get_current_stage_id(
         &self,
         caller: wasmtime::Caller<T>,
@@ -434,10 +439,10 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `cid_buf_len` (u32): Length of the CID buffer.
     /// # Returns
     /// * `i32`: Number of bytes written for the CID string.
-    ///            Returns 0 if the current stage has no defined input (`StageInputSource::NoInput`) or if input resolution yields no CID.
-    ///            Returns `HostAbiError::BufferTooSmall` if `cid_buf_ptr` is insufficient.
-    ///            Returns `HostAbiError::NotFound` if a referenced previous stage output or job input key is not found.
-    ///            Other negative `HostAbiError` codes on other failures.
+    ///   Returns 0 if the current stage has no defined input (`StageInputSource::NoInput`) or if input resolution yields no CID.
+    ///   Returns `HostAbiError::BufferTooSmall` if `cid_buf_ptr` is insufficient.
+    ///   Returns `HostAbiError::NotFound` if a referenced previous stage output or job input key is not found.
+    ///   Other negative `HostAbiError` codes on other failures.
     fn host_workflow_get_current_stage_input_cid(
         &self,
         caller: wasmtime::Caller<T>,
@@ -460,7 +465,7 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `status_message_len` (u32): Length of the status message string.
     /// # Returns
     /// * `i32`: `HostAbiError::Success` (0) if the report was accepted.
-    ///            Negative `HostAbiError` codes on failure (e.g., `InvalidArguments` for bad message string).
+    ///   Negative `HostAbiError` codes on failure (e.g., `InvalidArguments` for bad message string).
     fn host_job_report_progress(
         &self,
         caller: wasmtime::Caller<T>,
@@ -479,8 +484,8 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `output_cid_len` (u32): Length of the output CID string. Can be 0 if no primary output CID.
     /// # Returns
     /// * `i32`: `HostAbiError::Success` (0) on successful completion reporting.
-    ///            Returns `HostAbiError::InvalidState` if not in a multi-stage workflow or not in an active stage.
-    ///            Other negative `HostAbiError` codes on failure.
+    ///   Returns `HostAbiError::InvalidState` if not in a multi-stage workflow or not in an active stage.
+    ///   Other negative `HostAbiError` codes on failure.
     /// # Note
     /// For stages producing multiple named outputs, the contract should currently aggregate them
     /// into a single structure, store that structure using `host_data_write_buffer` to get a CID,
@@ -504,12 +509,12 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `payload_len` (u32): Length of the payload data.
     /// * `output_key_ptr` (u32): Optional pointer to a UTF-8 string in WASM memory, serving as a key or identifier for this output. Can be 0 if not applicable.
     /// * `output_key_len` (u32): Length of the output key string. Can be 0 if not applicable.
-    /// * `is_final_chunk` (i32): 1 if this is the final chunk of a (potentially streamed) response for this interaction or output key, 0 otherwise.
+    /// * `is_final_chunk` (i32): 1 for true, 0 for false
     /// # Returns
     /// * `i32`: `HostAbiError::Success` (0) if the output was accepted for sending.
-    ///            Returns `HostAbiError::NotPermitted` if the job is not interactive or not allowed to send output.
-    ///            Returns `HostAbiError::ResourceLimitExceeded` if payload is too large for host to handle (e.g. create CID for).
-    ///            Other negative `HostAbiError` codes on failure.
+    ///   Returns `HostAbiError::NotPermitted` if the job is not interactive or not allowed to send output.
+    ///   Returns `HostAbiError::ResourceLimitExceeded` if payload is too large for host to handle (e.g. create CID for).
+    ///   Other negative `HostAbiError` codes on failure.
     fn host_interactive_send_output(
         &self,
         caller: wasmtime::Caller<T>,
@@ -530,14 +535,14 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `buffer_ptr` (u32): Pointer to the buffer in WASM memory to write the `ReceivedInputInfo` and subsequent data/CID.
     /// * `buffer_len` (u32): Length of the provided WASM buffer.
     /// * `timeout_ms` (u32): Maximum time to wait for input in milliseconds.
-    ///                        0 indicates a non-blocking check. `u32::MAX` suggests indefinite blocking
-    ///                        (though the host may impose its own maximum timeout).
+    ///   0 indicates a non-blocking check. `u32::MAX` suggests indefinite blocking
+    ///   (though the host may impose its own maximum timeout).
     /// # Returns
     /// * `i32`: Total number of bytes written to the WASM buffer (for `ReceivedInputInfo` + data/CID) if input is received.
-    ///            Returns 0 if no input is available (for non-blocking call) or if the timeout elapses.
-    ///            Returns `HostAbiError::BufferTooSmall` if `buffer_len` is insufficient for `ReceivedInputInfo` + data/CID. The input message remains queued.
-    ///            Returns `HostAbiError::NotPermitted` if the job is not interactive or not in a state to receive input.
-    ///            Other negative `HostAbiError` codes on failure.
+    ///   Returns 0 if no input is available (for non-blocking call) or if the timeout elapses.
+    ///   Returns `HostAbiError::BufferTooSmall` if `buffer_len` is insufficient for `ReceivedInputInfo` + data/CID. The input message remains queued.
+    ///   Returns `HostAbiError::NotPermitted` if the job is not interactive or not in a state to receive input.
+    ///   Other negative `HostAbiError` codes on failure.
     fn host_interactive_receive_input(
         &self,
         caller: wasmtime::Caller<T>,
@@ -554,8 +559,8 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `caller` (Caller<'a, T>): Reference to the WASM caller environment.
     /// # Returns
     /// * `i32`: Required size in bytes if input is available.
-    ///            Returns 0 if no input is currently available in the queue.
-    ///            Negative `HostAbiError` codes on failure.
+    ///   Returns 0 if no input is currently available in the queue.
+    ///   Negative `HostAbiError` codes on failure.
     fn host_interactive_peek_input_len(
         &self,
         caller: wasmtime::Caller<T>,
@@ -571,8 +576,8 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `prompt_cid_len` (u32): Length of the prompt CID string. Can be 0 if not applicable.
     /// # Returns
     /// * `i32`: `HostAbiError::Success` (0) if the prompt was accepted.
-    ///            Returns `HostAbiError::NotPermitted` if the job is not interactive.
-    ///            Other negative `HostAbiError` codes on failure.
+    ///   Returns `HostAbiError::NotPermitted` if the job is not interactive.
+    ///   Other negative `HostAbiError` codes on failure.
     fn host_interactive_prompt_for_input(
         &self,
         caller: wasmtime::Caller<T>,
@@ -595,10 +600,10 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `buffer_len` (u32): Length of the WASM buffer (maximum bytes to read).
     /// # Returns
     /// * `i32`: Number of bytes actually read and written to the WASM buffer. This might be less than `buffer_len` if the end of the data is reached.
-    ///            Returns `HostAbiError::NotFound` if the CID does not exist.
-    ///            Returns `HostAbiError::NotPermitted` if the job is not allowed to read this CID.
-    ///            Returns `HostAbiError::InvalidArguments` for issues like bad offset or buffer parameters.
-    ///            Other negative `HostAbiError` codes on other failures.
+    ///   Returns `HostAbiError::NotFound` if the CID does not exist.
+    ///   Returns `HostAbiError::NotPermitted` if the job is not allowed to read this CID.
+    ///   Returns `HostAbiError::InvalidArguments` for issues like bad offset or buffer parameters.
+    ///   Other negative `HostAbiError` codes on other failures.
     fn host_data_read_cid(
         &self,
         caller: wasmtime::Caller<T>,
@@ -621,10 +626,10 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `cid_buf_len` (u32): Length of the CID buffer.
     /// # Returns
     /// * `i32`: Number of bytes written for the CID string.
-    ///            Returns `HostAbiError::BufferTooSmall` if `cid_buf_len` is insufficient for the CID.
-    ///            Returns `HostAbiError::NotPermitted` if the job is not allowed to write data.
-    ///            Returns `HostAbiError::ResourceLimitExceeded` if `data_len` is too large or storage quota is hit.
-    ///            Other negative `HostAbiError` codes on other failures.
+    ///   Returns `HostAbiError::BufferTooSmall` if `cid_buf_len` is insufficient for the CID.
+    ///   Returns `HostAbiError::NotPermitted` if the job is not allowed to write data.
+    ///   Returns `HostAbiError::ResourceLimitExceeded` if `data_len` is too large or storage quota is hit.
+    ///   Other negative `HostAbiError` codes on other failures.
     fn host_data_write_buffer(
         &self,
         caller: wasmtime::Caller<T>,
@@ -646,7 +651,7 @@ pub trait MeshHostAbi<T: Sized> {
     /// * `message_len` (u32): Length of the message string.
     /// # Returns
     /// * `i32`: `HostAbiError::Success` (0) if the log message was accepted by the host.
-    ///            Negative `HostAbiError` codes on failure (e.g., `InvalidArguments` for bad message or level).
+    ///   Negative `HostAbiError` codes on failure (e.g., `InvalidArguments` for bad message or level).
     fn host_log_message(
         &self,
         caller: wasmtime::Caller<T>,

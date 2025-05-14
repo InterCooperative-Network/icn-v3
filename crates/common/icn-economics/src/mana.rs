@@ -267,15 +267,15 @@ impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> {
     }
 
     pub async fn tick(&self) -> Result<RegenerationTickDetails> {
-        let mut processed_dids_count = 0;
         let mut regenerated_dids_count = 0;
         let mut errors = Vec::new();
 
         let dids_result = self.ledger.all_dids().await;
+        let processed_dids_count_val: usize;
 
         match dids_result {
             Ok(dids) => {
-                processed_dids_count = dids.len();
+                processed_dids_count_val = dids.len();
                 MANA_ACTIVE_DIDS_GAUGE.set(dids.len() as i64); // Set active DIDs gauge
 
                 for did in dids {
@@ -283,9 +283,7 @@ impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> {
                         Ok(Some(mut state)) => {
                             let original_mana = state.current_mana;
 
-                            let regen_amount = match self.policy {
-                                RegenerationPolicy::FixedRatePerTick(amount) => amount,
-                            };
+                            let RegenerationPolicy::FixedRatePerTick(regen_amount) = self.policy;
 
                             state.current_mana =
                                 (state.current_mana + regen_amount).min(state.max_mana);
@@ -333,7 +331,7 @@ impl<L: ManaLedger + Send + Sync> ManaRegenerator<L> {
         }
 
         let details = RegenerationTickDetails {
-            processed_dids_count,
+            processed_dids_count: processed_dids_count_val,
             regenerated_dids_count,
             errors,
         };
