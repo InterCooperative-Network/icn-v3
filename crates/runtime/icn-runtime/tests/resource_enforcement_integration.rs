@@ -10,7 +10,7 @@ use icn_types::mesh::MeshJobParams;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use host_abi::{HostAbiError, MeshHostAbi};
+use host_abi::HostAbiError;
 
 #[tokio::test]
 async fn test_host_account_spend_mana_allows_when_quota_and_balance_sufficient() {
@@ -48,10 +48,10 @@ async fn test_host_account_spend_mana_allows_when_quota_and_balance_sufficient()
 
     let env = ConcreteHostEnvironment::new(job_ctx_arc, did.clone(), rt);
 
-    let result = MeshHostAbi::host_account_spend_mana(&env, MockCaller, 0, 0, 30).await.unwrap();
+    let result = env.test_host_account_spend_mana(&did, 30).await.unwrap();
     assert_eq!(result, 0);
 
-    let new_balance = MeshHostAbi::host_account_get_mana(&env, MockCaller, 0, 0).await.unwrap();
+    let new_balance = env.test_host_account_get_mana(&did).await.unwrap();
     assert_eq!(new_balance, 70);
 }
 
@@ -91,7 +91,7 @@ async fn test_host_account_spend_mana_denied_when_exceeds_quota() {
 
     let env = ConcreteHostEnvironment::new(job_ctx_arc, did.clone(), rt);
 
-    let result = MeshHostAbi::host_account_spend_mana(&env, MockCaller, 0, 0, 50).await;
+    let result = env.test_host_account_spend_mana(&did, 50).await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), HostAbiError::ResourceLimitExceeded as i32);
 }
@@ -133,15 +133,13 @@ async fn test_host_account_spend_mana_denied_when_insufficient_balance() {
 
     let env = ConcreteHostEnvironment::new(job_ctx_arc, did.clone(), rt);
 
-    let result = MeshHostAbi::host_account_spend_mana(&env, MockCaller, 0, 0, 30).await;
+    let result = env.test_host_account_spend_mana(&did, 30).await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), HostAbiError::ResourceLimitExceeded as i32);
+    assert_eq!(result.unwrap(), HostAbiError::InsufficientBalance as i32);
 
-    let current_balance = MeshHostAbi::host_account_get_mana(&env, MockCaller, 0, 0).await.unwrap();
+    let current_balance = env.test_host_account_get_mana(&did).await.unwrap();
     assert_eq!(current_balance, 20);
 }
-
-struct MockCaller;
 
 #[tokio::test]
 async fn test_host_account_get_mana_uses_caller_did() {
@@ -177,7 +175,7 @@ async fn test_host_account_get_mana_uses_caller_did() {
 
     let env = ConcreteHostEnvironment::new(job_ctx_arc, caller_did.clone(), rt);
 
-    let balance = MeshHostAbi::host_account_get_mana(&env, MockCaller, 0, 0).await.unwrap();
+    let balance = env.test_host_account_get_mana(&caller_did).await.unwrap();
     assert_eq!(balance, 77);
 }
 

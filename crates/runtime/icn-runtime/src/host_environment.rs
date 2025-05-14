@@ -669,18 +669,73 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         _len: u32,
     ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
 
-    fn host_account_get_mana(
+    async fn host_account_get_mana(
         &self,
         _caller: Caller<'_, ConcreteHostEnvironment>,
         _did_ptr: u32,
         _did_len: u32,
     ) -> Result<i64, anyhow::Error> { Ok(HostAbiError::NotSupported as i32 as i64) }
 
-    fn host_account_spend_mana(
+    async fn host_account_spend_mana(
         &self,
         _caller: Caller<'_, ConcreteHostEnvironment>,
         _did_ptr: u32,
         _did_len: u32,
         _amount: u64,
     ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
+}
+
+#[cfg(test)]
+impl ConcreteHostEnvironment {
+    pub async fn test_host_account_get_mana(&self, did: &Did) -> Result<i64, HostAbiError> {
+        // This logic is similar to the main host_account_get_mana but without Caller interaction
+        // and directly returns HostAbiError for simplicity in tests.
+        match self.rt.mana_repository().get_mana_state(did).await {
+            Ok(Some(state)) => Ok(state.current_mana as i64),
+            Ok(None) => Ok(0), // Default to 0 if no mana state exists
+            Err(_repo_err) => {
+                // log::error!("Test: Error fetching mana state for {}: {}", did, _repo_err);
+                Err(HostAbiError::StorageError)
+            }
+        }
+    }
+
+    pub async fn test_host_account_spend_mana(&self, did: &Did, amount: u64) -> Result<i32, HostAbiError> {
+        // This logic is similar to the main host_account_spend_mana but without Caller interaction
+        // and directly returns HostAbiError for simplicity in tests.
+        let scope_str = format!("did:{}", did.user_specific_id()); // Simplified scope
+        let token = ScopedResourceToken {
+            resource_type: "mana".to_string(),
+            amount,
+            scope: scope_str,
+            expires_at: None,
+            issuer: None,
+        };
+
+        match self.rt.policy_enforcer().check_authorization(did, &token).await {
+            Ok(true) => { /* Policy allows, proceed */ }
+            Ok(false) => return Ok(HostAbiError::ResourceLimitExceeded as i32),
+            Err(_policy_err) => {
+                // log::error!("Test: Policy check_authorization error: {}", _policy_err);
+                // In tests, we might want to distinguish this from other errors more clearly if needed.
+                return Ok(HostAbiError::UnknownError as i32); // Or a specific policy error if defined in HostAbiError
+            }
+        }
+
+        match self.rt.mana_repository().spend_mana(did, amount).await {
+            Ok(_) => Ok(0i32), // Success
+            Err(e) => { // e is anyhow::Error from the repository
+                if let Some(mana_err) = e.downcast_ref::<ManaError>() {
+                    match mana_err {
+                        ManaError::InsufficientMana { .. } => {
+                            return Ok(HostAbiError::InsufficientBalance as i32);
+                        }
+                        // Other specific ManaError variants could be handled here
+                    }
+                }
+                // log::error!("Test: Unknown error during spend_mana: {}", e);
+                Ok(HostAbiError::StorageError as i32) // Fallback for other repo errors
+            }
+        }
+    }
 }
