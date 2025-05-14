@@ -368,12 +368,14 @@ async fn test_bootstrap_federation_and_execute() -> Result<()> {
     // This part needs clarification on how WASM is made available for proposal execution.
     // Assuming a `store_wasm` method exists on the storage used by `proposal_runtime` or its context:
     let wasm_cid = "test-wasm-cid-for-proposal"; // Example CID
-    proposal_runtime.context().storage().store_wasm(wasm_cid, &wasm_bytes).await?;
+    proposal_runtime.storage.store_wasm(wasm_cid, &wasm_bytes).await?;
 
     let proposal = Proposal {
         id: "test-proposal-id".to_string(),
         wasm_cid: wasm_cid.to_string(),
-        // ... existing code ...
+        ccl_cid: "test-ccl-cid-for-proposal".to_string(),
+        state: icn_runtime::ProposalState::Approved,
+        quorum_status: icn_runtime::QuorumStatus::MajorityReached,
     };
 
     // ... existing code ...

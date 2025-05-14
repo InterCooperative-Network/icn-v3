@@ -1,45 +1,44 @@
-use icn_identity::{Did, KeyPair as IcnKeyPair};
+use anyhow::{anyhow, Context, Result};
+use cid::Cid as IcnCid;
+use icn_economics::mana::{InMemoryManaLedger, ManaRegenerator, RegenerationPolicy, ManaState, ManaLedger};
+use icn_economics::ResourceType;
+use icn_identity::{Did, KeyPair as IcnKeyPair, ScopeKey, TrustBundle};
+use icn_mesh_receipts::ExecutionReceipt as MeshExecutionReceipt;
+// use icn_proposal_dag::ProposalDag; // User needs to add this dependency
 use icn_runtime::{
     config::RuntimeConfig,
-    reputation_integration::{HttpReputationUpdater, NoopReputationUpdater},
-    MemStorage, // Use MemStorage directly
+    reputation_integration::{NoopReputationUpdater, ReputationScoringConfig as ReputationConfig, ReputationRecord},
+    MemStorage,
     Proposal,
-    ProposalState,
-    QuorumStatus,
     Runtime,
     RuntimeContextBuilder,
-    RuntimeStorage, // Add trait
+    RuntimeStorage,
+    VmContext,
 };
 use icn_types::{
-    mesh::{
-        JobStatus as IcnJobStatus, MeshJob, MeshJobParams, OrgScopeIdentifier, QoSProfile,
-        WorkflowType,
-    },
-    org::{CommunityId, CooperativeId}, // Added org types
-    resource::ResourceType,
-    runtime_receipt::RuntimeExecutionMetrics,
+    dag_store::DagStore,
+    mesh::{CommunityId, CooperativeId, MeshJob, MeshJobParams, OrgScopeIdentifier, QoSProfile, WorkflowType},
+    runtime_receipt::RuntimeExecutionReceipt,
+    VerifiableReceipt,
 };
-
-// Multihash and CID related imports
-use cid::Cid as IcnCid;
 use multihash::{Code, Multihash};
+use prometheus::Registry;
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
-
-use icn_types::dag_store::DagStore;
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::tempdir;
-use tracing_subscriber;
-use uuid::Uuid; // Added DagStore trait for .list()
-
-// --- Mana Related Imports for new test ---
-use icn_economics::mana::{
-    InMemoryManaLedger, ManaLedger, ManaRegenerator, ManaState, RegenerationPolicy,
-};
-use icn_identity::did::generate_did_key; // For generating test DIDs
-                                         // --- End Mana Related Imports ---
+use tokio::runtime::Handle;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+use tracing::info;
+use tracing_subscriber::fmt::TestWriter;
+use url::Url;
+use uuid::Uuid;
+use wat::parse_str;
+use async_trait::async_trait;
 
 // Helper to initialize tracing for tests, if not already done globally
 fn init_test_tracing() {
@@ -58,8 +57,6 @@ fn dummy_wasm_bytes() -> Vec<u8> {
 }
 
 // --- Mock Reputation Updater for Mana Deduction (local to this test file) ---
-use async_trait::async_trait;
-use std::sync::Mutex; // Ensure Mutex is imported if not already at top level // Ensure async_trait is imported
 
 #[derive(Debug, Clone)]
 struct TestManaDeductionCall {
@@ -142,7 +139,6 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
     let node_did_str = node_keypair.did.to_string();
 
     let config = RuntimeConfig {
-        // Config is needed for Runtime::from_config or setting context details
         node_did: node_did_str.clone(),
         storage_path: temp_dir.path().to_path_buf(),
         key_path: None,
@@ -150,8 +146,9 @@ async fn full_runtime_loop_executes_and_anchors_job() -> anyhow::Result<()> {
         mesh_job_service_url: None,
         metrics_port: None,
         log_level: Some("debug".into()),
-        reputation_scoring_config_path: None, // Added missing field
-        mana_regeneration_policy: None,       // Add this line for the new field
+        reputation_scoring_config_path: None,
+        mana_regeneration_policy: None,
+        mana_tick_interval_seconds: Some(30),
     };
 
     // 3. Build runtime
@@ -551,7 +548,7 @@ async fn test_mana_regeneration_loop_ticks() -> anyhow::Result<()> {
         .try_init();
 
     // Generate a test DID
-    let test_user_did = generate_did_key().unwrap();
+    let test_user_did = IcnKeyPair::generate().did;
 
     // Create an InMemoryManaLedger and set initial mana
     let ledger = Arc::new(InMemoryManaLedger::default());
@@ -573,7 +570,7 @@ async fn test_mana_regeneration_loop_ticks() -> anyhow::Result<()> {
 
     // Build RuntimeContext with the regenerator
     // RuntimeContextBuilder is generic, defaults to InMemoryManaLedger
-    let context_builder = RuntimeContextBuilder::<InMemoryManaLedger>::default()
+    let context_builder = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_identity(IcnKeyPair::generate()) // Runtime needs an identity
         .with_executor_id("test-runtime-did-for-mana-regen".to_string()) // And an executor ID
         .with_mana_regenerator(regenerator.clone());
@@ -625,7 +622,7 @@ async fn test_mana_regeneration_loop_ticks() -> anyhow::Result<()> {
 async fn test_mana_regeneration_policy_from_config() -> anyhow::Result<()> {
     init_test_tracing(); // Ensure tracing is initialized
 
-    let test_user_did = generate_did_key().unwrap();
+    let test_user_did = IcnKeyPair::generate().did;
     let regeneration_amount = 7u64;
     let initial_mana = 5u64;
     let expected_mana_after_tick = initial_mana + regeneration_amount;

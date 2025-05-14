@@ -1048,7 +1048,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         Ok(receipt)
     }
 
-    async fn anchor_mesh_receipt(&self, receipt: &MeshExecutionReceipt) -> Result<()> {
+    pub async fn anchor_mesh_receipt(&self, receipt: &MeshExecutionReceipt) -> Result<()> {
         // Placeholder for anchoring logic (e.g., to DAG, blockchain)
         info!("Anchoring mesh receipt for job ID: {}", receipt.job_id);
         // Example: Storing receipt CID or hash somewhere

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use icn_identity::Did;
-use icn_types::reputation::ReputationRecord;
+pub use icn_types::reputation::ReputationRecord;
 use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

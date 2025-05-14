@@ -570,6 +570,7 @@ async fn test_mesh_receipt_signature_verification_and_submission() -> Result<()>
         signature: vec![], // Will be filled after signing
         coop_id: None,
         community_id: None,
+        mana_cost: None, // Added missing field
     };
 
     let payload = receipt

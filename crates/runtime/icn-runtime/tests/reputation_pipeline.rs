@@ -1,11 +1,9 @@
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use chrono::Utc;
-use httpmock::{Method, MockServer};
+use anyhow::Result;
+use httpmock::MockServer;
 use icn_identity::{Did, KeyPair};
-use icn_runtime::reputation_integration::{HttpReputationUpdater, NoopReputationUpdater};
-use icn_runtime::{Runtime, RuntimeContext, RuntimeContextBuilder, MemStorage, InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
-use icn_types::mesh::{JobStatus as IcnJobStatus, MeshExecutionReceipt};
+use icn_runtime::reputation_integration::HttpReputationUpdater;
+use icn_runtime::{Runtime, RuntimeContextBuilder, MemStorage, InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
+use icn_mesh_receipts::ExecutionReceipt as MeshExecutionReceipt;
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use icn_types::VerifiableReceipt;
 use serde_json::json;

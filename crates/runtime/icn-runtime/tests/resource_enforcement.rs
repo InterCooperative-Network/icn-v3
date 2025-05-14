@@ -3,13 +3,13 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use icn_economics::mana::{InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
 use icn_economics::{Economics, LedgerKey, ResourceAuthorizationPolicy, ResourceType};
-use icn_identity::{Did, KeyPair};
+use icn_identity::KeyPair;
 use icn_runtime::{
     MemStorage, Proposal, ProposalState, QuorumStatus, Runtime,
-    RuntimeContext, RuntimeContextBuilder, RuntimeError, RuntimeStorage, VmContext,
+    RuntimeContextBuilder, VmContext,
 };
 use icn_types::dag_store::SharedDagStore;
-use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
+use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use wat::parse_str;
@@ -118,14 +118,17 @@ async fn resource_usage_recording() -> Result<()> {
     let did = keypair.did.clone();
 
     // Set up runtime context
-    let ctx = RuntimeContextBuilder::<InMemoryManaLedger>::new()
-        .with_dag_store(Arc::new(SharedDagStore::new()))
-        .with_executor_id(did.to_string())
-        .build();
+    let ctx_arc = Arc::new(
+        RuntimeContextBuilder::<InMemoryManaLedger>::new()
+            .with_dag_store(Arc::new(SharedDagStore::new()))
+            .with_executor_id(did.to_string())
+            .with_identity(keypair)
+            .build()
+    );
 
     // Create runtime with mock storage
     let storage = Arc::new(MockStorage::new());
-    let mut runtime = Runtime::with_context(storage, Arc::new(ctx.clone()));
+    let mut runtime = Runtime::with_context(storage, Arc::clone(&ctx_arc));
 
     // Create VM context
     let vm_context = VmContext {
@@ -144,7 +147,7 @@ async fn resource_usage_recording() -> Result<()> {
         .await?;
 
     // Check the ledger
-    let ledger = ctx.resource_ledger.read().await;
+    let ledger = ctx_arc.resource_ledger.read().await;
     let expected_key = LedgerKey {
         did: did.to_string(),
         resource_type: ResourceType::Token,
@@ -196,11 +199,11 @@ async fn test_resource_enforcement() -> Result<()> {
         .with_executor_id(test_did.to_string())
         .with_identity(test_keypair)
         .with_economics(economics);
-    let ctx = builder.build();
+    let ctx_arc_2 = Arc::new(builder.build());
 
     // Initialize runtime with mock storage and Arc'd context
     let storage = Arc::new(MockStorage::default());
-    let mut runtime = Runtime::with_context(storage.clone(), Arc::new(ctx.clone()));
+    let mut runtime = Runtime::with_context(storage.clone(), Arc::clone(&ctx_arc_2));
 
     // Execute WASM
     let vm_context = VmContext {
@@ -217,7 +220,7 @@ async fn test_resource_enforcement() -> Result<()> {
         .execute_wasm(&wasm, "_start".to_string(), Vec::new())
         .await?;
 
-    let mana_mgr = ctx.mana_manager.lock().unwrap();
+    let mana_mgr = ctx_arc_2.mana_manager.lock().unwrap();
     let expected_key_cpu = LedgerKey {
         did: test_did.to_string(),
         resource_type: ResourceType::Cpu,
@@ -243,7 +246,7 @@ fn setup_runtime_with_mana_ledger() -> (Arc<Runtime<InMemoryManaLedger>>, Arc<In
     let mana_ledger = Arc::new(InMemoryManaLedger::new());
 
     // Policy for regeneration (example: 1 mana per second)
-    let policy = RegenerationPolicy::new(1, 1.0); // 1 mana per 1 unit of time (e.g. second)
+    let policy = RegenerationPolicy::FixedRatePerTick(1);
 
     // Create ManaRegenerator
     let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
@@ -257,5 +260,5 @@ fn setup_runtime_with_mana_ledger() -> (Arc<Runtime<InMemoryManaLedger>>, Arc<In
             .build(),
     );
 
-    (Runtime::with_context(storage, context), mana_ledger)
+    (Arc::new(Runtime::with_context(storage, Arc::clone(&context))), mana_ledger)
 }

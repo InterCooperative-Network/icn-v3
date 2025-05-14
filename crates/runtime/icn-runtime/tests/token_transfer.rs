@@ -6,6 +6,7 @@ use icn_identity::{KeyPair, ScopeKey /*, Did*/};
 use icn_runtime::{
     Proposal,
     Runtime, RuntimeContextBuilder, RuntimeStorage, MemStorage, VmContext,
+    RegenerationPolicy, ManaRegenerator,
 };
 use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 use std::collections::HashMap;
@@ -86,12 +87,14 @@ fn create_basic_runtime_with_storage() -> (Runtime<InMemoryManaLedger>, Arc<Mock
     let node_keypair = KeyPair::generate();
     let node_did = node_keypair.did.clone();
     let mana_ledger = Arc::new(InMemoryManaLedger::new());
+    let policy = RegenerationPolicy::FixedRatePerTick(1);
+    let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
     let context = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_identity(node_keypair.clone())
         .with_executor_id(node_did.to_string())
         .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new()))
-        .with_mana_ledger(mana_ledger)
+        .with_mana_regenerator(mana_regenerator)
         .build();
 
     let runtime = Runtime::<InMemoryManaLedger>::with_context(storage.clone(), Arc::new(context));
@@ -109,8 +112,12 @@ async fn test_transfer_tokens_success() -> Result<()> {
     let receiver_kp = KeyPair::generate();
     let receiver_did = receiver_kp.did.clone();
 
-    let context = RuntimeContextBuilder::new()
+    let context = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_executor_id(sender_did.to_string())
+        .with_mana_regenerator(Arc::new(ManaRegenerator::new(
+            Arc::new(InMemoryManaLedger::new()), 
+            RegenerationPolicy::FixedRatePerTick(0)
+        )))
         .build();
 
     // --- Mana Manager Interaction (Commented out credit, fixed balance key) ---

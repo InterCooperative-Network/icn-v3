@@ -9,7 +9,6 @@ use rand_core::OsRng;
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use icn_identity::{KeyPair};
-use icn_runtime::distribution_worker::DistributionWorkerIdentity;
 use icn_runtime::RuntimeContextBuilder;
 use icn_runtime::InMemoryManaLedger;
 use std::collections::HashSet;
