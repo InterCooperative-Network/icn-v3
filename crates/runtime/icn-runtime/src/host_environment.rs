@@ -11,6 +11,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
 use icn_identity::ScopeKey;
+use icn_economics::PolicyEnforcer;
+use icn_economics::mana::ManaLedger;
 // Temp: Comment out ManaRepositoryReader import due to unresolved path
 // use icn_economics::mana::ManaRepositoryReader; 
 use icn_economics::ResourcePolicyEnforcer;
@@ -70,22 +72,23 @@ impl ConcreteHostEnvironment {
         self
     }
 
-    // /// Determine the accounting scope key for mana operations.
-    // fn scope_key(&self) -> ScopeKey { // COMMENTED OUT
-    //     // 1) If explicit coop/community overrides exist, honour them first.
-    //     if let Some(coop) = &self.coop_id {
-    //         ScopeKey::Cooperative(coop.to_string())
-    //     } else if let Some(comm) = &self.community_id {
-    //         ScopeKey::Community(comm.to_string())
-    //     } else if let Some(index) = &self.rt.identity_index {
-    //         index.resolve_scope_key(&self.caller_did)
-    //     } else if let Some(fid) = &self.rt.federation_id {
-    //         // Fallback to federation scope if runtime context specifies it explicitly
-    //         ScopeKey::Federation(fid.to_string())
-    //     } else {
-    //         ScopeKey::Individual(self.caller_did.to_string())
-    //     }
-    // }
+    /// Determine the accounting scope key for mana operations.
+    fn scope_key(&self) -> ScopeKey {
+        // 1) If explicit coop/community overrides exist, honour them first.
+        if let Some(coop) = &self.coop_id {
+            ScopeKey::Cooperative(coop.to_string())
+        } else if let Some(comm) = &self.community_id {
+            ScopeKey::Community(comm.to_string())
+        } else if let Some(index) = self.rt.identity_index.as_ref() {
+            // Pass the caller_did by reference
+            index.resolve_scope_key(&self.caller_did)
+        } else if let Some(fid) = self.rt.federation_id.as_ref() {
+            // Fallback to federation scope if runtime context specifies it explicitly
+            ScopeKey::Federation(fid.clone())
+        } else {
+            ScopeKey::Individual(self.caller_did.to_string())
+        }
+    }
 
     pub fn check_resource_authorization(&self, _rt_type: ResourceType, _amt: u64) -> i32 {
         // TODO: Implement actual resource authorization logic
@@ -471,14 +474,11 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         did_ptr: u32,
         did_len: u32,
     ) -> Result<i64, anyhow::Error> {
-        let target_did_obj = if did_len == 0 {
-            self.caller_did.clone()
-        } else {
-            let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-            Did::from_str(&did_str).map_err(|_| anyhow!(HostAbiError::InvalidDIDFormat))?
-        };
+        let host_env = caller.data();
+        let did_str = host_env.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+        let did = Did::from_str(&did_str).map_err(|e| anyhow!(e).context(HostAbiError::InvalidDIDFormat))?;
 
-        match self.rt.mana_repository().get_mana_state(&target_did_obj).await {
+        match self.rt.mana_repository().get_mana_state(&did).await {
             Ok(Some(mana_state)) => Ok(mana_state.current_mana as i64),
             Ok(None) => Ok(0),
             Err(_repo_err) => {
@@ -494,61 +494,50 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         did_len: u32,
         amount: u64,
     ) -> Result<i32, anyhow::Error> {
-        let target_did_obj = if did_len == 0 {
-            self.caller_did.clone()
-        } else {
-            let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-            Did::from_str(&did_str).map_err(|_| anyhow!(HostAbiError::InvalidDIDFormat))?
-        };
+        let host_env = caller.data();
+        let did_str = host_env.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+        let did = Did::from_str(&did_str).map_err(|e| anyhow!(e).context(HostAbiError::InvalidDIDFormat))?;
 
-        let scope_string = format!("did:{}", target_did_obj.user_specific_id());
+        let scope_key = self.scope_key();
+        let scope_str = match scope_key {
+            ScopeKey::Individual(id) => id, // Assumes Did::to_string() was used, includes "did:key:"
+            ScopeKey::Cooperative(id) => format!("coop:{}", id),
+            ScopeKey::Community(id) => format!("comm:{}", id),
+            ScopeKey::Federation(id) => format!("fed:{}", id),
+        };
 
         let token = ScopedResourceToken {
             resource_type: "mana".to_string(),
-            amount,
-            scope: scope_string,
+            scope: scope_str,
+            amount: amount,
             expires_at: None,
             issuer: None,
         };
 
-        match self.rt.policy_enforcer().check_authorization(&target_did_obj, &token).await {
-            Ok(true) => { /* Policy allows, proceed */ }
-            Ok(false) => {
-                return Ok(HostAbiError::ResourceLimitExceeded as i32);
-            }
-            Err(policy_err) => {
-                // Consider mapping specific EconomicsError variants here if needed
-                // log::error!("Policy check_authorization error: {}", policy_err);
-                return Ok(HostAbiError::ResourceLimitExceeded as i32); // Or UnknownError
-            }
+        // Use host_env.rt for policy_enforcer and mana_repository
+        if let Err(e) = host_env.rt.policy_enforcer().check_authorization(&did, &token).await {
+            eprintln!("Policy check error: {:?}", e); // Consider proper logging
+            // TODO: Refine error mapping from policy error to HostAbiError
+            return Err(anyhow!(HostAbiError::ResourceLimitExceeded));
         }
 
-        match self.rt.mana_repository().spend_mana(&target_did_obj, amount).await {
-            Ok(_) => Ok(0i32), // Success
-            Err(e) => { // e is anyhow::Error wrapping the actual ManaRepositoryError which might wrap ManaError
-                // Try to downcast to ManaError first, as it's the most specific one we expect from spend_mana.
-                // ManaRepositoryAdapter::spend_mana returns Result<(), ManaRepositoryError>
-                // ManaRepositoryError itself might be an enum that includes ManaError or other ledger-specific errors.
-                // For now, assuming spend_mana directly returns an error that can be downcast to ManaError if it originates from ManaPool.
-                // If ManaRepositoryError is a complex enum, this downcast logic might need to be more layered.
-                
-                // Attempt to downcast to ManaError directly if the error originated from there.
-                // This specific downcast might fail if `e` is a `ManaRepositoryError` that *isn't* `ManaError::InsufficientMana`.
-                // A better approach is to match on `ManaRepositoryError` if it's an enum.
-                // Assuming `spend_mana` returns `Result<(), anyhow::Error>` where the cause can be `ManaError`.
+        match host_env.rt.mana_repository().spend_mana(&did, amount).await {
+            Ok(_) => Ok(0),
+            Err(e) => {
+                // TODO: Consider more robust error inspection if e is not anyhow::Error directly wrapping ManaError
                 if let Some(mana_err) = e.downcast_ref::<ManaError>() {
                     match mana_err {
                         ManaError::InsufficientMana { .. } => {
-                            // log::warn!("Insufficient mana for DID {}: requested {}, available {}", target_did_obj, requested, available);
-                            return Ok(HostAbiError::InsufficientBalance as i32);
+                            return Err(anyhow!(HostAbiError::InsufficientBalance));
                         }
-                        // Other ManaError variants could be handled here if any
+                        _ => { // Other ManaErrors
+                            eprintln!("Mana spend error (other ManaError): {:?}", mana_err);
+                            return Err(anyhow!(HostAbiError::StorageError)); // Or a more specific error
+                        }
                     }
                 }
-                // Fallback for other types of errors from mana_repository().spend_mana()
-                // or if downcast_ref::<ManaError> fails because 'e' is a different error type.
-                // log::error!("Unknown error during spend_mana for DID {}: {}", target_did_obj, e);
-                Ok(HostAbiError::StorageError as i32) // General storage/repository error
+                eprintln!("Mana spend error (unknown/other): {:?}", e);
+                Err(anyhow!(HostAbiError::StorageError)) // Default for other errors
             }
         }
     }
@@ -671,70 +660,97 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
 
     async fn host_account_get_mana(
         &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
+        _caller: Caller<ConcreteHostEnvironment>,
         _did_ptr: u32,
         _did_len: u32,
-    ) -> Result<i64, anyhow::Error> { Ok(HostAbiError::NotSupported as i32 as i64) }
+    ) -> Result<i64, anyhow::Error> {
+        // For stubs, the DID argument might not be easily usable without reading memory.
+        // The current stub returns NotSupported, which is fine.
+        // If we wanted a more functional stub, we'd need a way to get a Did.
+        // However, the test shims bypass this entirely.
+        Ok(HostAbiError::NotSupported as i32 as i64)
+    }
 
     async fn host_account_spend_mana(
         &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _did_ptr: u32,
+        _caller: Caller<ConcreteHostEnvironment>,
+        _did_ptr: u32, // The DID of the account to spend from
         _did_len: u32,
         _amount: u64,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
+    ) -> Result<i32, anyhow::Error> {
+        // This is a stub, so it doesn't execute real logic.
+        // It just needs to match the signature.
+        // The actual testing of scope resolution happens via the test shims
+        // and the full_host_abi implementation.
+        Ok(HostAbiError::NotSupported as i32)
+    }
 }
 
 #[cfg(test)]
 impl ConcreteHostEnvironment {
-    pub async fn test_host_account_get_mana(&self, did: &Did) -> Result<i64, HostAbiError> {
-        // This logic is similar to the main host_account_get_mana but without Caller interaction
-        // and directly returns HostAbiError for simplicity in tests.
+    pub async fn test_host_account_get_mana(
+        &self,
+        did: &Did, // The DID whose mana is being fetched
+    ) -> Result<i64, HostAbiError> {
+        // rt is Arc<RuntimeContext<InMemoryManaLedger>>
+        // The test shim ConcreteHostEnvironment uses InMemoryManaLedger
         match self.rt.mana_repository().get_mana_state(did).await {
             Ok(Some(state)) => Ok(state.current_mana as i64),
-            Ok(None) => Ok(0), // Default to 0 if no mana state exists
-            Err(_repo_err) => {
-                // log::error!("Test: Error fetching mana state for {}: {}", did, _repo_err);
+            Ok(None) => Ok(0), // Or perhaps an error if DID not found / no state
+            Err(e) => {
+                eprintln!("Test shim get_mana_state error: {:?}", e);
                 Err(HostAbiError::StorageError)
             }
         }
     }
 
-    pub async fn test_host_account_spend_mana(&self, did: &Did, amount: u64) -> Result<i32, HostAbiError> {
-        // This logic is similar to the main host_account_spend_mana but without Caller interaction
-        // and directly returns HostAbiError for simplicity in tests.
-        let scope_str = format!("did:{}", did.user_specific_id()); // Simplified scope
+    pub async fn test_host_account_spend_mana(
+        &self,
+        did: &Did, // The DID of the account to spend from
+        amount: u64,
+    ) -> Result<i32, HostAbiError> {
+        // Determine scope based on the ConcreteHostEnvironment's context
+        let scope_key = self.scope_key(); // Uses self.coop_id, self.community_id, self.caller_did
+        let scope_str = match scope_key {
+            ScopeKey::Individual(id) => id, // Assumes Did::to_string() was used, includes "did:key:"
+            ScopeKey::Cooperative(id) => format!("coop:{}", id),
+            ScopeKey::Community(id) => format!("comm:{}", id),
+            ScopeKey::Federation(id) => format!("fed:{}", id),
+        };
+
         let token = ScopedResourceToken {
             resource_type: "mana".to_string(),
-            amount,
-            scope: scope_str,
+            scope: scope_str, // This scope is for policy rules (e.g. coop X can spend Y)
+            amount: amount,
             expires_at: None,
             issuer: None,
         };
 
-        match self.rt.policy_enforcer().check_authorization(did, &token).await {
-            Ok(true) => { /* Policy allows, proceed */ }
-            Ok(false) => return Ok(HostAbiError::ResourceLimitExceeded as i32),
-            Err(_policy_err) => {
-                // log::error!("Test: Policy check_authorization error: {}", _policy_err);
-                // In tests, we might want to distinguish this from other errors more clearly if needed.
-                return Ok(HostAbiError::UnknownError as i32); // Or a specific policy error if defined in HostAbiError
-            }
+        // The 'did' parameter here is WHO is attempting the spend.
+        // The 'token.scope' is ABOUT WHAT SCOPE the policy applies to.
+        if let Err(e) = self.rt.policy_enforcer().check_authorization(did, &token).await {
+            eprintln!("Test shim policy check error: {:?}", e);
+            // TODO: Refine error mapping from policy error to HostAbiError
+            return Err(HostAbiError::ResourceLimitExceeded);
         }
 
         match self.rt.mana_repository().spend_mana(did, amount).await {
-            Ok(_) => Ok(0i32), // Success
-            Err(e) => { // e is anyhow::Error from the repository
+            Ok(_) => Ok(0),
+            Err(e) => {
                 if let Some(mana_err) = e.downcast_ref::<ManaError>() {
                     match mana_err {
                         ManaError::InsufficientMana { .. } => {
-                            return Ok(HostAbiError::InsufficientBalance as i32);
+                            return Err(HostAbiError::InsufficientBalance);
                         }
-                        // Other specific ManaError variants could be handled here
+                        _ => {
+                            eprintln!("Test shim spend_mana other ManaError: {:?}", mana_err);
+                        }
                     }
+                } else {
+                    eprintln!("Test shim spend_mana unknown error: {:?}", e);
                 }
-                // log::error!("Test: Unknown error during spend_mana: {}", e);
-                Ok(HostAbiError::StorageError as i32) // Fallback for other repo errors
+                // Fallback for other ManaErrors or if downcast fails
+                Err(HostAbiError::StorageError)
             }
         }
     }
