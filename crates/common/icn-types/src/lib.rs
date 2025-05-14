@@ -15,12 +15,8 @@ pub mod trust;
 
 pub use error::{CryptoError, DagError, IdentityError, TrustError};
 pub use runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
-// pub use dag_store::{DagStore, SharedDagStore, StorageError as DagStorageError}; // Still problematic, removing
 pub use mesh::{JobStatus as MeshJobStatus, MeshJob, MeshJobParams, QoSProfile, WorkflowType};
-// pub use node_config::{NodeConfig, StorageConfig, NetworkConfig, ReputationConfig, LoggingConfig};
 pub use org::{CommunityId, CooperativeId};
-// pub use p2p::{PeerId, Multiaddr};
-// pub use reputation::{ReputationRecord, ReputationUpdateEvent, ReputationError};
 pub use receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 
 // Corrected jobs re-export to only include types actually defined in icn_types::jobs

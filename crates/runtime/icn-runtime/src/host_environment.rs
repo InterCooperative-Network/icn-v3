@@ -10,6 +10,13 @@ use icn_types::org::{CommunityId, CooperativeId};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
+use icn_identity::ScopeKey;
+// Temp: Comment out ManaRepositoryReader import due to unresolved path
+// use icn_economics::mana::ManaRepositoryReader; 
+use icn_economics::ResourcePolicyEnforcer;
+use std::str::FromStr;
+use icn_economics::ScopedResourceToken;
+use icn_economics::mana::ManaError;
 
 /// Concrete implementation of the host environment for WASM execution
 #[derive(Clone)]
@@ -191,6 +198,7 @@ impl ConcreteHostEnvironment {
 }
 
 #[cfg(feature = "full_host_abi")]
+#[async_trait::async_trait]
 impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     // **I. Job & Workflow Information **
     fn host_job_get_id(
@@ -457,57 +465,97 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
 
     // ---------------- Mana stubs ----------------
 
-    fn host_account_get_mana(
+    async fn host_account_get_mana(
         &self,
         mut caller: Caller<'_, ConcreteHostEnvironment>,
         did_ptr: u32,
         did_len: u32,
     ) -> Result<i64, anyhow::Error> {
-        let scope_key_val = if did_len == 0 {
-            // self.scope_key()
-            ScopeKey::Individual(self.caller_did.to_string())
+        let target_did_obj = if did_len == 0 {
+            self.caller_did.clone()
         } else {
             let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-            ScopeKey::Individual(did_str)
+            Did::from_str(&did_str).map_err(|_| anyhow!(HostAbiError::InvalidDIDFormat))?
         };
 
-        let mut mana_mgr = self
-            .rt
-            .mana_manager
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        let balance_opt = mana_mgr.balance(&scope_key_val);
-        Ok(balance_opt.unwrap_or(0) as i64)
+        match self.rt.mana_repository().get_mana_state(&target_did_obj).await {
+            Ok(Some(mana_state)) => Ok(mana_state.current_mana as i64),
+            Ok(None) => Ok(0),
+            Err(_repo_err) => {
+                Err(anyhow!(HostAbiError::StorageError))
+            }
+        }
     }
 
-    fn host_account_spend_mana(
+    async fn host_account_spend_mana(
         &self,
         mut caller: Caller<'_, ConcreteHostEnvironment>,
         did_ptr: u32,
         did_len: u32,
         amount: u64,
     ) -> Result<i32, anyhow::Error> {
-        let scope_key_val = if did_len == 0 {
-            // self.scope_key()
-            ScopeKey::Individual(self.caller_did.to_string())
+        let target_did_obj = if did_len == 0 {
+            self.caller_did.clone()
         } else {
             let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-            ScopeKey::Individual(did_str)
+            Did::from_str(&did_str).map_err(|_| anyhow!(HostAbiError::InvalidDIDFormat))?
         };
 
-        let mut mana_mgr = self
-            .rt
-            .mana_manager
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        match mana_mgr.spend(&scope_key_val, amount) {
-            Ok(_) => Ok(0),
-            Err(_) => Ok(HostAbiError::ResourceLimitExceeded as i32),
+        let scope_string = format!("did:{}", target_did_obj.user_specific_id());
+
+        let token = ScopedResourceToken {
+            resource_type: "mana".to_string(),
+            amount,
+            scope: scope_string,
+            expires_at: None,
+            issuer: None,
+        };
+
+        match self.rt.policy_enforcer().check_authorization(&target_did_obj, &token).await {
+            Ok(true) => { /* Policy allows, proceed */ }
+            Ok(false) => {
+                return Ok(HostAbiError::ResourceLimitExceeded as i32);
+            }
+            Err(policy_err) => {
+                // Consider mapping specific EconomicsError variants here if needed
+                // log::error!("Policy check_authorization error: {}", policy_err);
+                return Ok(HostAbiError::ResourceLimitExceeded as i32); // Or UnknownError
+            }
+        }
+
+        match self.rt.mana_repository().spend_mana(&target_did_obj, amount).await {
+            Ok(_) => Ok(0i32), // Success
+            Err(e) => { // e is anyhow::Error wrapping the actual ManaRepositoryError which might wrap ManaError
+                // Try to downcast to ManaError first, as it's the most specific one we expect from spend_mana.
+                // ManaRepositoryAdapter::spend_mana returns Result<(), ManaRepositoryError>
+                // ManaRepositoryError itself might be an enum that includes ManaError or other ledger-specific errors.
+                // For now, assuming spend_mana directly returns an error that can be downcast to ManaError if it originates from ManaPool.
+                // If ManaRepositoryError is a complex enum, this downcast logic might need to be more layered.
+                
+                // Attempt to downcast to ManaError directly if the error originated from there.
+                // This specific downcast might fail if `e` is a `ManaRepositoryError` that *isn't* `ManaError::InsufficientMana`.
+                // A better approach is to match on `ManaRepositoryError` if it's an enum.
+                // Assuming `spend_mana` returns `Result<(), anyhow::Error>` where the cause can be `ManaError`.
+                if let Some(mana_err) = e.downcast_ref::<ManaError>() {
+                    match mana_err {
+                        ManaError::InsufficientMana { .. } => {
+                            // log::warn!("Insufficient mana for DID {}: requested {}, available {}", target_did_obj, requested, available);
+                            return Ok(HostAbiError::InsufficientBalance as i32);
+                        }
+                        // Other ManaError variants could be handled here if any
+                    }
+                }
+                // Fallback for other types of errors from mana_repository().spend_mana()
+                // or if downcast_ref::<ManaError> fails because 'e' is a different error type.
+                // log::error!("Unknown error during spend_mana for DID {}: {}", target_did_obj, e);
+                Ok(HostAbiError::StorageError as i32) // General storage/repository error
+            }
         }
     }
 }
 
 #[cfg(not(feature = "full_host_abi"))]
+#[async_trait::async_trait]
 impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
     fn host_job_get_id(
         &self,

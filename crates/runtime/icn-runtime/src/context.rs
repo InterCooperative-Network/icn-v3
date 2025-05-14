@@ -4,8 +4,8 @@ use icn_identity::{KeyPair, TrustValidator}; // Removed Did, KeyPair as IcnKeyPa
 // use icn_metrics::runtime::RuntimeMetrics;
 // use icn_reputation_integration::{HttpReputationUpdater, ReputationUpdater}; // Removed as per clippy
 // use icn_mesh_protocol::MeshJobServiceConfig; // Removed as per clippy (grep showed only import line)
-use icn_economics::{Economics, LedgerKey, mana::ManaManager, ResourceAuthorizationPolicy}; // ResourceType removed
-use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
+use icn_economics::{Economics, LedgerKey, mana::ManaManager, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter}; // ResourceType removed
+use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, ManaState};
 use icn_identity::IdentityIndex;
 use icn_types::dag_store::SharedDagStore;
 use icn_types::mesh::MeshJob;
@@ -64,6 +64,12 @@ pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLe
     /// Mana regenerator
     pub mana_regenerator: Option<Arc<ManaRegenerator<L>>>,
 
+    /// Policy enforcer for the new economics system
+    pub policy_enforcer: Arc<ResourcePolicyEnforcer>,
+
+    /// Mana repository for the new economics system
+    pub mana_repository: Arc<ManaRepositoryAdapter<L>>,
+
     /// Simple FIFO queue of raw interactive input messages pushed by the host.
     pub interactive_input_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
 
@@ -86,9 +92,13 @@ pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLe
     pub mana_tick_interval: Option<Duration>,
 }
 
-impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
+impl<L: ManaLedger + Send + Sync + 'static + Default> RuntimeContext<L> {
     /// Create a new context with default values
     pub fn new() -> Self {
+        let default_ledger = Arc::new(L::default());
+        let mana_repo_adapter = Arc::new(ManaRepositoryAdapter::new(default_ledger.clone()));
+        let boxed_mana_repo_adapter_for_enforcer = Box::new(ManaRepositoryAdapter::new(default_ledger));
+        
         Self {
             dag_store: Arc::new(SharedDagStore::new()),
             receipt_store: Arc::new(SharedDagStore::new()),
@@ -100,6 +110,8 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
             mana_regenerator: None,
+            policy_enforcer: Arc::new(ResourcePolicyEnforcer::new(boxed_mana_repo_adapter_for_enforcer)),
+            mana_repository: mana_repo_adapter,
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
             identity_index: None,
@@ -113,6 +125,10 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
 
     /// Create a new context with a specific DAG store
     pub fn with_dag_store(dag_store: Arc<SharedDagStore>) -> Self {
+        let default_ledger = Arc::new(L::default());
+        let mana_repo_adapter = Arc::new(ManaRepositoryAdapter::new(default_ledger.clone()));
+        let boxed_mana_repo_adapter_for_enforcer = Box::new(ManaRepositoryAdapter::new(default_ledger));
+        
         Self {
             dag_store,
             receipt_store: Arc::new(SharedDagStore::new()),
@@ -124,6 +140,8 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
             pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
             mana_manager: Arc::new(Mutex::new(ManaManager::new())),
             mana_regenerator: None,
+            policy_enforcer: Arc::new(ResourcePolicyEnforcer::new(boxed_mana_repo_adapter_for_enforcer)),
+            mana_repository: mana_repo_adapter,
             interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
             execution_status: ExecutionStatus::Running,
             identity_index: None,
@@ -201,9 +219,18 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
     pub fn mesh_job_service_url(&self) -> Option<&String> {
         self.mesh_job_service_url.as_ref()
     }
+
+    /// Accessors for new components
+    pub fn policy_enforcer(&self) -> Arc<ResourcePolicyEnforcer> {
+        self.policy_enforcer.clone()
+    }
+
+    pub fn mana_repository(&self) -> Arc<ManaRepositoryAdapter<L>> {
+        self.mana_repository.clone()
+    }
 }
 
-impl<L: ManaLedger + Send + Sync + 'static> Default for RuntimeContext<L> {
+impl<L: ManaLedger + Send + Sync + 'static + Default> Default for RuntimeContext<L> {
     fn default() -> Self {
         Self::new()
     }
@@ -224,9 +251,11 @@ pub struct RuntimeContextBuilder<L: ManaLedger + Send + Sync + 'static = InMemor
     mana_regenerator: Option<Arc<ManaRegenerator<L>>>,
     reputation_scoring_config: Option<ReputationScoringConfig>,
     mana_tick_interval: Option<Duration>,
+    policy_enforcer: Option<Arc<ResourcePolicyEnforcer>>,
+    mana_repository: Option<Arc<ManaRepositoryAdapter<L>>>,
 }
 
-impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
+impl<L: ManaLedger + Send + Sync + 'static + Default> RuntimeContextBuilder<L> {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
@@ -243,6 +272,8 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
             mana_regenerator: None,
             reputation_scoring_config: None,
             mana_tick_interval: None,
+            policy_enforcer: None,
+            mana_repository: None,
         }
     }
 
@@ -324,22 +355,38 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
         self
     }
 
+    pub fn with_policy_enforcer(mut self, enforcer: Arc<ResourcePolicyEnforcer>) -> Self {
+        self.policy_enforcer = Some(enforcer);
+        self
+    }
+
+    pub fn with_mana_repository(mut self, repository: Arc<ManaRepositoryAdapter<L>>) -> Self {
+        self.mana_repository = Some(repository);
+        self
+    }
+
     /// Build the RuntimeContext
     pub fn build(self) -> RuntimeContext<L> {
-        let default_context = RuntimeContext::<L>::new();
+        let default_ledger_for_builder = Arc::new(L::default());
+        let default_mana_repo_adapter_for_builder = Arc::new(ManaRepositoryAdapter::new(default_ledger_for_builder.clone()));
+        let default_boxed_repo_for_enforcer = Box::new(ManaRepositoryAdapter::new(default_ledger_for_builder));
+        let default_policy_enforcer_for_builder = Arc::new(ResourcePolicyEnforcer::new(default_boxed_repo_for_enforcer));
+
         RuntimeContext {
-            dag_store: self.dag_store.unwrap_or(default_context.dag_store),
-            receipt_store: self.receipt_store.unwrap_or(default_context.receipt_store),
+            dag_store: self.dag_store.unwrap_or_else(|| Arc::new(SharedDagStore::new())),
+            receipt_store: self.receipt_store.unwrap_or_else(|| Arc::new(SharedDagStore::new())),
             federation_id: self.federation_id,
             executor_id: self.executor_id,
             trust_validator: self.trust_validator,
-            economics: self.economics.unwrap_or(default_context.economics),
-            resource_ledger: default_context.resource_ledger,
-            pending_mesh_jobs: default_context.pending_mesh_jobs,
-            mana_manager: default_context.mana_manager,
+            economics: self.economics.unwrap_or_else(|| Arc::new(Economics::new(ResourceAuthorizationPolicy::default()))),
+            resource_ledger: Arc::new(RwLock::new(HashMap::new())),
+            pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
+            mana_manager: Arc::new(Mutex::new(ManaManager::new())),
             mana_regenerator: self.mana_regenerator,
-            interactive_input_queue: default_context.interactive_input_queue,
-            execution_status: default_context.execution_status,
+            policy_enforcer: self.policy_enforcer.unwrap_or(default_policy_enforcer_for_builder),
+            mana_repository: self.mana_repository.unwrap_or(default_mana_repo_adapter_for_builder),
+            interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
+            execution_status: ExecutionStatus::Running,
             identity_index: self.identity_index,
             identity: self.identity,
             reputation_service_url: self.reputation_service_url,

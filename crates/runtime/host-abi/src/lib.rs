@@ -22,6 +22,7 @@ use serde::Serialize;
 use thiserror::Error;
 // use wasmtime::{Caller, Linker};
 use anyhow::Error as AnyhowError;
+use async_trait::async_trait;
 
 // Corrected import: only include types that exist in icn_types::mesh
 use icn_types::mesh::{
@@ -143,6 +144,8 @@ pub enum HostAbiError {
     QueueFull,
     #[error("Channel closed")]
     ChannelClosed,
+    #[error("Insufficient balance")]
+    InsufficientBalance,
 }
 
 /// Represents a CID (Content Identifier) for use across the ABI.
@@ -342,7 +345,8 @@ pub fn vec_from_abi_bytes(abi_bytes: AbiBytes) -> Result<Vec<u8>, HostAbiError> 
 // Memory access uses Caller::get_export("memory").and_then(|mem| mem.into_memory())
 // Caller provides access to host state via caller.data() or caller.data_mut()
 
-pub trait MeshHostAbi<T: Sized> {
+#[async_trait]
+pub trait MeshHostAbi<T: Send + Sync + 'static>: Send + Sync + 'static {
     // Generic over Host State T
     // **I. Job & Workflow Information **
 
@@ -667,7 +671,7 @@ pub trait MeshHostAbi<T: Sized> {
     ///
     /// # Returns
     /// * `i64` – current mana balance (can be > i32::MAX). Negative `HostAbiError` codes on failure.
-    fn host_account_get_mana(
+    async fn host_account_get_mana(
         &self,
         caller: wasmtime::Caller<T>,
         did_ptr: u32,
@@ -676,7 +680,7 @@ pub trait MeshHostAbi<T: Sized> {
 
     /// Attempts to deduct `amount` mana units from the specified DID/org.
     /// Returns 0 on success or `HostAbiError::InsufficientResources` style negative codes on failure.
-    fn host_account_spend_mana(
+    async fn host_account_spend_mana(
         &self,
         caller: wasmtime::Caller<T>,
         did_ptr: u32,

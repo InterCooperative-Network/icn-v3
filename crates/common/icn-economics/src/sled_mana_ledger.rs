@@ -235,8 +235,8 @@ mod tests {
         let state1 = ManaState {
             current_mana: 100,
             max_mana: 200,
-            regen_rate_per_epoch: 10.0,
             last_updated_epoch: 1,
+            regen_rate_per_epoch: 10.0,
         };
 
         ledger.update_mana_state(&did1, state1.clone()).await?;
@@ -293,8 +293,8 @@ mod tests {
         let initial_state = ManaState {
             current_mana: 50,
             max_mana: 100,
-            regen_rate_per_epoch: 5.0,
             last_updated_epoch: 0,
+            regen_rate_per_epoch: 5.0,
         };
         ledger
             .update_mana_state(&did1, initial_state.clone())
@@ -303,8 +303,8 @@ mod tests {
         let updated_mana_state = ManaState {
             current_mana: 75,
             max_mana: 100,
+            last_updated_epoch: 1,
             regen_rate_per_epoch: 5.0,
-            last_updated_epoch: 1, // Simulate an epoch update
         };
         ledger
             .update_mana_state(&did1, updated_mana_state.clone())
@@ -312,7 +312,9 @@ mod tests {
 
         let retrieved_state = ledger.get_mana_state(&did1).await?.unwrap();
         assert_eq!(retrieved_state.current_mana, 75);
+        assert_eq!(retrieved_state.max_mana, 100);
         assert_eq!(retrieved_state.last_updated_epoch, 1);
+        assert_eq!(retrieved_state.regen_rate_per_epoch, 5.0);
         Ok(())
     }
 }
