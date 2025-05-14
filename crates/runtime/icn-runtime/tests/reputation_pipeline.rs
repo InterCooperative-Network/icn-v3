@@ -1,23 +1,18 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use chrono::Utc;
+use httpmock::{Method, MockServer};
 use icn_identity::{Did, KeyPair};
-use icn_runtime::MemStorage; // Corrected import path
-use icn_runtime::{
-    reputation_integration::{HttpReputationUpdater, ReputationScoringConfig},
-    Runtime, RuntimeContextBuilder,
-};
+use icn_runtime::reputation_integration::{HttpReputationUpdater, NoopReputationUpdater};
+use icn_runtime::{Runtime, RuntimeContext, RuntimeContextBuilder, MemStorage, InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
+use icn_types::mesh::{JobStatus as IcnJobStatus, MeshExecutionReceipt};
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
-use std::sync::Arc;
-// Revert to minimal httpmock import for core items used broadly
-use httpmock::{Method::POST, MockServer};
-// serde_json for predicate body parsing will be used via its own use statement or fully qualified if not present
-use icn_runtime::config::RuntimeConfig;
-use icn_runtime::metrics;
-use icn_runtime::reputation_integration::ReputationUpdater as _;
-use icn_types::dag_store::SharedDagStore;
 use icn_types::VerifiableReceipt;
 use serde_json::json;
 use std::str::FromStr;
-use url::Url;
+use std::sync::Arc;
+use icn_types::dag_store::SharedDagStore;
+use icn_runtime::metrics;
 
 // Helper function to create a basic, signed RuntimeExecutionReceipt
 // This might need to be more sophisticated or use runtime.issue_receipt if direct signing is complex.
@@ -75,14 +70,18 @@ async fn test_anchor_receipt_triggers_reputation_submission_success() -> Result<
     ));
 
     let dag_store = Arc::new(SharedDagStore::new());
+    let mana_ledger = Arc::new(InMemoryManaLedger::new());
+    let policy = RegenerationPolicy::FixedRatePerTick(1);
+    let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
-    let context = RuntimeContextBuilder::new()
+    let context = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_identity(runtime_identity_keypair.clone())
         .with_executor_id(runtime_did.to_string())
         .with_dag_store(dag_store.clone())
+        .with_mana_regenerator(mana_regenerator.clone())
         .build();
 
-    let runtime = Runtime::with_context(Arc::new(MemStorage::default()), Arc::new(context))
+    let runtime = Runtime::<InMemoryManaLedger>::with_context(Arc::new(MemStorage::default()), Arc::new(context))
         .with_reputation_updater(http_reputation_updater.clone());
 
     let expected_partial_body = json!({
@@ -126,14 +125,18 @@ async fn test_anchor_receipt_reputation_submission_http_500() -> Result<()> {
     ));
 
     let dag_store = Arc::new(SharedDagStore::new());
+    let mana_ledger = Arc::new(InMemoryManaLedger::new());
+    let policy = RegenerationPolicy::FixedRatePerTick(1);
+    let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
-    let context = RuntimeContextBuilder::new()
+    let context = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_identity(runtime_identity_keypair.clone())
         .with_executor_id(runtime_did.to_string())
         .with_dag_store(dag_store.clone())
+        .with_mana_regenerator(mana_regenerator.clone())
         .build();
 
-    let runtime = Runtime::with_context(Arc::new(MemStorage::default()), Arc::new(context))
+    let runtime = Runtime::<InMemoryManaLedger>::with_context(Arc::new(MemStorage::default()), Arc::new(context))
         .with_reputation_updater(http_reputation_updater.clone());
 
     let rep_submission_mock = server
@@ -178,14 +181,18 @@ async fn test_anchor_receipt_reputation_submission_client_error() -> Result<()> 
     ));
 
     let dag_store = Arc::new(SharedDagStore::new());
+    let mana_ledger = Arc::new(InMemoryManaLedger::new());
+    let policy = RegenerationPolicy::FixedRatePerTick(1);
+    let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
-    let context = RuntimeContextBuilder::new()
+    let context = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_identity(runtime_identity_keypair.clone())
         .with_executor_id(runtime_did.to_string())
         .with_dag_store(dag_store.clone())
+        .with_mana_regenerator(mana_regenerator.clone())
         .build();
 
-    let runtime = Runtime::with_context(Arc::new(MemStorage::default()), Arc::new(context))
+    let runtime = Runtime::<InMemoryManaLedger>::with_context(Arc::new(MemStorage::default()), Arc::new(context))
         .with_reputation_updater(reputation_updater.clone());
 
     let initial_client_errors = metrics::REPUTATION_SUBMISSION_CLIENT_ERRORS

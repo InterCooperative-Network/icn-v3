@@ -1,34 +1,18 @@
 #![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use icn_economics::{Economics, ResourceAuthorizationPolicy};
-use icn_economics::{LedgerKey, ResourceType};
-use icn_identity::KeyPair;
+use icn_economics::mana::{InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
+use icn_economics::{Economics, LedgerKey, ResourceAuthorizationPolicy, ResourceType};
+use icn_identity::{Did, KeyPair};
 use icn_runtime::{
-    Proposal, ProposalState, QuorumStatus, RuntimeContext, RuntimeError, RuntimeStorage,
+    MemStorage, Proposal, ProposalState, QuorumStatus, Runtime,
+    RuntimeContext, RuntimeContextBuilder, RuntimeError, RuntimeStorage, VmContext,
 };
-use icn_runtime::{Runtime, RuntimeContextBuilder, VmContext};
 use icn_types::dag_store::SharedDagStore;
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use std::collections::HashMap;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use wat::parse_str;
-use icn_identity::{Did, KeyPair};
-use icn_runtime::{
-    MemStorage,
-    Runtime,
-    RuntimeContext,
-    RuntimeContextBuilder,
-    RuntimeError,
-    RuntimeStorage,
-};
-use icn_runtime::{Runtime, RuntimeContextBuilder, VmContext};
-use icn_runtime::{InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
 
 /// Mock storage for testing
 #[derive(Clone, Default)]
@@ -134,7 +118,7 @@ async fn resource_usage_recording() -> Result<()> {
     let did = keypair.did.clone();
 
     // Set up runtime context
-    let ctx = RuntimeContextBuilder::new()
+    let ctx = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_dag_store(Arc::new(SharedDagStore::new()))
         .with_executor_id(did.to_string())
         .build();
@@ -208,7 +192,7 @@ async fn test_resource_enforcement() -> Result<()> {
     // Initialize context
     let test_did = "did:icn:test-executor";
     let test_keypair = KeyPair::generate();
-    let mut builder = RuntimeContextBuilder::new()
+    let mut builder = RuntimeContextBuilder::<InMemoryManaLedger>::new()
         .with_executor_id(test_did.to_string())
         .with_identity(test_keypair)
         .with_economics(economics);
@@ -250,7 +234,7 @@ async fn test_resource_enforcement() -> Result<()> {
     Ok(())
 }
 
-fn setup_runtime_with_mana_ledger() -> (Arc<Runtime>, Arc<InMemoryManaLedger>) {
+fn setup_runtime_with_mana_ledger() -> (Arc<Runtime<InMemoryManaLedger>>, Arc<InMemoryManaLedger>) {
     let storage = Arc::new(MemStorage::new());
     let node_keypair = KeyPair::generate();
     let node_did = node_keypair.did.clone();
@@ -265,11 +249,11 @@ fn setup_runtime_with_mana_ledger() -> (Arc<Runtime>, Arc<InMemoryManaLedger>) {
     let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
     let context = Arc::new(
-        RuntimeContextBuilder::<InMemoryManaLedger>::new() // Add generic type here
+        RuntimeContextBuilder::<InMemoryManaLedger>::new()
             .with_identity(node_keypair.clone())
             .with_executor_id(node_did.to_string())
-            .with_mana_regenerator(mana_regenerator.clone()) // Add ManaRegenerator
-            .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new())) // Add DagStore
+            .with_mana_regenerator(mana_regenerator.clone())
+            .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new()))
             .build(),
     );
 

@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use icn_economics::mana::{InMemoryManaLedger, RegenerationPolicy, ManaRegenerator};
-use icn_identity::{Did, KeyPair, ScopeKey};
+use icn_economics::mana::{InMemoryManaLedger /*, RegenerationPolicy, ManaRegenerator*/};
+use icn_identity::{KeyPair, ScopeKey /*, Did*/};
 use icn_runtime::{
     Proposal,
     Runtime, RuntimeContextBuilder, RuntimeStorage, MemStorage, VmContext,
@@ -79,6 +79,23 @@ impl RuntimeStorage for MockRuntimeStorage {
         self.anchored_cids.lock().unwrap().push(cid.to_string());
         Ok(format!("anchor-{}", cid))
     }
+}
+
+fn create_basic_runtime_with_storage() -> (Runtime<InMemoryManaLedger>, Arc<MockRuntimeStorage>) {
+    let storage = Arc::new(MockRuntimeStorage::default());
+    let node_keypair = KeyPair::generate();
+    let node_did = node_keypair.did.clone();
+    let mana_ledger = Arc::new(InMemoryManaLedger::new());
+
+    let context = RuntimeContextBuilder::<InMemoryManaLedger>::new()
+        .with_identity(node_keypair.clone())
+        .with_executor_id(node_did.to_string())
+        .with_dag_store(Arc::new(icn_types::dag_store::SharedDagStore::new()))
+        .with_mana_ledger(mana_ledger)
+        .build();
+
+    let runtime = Runtime::<InMemoryManaLedger>::with_context(storage.clone(), Arc::new(context));
+    (runtime, storage)
 }
 
 #[tokio::test]

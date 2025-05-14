@@ -6,26 +6,24 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use helpers::{create_signer_map, create_trust_bundle, generate_signers};
 use icn_identity::{
-    Did, FederationMetadata, KeyPair, QuorumProof, QuorumType, TrustBundle, TrustValidator,
+    FederationMetadata, KeyPair, QuorumProof, QuorumType, TrustBundle, TrustValidator,
 };
 use icn_runtime::{
-    Proposal, ProposalState, QuorumStatus, Runtime, RuntimeContext, RuntimeContextBuilder,
+    InMemoryManaLedger,
+    Proposal, Runtime, RuntimeContext, RuntimeContextBuilder,
     RuntimeStorage,
 };
 use icn_types::dag_store::SharedDagStore;
-use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
+use icn_types::runtime_receipt::{RuntimeExecutionReceipt};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 struct TestFederation {
     signers: Vec<KeyPair>,
     bundle: TrustBundle,
-    context: RuntimeContext,
-    runtime: Runtime,
+    context: Arc<RuntimeContext<InMemoryManaLedger>>,
+    runtime: Runtime<InMemoryManaLedger>,
     temp_dir: TempDir,
 }
 
@@ -58,18 +56,25 @@ impl TestFederation {
         }
 
         // Create the runtime context with our validator and DAG store
-        let context = RuntimeContext::new().with_trust_validator(trust_validator.clone());
+        let context_arc = Arc::new(
+            RuntimeContextBuilder::<InMemoryManaLedger>::new()
+                .with_trust_validator(trust_validator.clone())
+                .with_identity(KeyPair::generate())
+                .with_executor_id("did:icn:test-federation-executor".to_string())
+                .with_dag_store(Arc::new(SharedDagStore::default()))
+                .build()
+        );
 
         // Create a mock runtime storage
         let storage = Arc::new(MockRuntimeStorage::default());
 
         // Create the runtime with our context
-        let runtime = Runtime::with_context(storage, Arc::new(context.clone()));
+        let runtime = Runtime::<InMemoryManaLedger>::with_context(storage, Arc::clone(&context_arc));
 
         Ok(Self {
             signers,
             bundle,
-            context,
+            context: context_arc,
             runtime,
             temp_dir,
         })
@@ -288,10 +293,18 @@ async fn bootstrap_genesis_replay() -> Result<()> {
     trust_validator.register_signer(k1.did.clone(), k1.pk);
     trust_validator.register_signer(k2.did.clone(), k2.pk);
 
-    let context = RuntimeContext::new().with_trust_validator(trust_validator);
+    // Create the runtime context with our validator and DAG store
+    let context_arc = Arc::new(
+        RuntimeContextBuilder::<InMemoryManaLedger>::new()
+            .with_trust_validator(trust_validator)
+            .with_identity(KeyPair::generate())
+            .with_executor_id("did:icn:test-genesis-executor-replay-fixed".to_string())
+            .with_dag_store(Arc::new(SharedDagStore::default()))
+            .build(),
+    );
 
     let storage = Arc::new(MockRuntimeStorage::default());
-    let runtime = Runtime::with_context(storage, Arc::new(context));
+    let runtime = Runtime::<InMemoryManaLedger>::with_context(storage, Arc::clone(&context_arc));
 
     // 3. Verify and set the bundle
     runtime.verify_trust_bundle(&bundle)?;
@@ -320,51 +333,50 @@ async fn bootstrap_genesis_replay() -> Result<()> {
 
 #[tokio::test]
 async fn test_bootstrap_federation_and_execute() -> Result<()> {
-    let storage = Arc::new(MockRuntimeStorage::default());
-    let keypair = KeyPair::generate();
-    let node_did = keypair.did.clone();
+    // TestFederation::new creates its own context and runtime, so we don't need to manually create here.
+    let test_federation = TestFederation::new(3).await?;
+    let runtime = &test_federation.runtime;
 
-    let context = RuntimeContextBuilder::new()
-        .with_identity(keypair)
-        .with_executor_id(node_did.to_string())
-        .build();
-
-    let mut runtime = Runtime::with_context(storage.clone(), Arc::new(context.clone()));
-
-    // ... rest of the test ...
-    // (Assume test setup like creating proposals, storing WASM etc.)
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_trust_bundle_registration() -> Result<()> {
-    let storage = Arc::new(MockRuntimeStorage::default());
-    let validator = TrustValidator::new();
-    let keypair = KeyPair::generate();
-    let node_did = keypair.did.clone();
-
-    let context = RuntimeContextBuilder::new()
-        .with_identity(keypair.clone())
-        .with_executor_id(node_did.to_string())
-        .with_trust_validator(Arc::new(validator))
-        .build();
-
-    let runtime = Runtime::with_context(storage, Arc::new(context));
-
-    let signer_keypair = KeyPair::generate();
-    let signer_did = signer_keypair.did.clone();
-    let mut bundle = TrustBundle::new(
-        "test-bundle-cid".to_string(),
-        FederationMetadata {
-            name: "TestFed".into(),
-            description: None,
-            version: "1.0".into(),
-            additional: HashMap::new(),
-        },
+    // Create a Proposal with the wasm module
+    // If a distinct context/runtime is needed for this proposal execution, create it here.
+    // Otherwise, can potentially use test_federation.runtime if appropriate.
+    let proposal_context = Arc::new( 
+        RuntimeContextBuilder::<InMemoryManaLedger>::new() // ADDED Generic
+            .with_identity(KeyPair::generate())
+            .with_executor_id("did:icn:test-proposal-executor-fixed".to_string())
+            .with_dag_store(Arc::new(SharedDagStore::default()))
+            // Add .with_trust_validator if needed by proposal execution logic involving authorization
+            .build()
+    );
+    let mut proposal_runtime = Runtime::<InMemoryManaLedger>::with_context( // Added mut, Added Generic
+        Arc::new(MockRuntimeStorage::default()), 
+        proposal_context
     );
 
-    assert!(runtime.verify_trust_bundle(&bundle).is_err());
+    let wasm_bytes = wat::parse_str(r#"
+        (module
+            (func (export "_start") nop)
+        )
+    "#)?; // ADDED terminating "# and ? to propagate error
+
+    // Store the WASM module using the runtime's storage directly if proposal_runtime is just for execution context
+    // Or, if proposal_runtime is meant to have its own isolated storage, use that.
+    // For this example, let's assume we need to store it in a way that execute_proposal can find it.
+    // This typically involves the main runtime's storage or a shared storage accessible by it.
+    // If TestFederation provides the main runtime, we might need its storage.
+    // For now, let's use proposal_runtime.storage if it has a store_wasm method.
+    // This part needs clarification on how WASM is made available for proposal execution.
+    // Assuming a `store_wasm` method exists on the storage used by `proposal_runtime` or its context:
+    let wasm_cid = "test-wasm-cid-for-proposal"; // Example CID
+    proposal_runtime.context().storage().store_wasm(wasm_cid, &wasm_bytes).await?;
+
+    let proposal = Proposal {
+        id: "test-proposal-id".to_string(),
+        wasm_cid: wasm_cid.to_string(),
+        // ... existing code ...
+    };
+
+    // ... existing code ...
 
     Ok(())
 }

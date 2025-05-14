@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use ed25519_dalek::VerifyingKey;
 use icn_core_vm::{ExecutionMetrics as CoreVmExecutionMetrics, ResourceLimits};
-use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, RegenerationPolicy};
+pub use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, RegenerationPolicy};
 use icn_economics::ResourceType;
 use icn_identity::{Did, DidError, KeyPair as IcnKeyPair, TrustBundle, TrustValidationError};
 use icn_mesh_receipts::ExecutionReceipt as MeshExecutionReceipt;

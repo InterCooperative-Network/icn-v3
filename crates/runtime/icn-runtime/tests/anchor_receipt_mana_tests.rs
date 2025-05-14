@@ -11,18 +11,19 @@ use icn_runtime::{
     RuntimeContext,
     RuntimeContextBuilder,
     RuntimeStorage,
+    InMemoryManaLedger, // Added from previous fix
+    RegenerationPolicy, // Added from previous fix
+    ManaRegenerator,    // Added from previous fix
 };
 use icn_types::{
     runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt},
     VerifiableReceipt, // For receipt.cid() and sign_receipt_in_place if used
 };
-use serde_cbor;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use icn_economics::mana::{InMemoryManaLedger, ManaRegenerator, RegenerationPolicy};
 
 // --- Mock Reputation Updater for Mana Deduction ---
 
+/* // Struct is unused
 #[derive(Debug, Clone)]
 struct ManaDeductionCall {
     executor_did: Did,
@@ -30,6 +31,7 @@ struct ManaDeductionCall {
     coop_id: String,
     community_id: String,
 }
+*/
 
 #[derive(Clone, Debug, Default)]
 struct MockManaReputationUpdater {
@@ -95,10 +97,10 @@ fn create_test_runtime_with_mock_updater() -> (Runtime<InMemoryManaLedger>, Arc<
     let runtime_keypair = IcnKeyPair::generate();
     let runtime_did_str = runtime_keypair.did.to_string();
     let mana_ledger = Arc::new(InMemoryManaLedger::new());
-    let policy = RegenerationPolicy::new(1,1.0);
+    let policy = RegenerationPolicy::FixedRatePerTick(1);
     let mana_regenerator = Arc::new(ManaRegenerator::new(mana_ledger.clone(), policy));
 
-    let context = Arc::new(
+    let _context = Arc::new( // Prefixed with _ as it's unused
         RuntimeContextBuilder::<InMemoryManaLedger>::new()
             .with_identity(runtime_keypair) // Runtime's own identity
             .with_executor_id(runtime_did_str) // Runtime's DID as executor (can be overridden in VmContext if needed)

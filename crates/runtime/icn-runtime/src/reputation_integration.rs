@@ -1,12 +1,11 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use chrono::Utc;
 use icn_identity::Did;
-use icn_identity::KeyPair;
 use icn_types::reputation::ReputationRecord;
 use icn_types::runtime_receipt::RuntimeExecutionReceipt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -50,14 +49,14 @@ impl ReputationScoringConfig {
             path_ref
         );
         let text = fs::read_to_string(path_ref).map_err(|e| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Failed to read reputation config file at {:?}: {}",
                 path_ref,
                 e
             )
         })?;
         let config: Self = toml::from_str(&text).map_err(|e| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Failed to parse reputation config from TOML at {:?}: {}",
                 path_ref,
                 e
@@ -105,7 +104,7 @@ struct ManaAdjustmentEvent {
 
 /// This trait allows providing different implementations of reputation update
 /// logic for testing and production environments
-#[async_trait::async_trait]
+#[async_trait]
 pub trait ReputationUpdater: Send + Sync {
     /// Submit a reputation record derived from a runtime execution receipt
     async fn submit_receipt_based_reputation(
@@ -231,7 +230,7 @@ impl HttpReputationUpdater {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ReputationUpdater for HttpReputationUpdater {
     async fn submit_receipt_based_reputation(
         &self,
@@ -330,7 +329,7 @@ impl ReputationUpdater for HttpReputationUpdater {
                     .with_label_values(&[record.subject.as_str(), &err.to_string()]) // Using record.subject as executor_did
                     .inc();
                 // Wrap the original error to return it
-                anyhow::anyhow!("HTTP client error during reputation submission: {}", err)
+                anyhow!("HTTP client error during reputation submission: {}", err)
             })?;
 
         // Process response (removed old metric calls here, handled above)
@@ -471,7 +470,7 @@ impl ReputationUpdater for HttpReputationUpdater {
 /// A no-op implementation for testing or when reputation updates should be disabled
 pub struct NoopReputationUpdater;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ReputationUpdater for NoopReputationUpdater {
     async fn submit_receipt_based_reputation(
         &self,
@@ -503,10 +502,10 @@ mod tests {
     use super::*;
     use crate::metrics;
     use httpmock::MockServer;
-    use icn_types::runtime_receipt::RuntimeExecutionMetrics; // Keep if used
+    use icn_types::runtime_receipt::RuntimeExecutionMetrics;
     use std::sync::{Arc, Mutex};
-    use icn_identity::KeyPair; // RE-ADD for tests
-    use serde_json::json; // RE-ADD for tests
+    use icn_identity::KeyPair;
+    use serde_json::json;
 
     // Helper to calculate expected score delta for tests, mirroring the main logic
     fn calculate_expected_score_delta(
@@ -536,7 +535,7 @@ mod tests {
         // submitted_records_to_service: Arc<Mutex<Vec<ReputationRecord>>>,
     }
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl ReputationUpdater for MockReputationUpdater {
         async fn submit_receipt_based_reputation(
             &self,
