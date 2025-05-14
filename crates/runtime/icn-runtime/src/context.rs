@@ -8,12 +8,14 @@ use icn_economics::{Economics, LedgerKey, mana::ManaManager, ResourceAuthorizati
 use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
 use icn_identity::IdentityIndex;
 use icn_types::dag_store::SharedDagStore;
-use icn_types::mesh::MeshJob;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
+use crate::reputation_integration::ReputationScoringConfig;
+use crate::RuntimeStorage;
+use std::time::Duration;
 
 /// High-level execution state of the currently running job / stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +80,9 @@ pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLe
 
     /// Optional mesh job service URL
     mesh_job_service_url: Option<String>,
+
+    pub reputation_scoring_config: ReputationScoringConfig,
+    pub mana_tick_interval: Option<Duration>,
 }
 
 impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
@@ -100,6 +105,8 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
             identity: None,
             reputation_service_url: None,
             mesh_job_service_url: None,
+            reputation_scoring_config: ReputationScoringConfig::default(),
+            mana_tick_interval: None,
         }
     }
 
@@ -122,6 +129,8 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
             identity: None,
             reputation_service_url: None,
             mesh_job_service_url: None,
+            reputation_scoring_config: ReputationScoringConfig::default(),
+            mana_tick_interval: None,
         }
     }
 
@@ -212,6 +221,8 @@ pub struct RuntimeContextBuilder<L: ManaLedger + Send + Sync + 'static = InMemor
     reputation_service_url: Option<String>,
     mesh_job_service_url: Option<String>,
     mana_regenerator: Option<Arc<ManaRegenerator<L>>>,
+    reputation_scoring_config: Option<ReputationScoringConfig>,
+    mana_tick_interval: Option<Duration>,
 }
 
 impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
@@ -229,6 +240,8 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
             reputation_service_url: None,
             mesh_job_service_url: None,
             mana_regenerator: None,
+            reputation_scoring_config: None,
+            mana_tick_interval: None,
         }
     }
 
@@ -298,6 +311,18 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
         self
     }
 
+    /// Set the reputation scoring config
+    pub fn with_reputation_scoring_config(mut self, config: ReputationScoringConfig) -> Self {
+        self.reputation_scoring_config = Some(config);
+        self
+    }
+
+    /// Set the mana tick interval
+    pub fn with_mana_tick_interval(mut self, interval: Duration) -> Self {
+        self.mana_tick_interval = Some(interval);
+        self
+    }
+
     /// Build the RuntimeContext
     pub fn build(self) -> RuntimeContext<L> {
         let default_context = RuntimeContext::<L>::new();
@@ -318,6 +343,14 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContextBuilder<L> {
             identity: self.identity,
             reputation_service_url: self.reputation_service_url,
             mesh_job_service_url: self.mesh_job_service_url,
+            reputation_scoring_config: self.reputation_scoring_config.unwrap_or_default(),
+            mana_tick_interval: self.mana_tick_interval,
         }
+    }
+}
+
+impl<L: ManaLedger + Send + Sync + Default + 'static> Default for RuntimeContextBuilder<L> {
+    fn default() -> Self {
+        Self::new()
     }
 }

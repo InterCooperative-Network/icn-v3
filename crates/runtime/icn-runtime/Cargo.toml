@@ -56,9 +56,12 @@ wat = "1.0"
 wasm-encoder = "0.31"
 mockito = "1.4"
 sha2 = "0.10"
-multihash = "0.18.1"
+multihash = "0.18"
 httpmock = "0.7"
 url = "2.2"
+icn-proposal-dag = { path = "../icn-proposal-dag" }
+cid = "0.10"
+uuid = "1"
 
 [features]
 # Minimal build excludes heavy host ABI and wasm linker code.
