@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey, SignatureError as Ed25519SignatureError};
 use serde::{Deserialize, Serialize};
 use signature::Verifier;
 use thiserror::Error;
@@ -7,17 +7,23 @@ use thiserror::Error;
 /// Error types for JWS operations
 #[derive(Error, Debug)]
 pub enum JwsError {
-    #[error("Failed to serialize header or payload: {0}")]
+    #[error("Failed to serialize JWS header or payload: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    #[error("Base64 encoding error: {0}")]
+    #[error("Base64 encoding/decoding error: {0}")]
     Base64(#[from] base64::DecodeError),
 
-    #[error("Invalid JWS format")]
-    InvalidFormat,
+    #[error("Invalid JWS structure: expected 3 parts separated by '.', found {actual_parts} parts")]
+    IncorrectJwsPartsCount { actual_parts: usize },
 
-    #[error("Invalid signature")]
-    InvalidSignature,
+    #[error("Invalid detached JWS: payload part was expected to be empty but was not")]
+    PayloadPresentInDetachedJws,
+
+    #[error("Invalid signature length: expected {expected_len} bytes, found {found_len} bytes")]
+    InvalidSignatureLength { expected_len: usize, found_len: usize },
+
+    #[error("Cryptographic signature verification failed: {0}")]
+    CryptoVerification(#[from] Ed25519SignatureError),
 }
 
 /// Result type for JWS operations
@@ -68,8 +74,11 @@ pub fn verify_detached_jws(
 ) -> Result<()> {
     // Split detached JWS into components
     let parts: Vec<&str> = detached_jws.split('.').collect();
-    if parts.len() != 3 || !parts[1].is_empty() {
-        return Err(JwsError::InvalidFormat);
+    if parts.len() != 3 {
+        return Err(JwsError::IncorrectJwsPartsCount { actual_parts: parts.len() });
+    }
+    if !parts[1].is_empty() {
+        return Err(JwsError::PayloadPresentInDetachedJws);
     }
 
     let header_b64 = parts[0];
@@ -80,7 +89,7 @@ pub fn verify_detached_jws(
     let signature_array: &[u8; 64] = signature_bytes
         .as_slice()
         .try_into()
-        .map_err(|_| JwsError::InvalidSignature)?;
+        .map_err(|_| JwsError::InvalidSignatureLength { expected_len: 64, found_len: signature_bytes.len() })?;
     let signature = Signature::from_bytes(signature_array);
 
     // Reconstitute the signing input
@@ -90,5 +99,5 @@ pub fn verify_detached_jws(
     // Verify the signature
     public_key
         .verify(signing_input.as_bytes(), &signature)
-        .map_err(|_| JwsError::InvalidSignature)
+        .map_err(JwsError::from)
 }
