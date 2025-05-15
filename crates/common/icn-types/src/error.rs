@@ -343,8 +343,8 @@ pub enum JobFailureReason {
     #[error("Resource limit exceeded")]
     ResourceLimitExceeded,
 
-    #[error("Job execution failed")]
-    ExecutionError, // Consider ExecutionError(String)
+    #[error("Job execution failed: {0}")]
+    ExecutionError(String),
 
     #[error("Permission denied")]
     PermissionDenied,

@@ -14,6 +14,8 @@ use icn_types::dag_store::DagStore;
 use icn_types::mesh::{JobStatus as IcnJobStatus, MeshJob, MeshJobParams};
 use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 use icn_types::VerifiableReceipt;
+use icn_types::JobFailureReason;
+use icn_mesh_protocol::P2PJobStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -1002,7 +1004,41 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                     }
                     Err(e) => {
                         warn!(job_id = %job.job_id, "Job processing failed: {:?}", e);
-                        // TODO: Implement failure handling (e.g., update job status in storage)
+                        
+                        let reason_str = format!("{:?}", e);
+                        let failure_reason = JobFailureReason::ExecutionError(reason_str);
+                        
+                        let executor_node_did_str = self.config.node_did.clone();
+                        match Did::from_str(&executor_node_did_str) {
+                            Ok(parsed_node_did) => {
+                                let failed_status_update = P2PJobStatus::Failed {
+                                    node_id: parsed_node_did,
+                                    reason: failure_reason,
+                                };
+
+                                // TODO: Implement actual failure reporting mechanism.
+                                // This could involve:
+                                // 1. Finding the JobExecutionContext for this job_id and calling ctx.update_status(failed_status_update).
+                                // 2. Sending an HTTP request to icn-mesh-jobs to mark the job as failed.
+                                // 3. Broadcasting a P2P message with this status update.
+                                error!(
+                                    job_id = %job.job_id,
+                                    status = ?failed_status_update,
+                                    "Job failed. Status constructed. Reporting mechanism is TBD."
+                                );
+                            }
+                            Err(did_parse_err) => {
+                                error!(
+                                    job_id = %job.job_id,
+                                    original_job_error = ?e,
+                                    node_did_parse_error = ?did_parse_err,
+                                    invalid_configured_node_did = %executor_node_did_str,
+                                    "Original job failed. Additionally, the runtime's configured node DID is invalid. Cannot form P2PJobStatus::Failed for reporting."
+                                );
+                                // At this point, we can't report the P2PJobStatus::Failed properly.
+                                // The original job failure still stands.
+                            }
+                        }
                     }
                 }
             } else {
