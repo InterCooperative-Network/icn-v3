@@ -50,7 +50,7 @@ pub enum Opcode {
     },
     CallHost {
         fn_name: String,
-        args: Vec<String>,
+        args_payload: String,
     },
 
     // control flow

@@ -58,10 +58,12 @@ statement = {
     range_statement |
     function_call_statement |
     // specific_id_num_statement | // Diagnostic
+    scenario_def |
+    named_construct_statement |
     any_statement
 }
 
-any_statement = { (identifier | string_literal) ~ (value | block | general_identifier)? ~ (";" | block)? }
+any_statement = { (identifier | string_literal) ~ (value | block | general_identifier)? ~ ";" }
 
 // Organization definition
 organization_def = { "organization" ~ string_literal ~ block }
@@ -108,6 +110,12 @@ process_def = { "process" ~ block }
 
 // Vacancies definition
 vacancies_def = { "vacancies" ~ block }
+
+// Scenario definition (newly added)
+scenario_def = { "scenario" ~ string_literal ~ block }
+
+// Named construct statement (newly added)
+named_construct_statement = { identifier ~ string_literal ~ block }
 
 // Range statement definition (e.g., for budget thresholds)
 range_statement = { "range" ~ number ~ number ~ block }

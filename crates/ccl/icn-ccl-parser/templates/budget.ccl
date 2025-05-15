@@ -3,87 +3,87 @@
 
 // Define the budget scope
 budget "cooperative_budget" {
-  description "Annual cooperative budget allocation and spending rules"
-  version "1.0.0"
-  currency "USD"
-  period "annual"
+  description "Annual cooperative budget allocation and spending rules";
+  version "1.0.0";
+  currency "USD";
+  period "annual";
 }
 
 // Define budget categories and allocations
 allocations {
   category "operations" {
-    description "Day-to-day operational expenses"
-    allocation 0.4 // 40% of total budget
+    description "Day-to-day operational expenses";
+    allocation 0.4; // 40% of total budget
     subcategories {
       "staff": 0.6,
       "infrastructure": 0.3,
       "tools": 0.1
-    }
+    };
   }
   
   category "projects" {
-    description "Specific project initiatives"
-    allocation 0.3 // 30% of total budget
-    requires_proposal true
+    description "Specific project initiatives";
+    allocation 0.3; // 30% of total budget
+    requires_proposal true;
   }
   
   category "reserve" {
-    description "Contingency and future investment fund"
-    allocation 0.2 // 20% of total budget
+    description "Contingency and future investment fund";
+    allocation 0.2; // 20% of total budget
     withdrawal_rules {
-      approval_threshold 0.75
-      quorum 0.7
-    }
+      approval_threshold 0.75;
+      quorum 0.7;
+    };
   }
   
   category "community" {
-    description "Community development and outreach"
-    allocation 0.1 // 10% of total budget
+    description "Community development and outreach";
+    allocation 0.1; // 10% of total budget
   }
 }
 
 // Define spending rules and authorization
 spending_rules {
   role "member" {
-    single_transaction_limit 100
-    monthly_limit 300
-    categories ["community"]
+    single_transaction_limit 100;
+    monthly_limit 300;
+    categories ["community"];
   }
   
   role "steward" {
-    single_transaction_limit 500
-    monthly_limit 1500
-    categories ["operations", "community"]
+    single_transaction_limit 500;
+    monthly_limit 1500;
+    categories ["operations", "community"];
   }
   
   role "finance_committee" {
-    single_transaction_limit 5000
-    monthly_limit 15000
-    categories ["operations", "projects", "community"]
+    single_transaction_limit 5000;
+    monthly_limit 15000;
+    categories ["operations", "projects", "community"];
   }
   
   // Approval thresholds based on amount
   thresholds {
     range 0 500 {
-      approvers 1
-      required_role "steward"
+      approvers 1;
+      required_role "steward";
     }
     
     range 501 5000 {
-      approvers 2
-      required_role "finance_committee"
+      approvers 2;
+      required_role "finance_committee";
     }
     
     range 5001 999999999 {
-      approval_threshold 0.6
-      quorum 0.5
+      approval_threshold 0.6;
+      quorum 0.5;
     }
-  }
+  };
 }
 
 // Define reporting requirements
 reporting {
-  frequency "monthly"
+  frequency "monthly";
   
   reports {
     "spending_summary" {
@@ -93,8 +93,8 @@ reporting {
         "amount",
         "remaining_budget",
         "percentage_used"
-      ]
-    }
+      ];
+    };
     
     "transaction_log" {
       fields [
@@ -103,55 +103,55 @@ reporting {
         "category",
         "description",
         "authorized_by"
-      ]
-    }
-  }
+      ];
+    };
+  };
 }
 
 // Actions that trigger state changes
 actions {
   on "expense.approved" {
     mint_token {
-      type "expense_receipt"
-      recipient ctx.submitter_id
+      type "expense_receipt";
+      recipient ctx.submitter_id;
       data {
         expense_id: ctx.expense_id,
         amount: ctx.amount,
         category: ctx.category,
         approved_at: timestamp(),
         approvers: ctx.approvers
-      }
+      };
     }
     
     anchor_data {
-      path "finance/expenses"
+      path "finance/expenses";
       data {
         id: ctx.expense_id,
         details: ctx.expense_details,
         status: "approved",
         approved_at: timestamp()
-      }
+      };
     }
     
     perform_metered_action {
-      action "update_budget_allocation"
+      action "update_budget_allocation";
       args {
         category: ctx.category,
         amount: ctx.amount,
         operation: "subtract"
-      }
-    }
+      };
+    };
   }
   
   on "budget.proposed" {
     mint_token {
-      type "budget_proposal"
-      recipient ctx.proposer_id
+      type "budget_proposal";
+      recipient ctx.proposer_id;
       data {
         proposal_id: ctx.proposal_id,
         proposed_at: timestamp(),
         total_amount: ctx.total_amount
-      }
+      };
     }
   }
 } 

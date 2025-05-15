@@ -194,15 +194,14 @@ impl WasmGenerator {
 
     /// Convert a lowered function-call into an opcode
     fn walk_function_call(&mut self, fn_name: &str, args_rule: &RuleValue) {
-        let args = match args_rule {
-            RuleValue::List(xs) => xs.iter().map(|v| format!("{:?}", v)).collect(),
-            other @ RuleValue::Map(_) => vec![format!("{:?}", other)],
-            other => vec![format!("{:?}", other)],
-        };
+        // args_rule is the DslValue::Map representing the function arguments directly.
+        // Serialize this map to a JSON string.
+        let args_payload_json = serde_json::to_string(args_rule)
+            .unwrap_or_else(|_| "{}".to_string()); // Default to an empty JSON object string on error
 
         self.ops.push(Opcode::CallHost {
             fn_name: fn_name.to_string(),
-            args,
+            args_payload: args_payload_json,
         });
     }
 }
@@ -215,16 +214,6 @@ fn is_function_call(kv: &[Rule]) -> bool {
     kv.first()
         .map(|first| first.key == "function_name")
         .unwrap_or(false)
-}
-
-pub fn hash32(s: &str) -> u32 {
-    // Simple FNV-1a hash for demo purposes
-    let mut hash = 0x811c9dc5_u32;
-    for byte in s.as_bytes() {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(0x01000193_u32);
-    }
-    hash
 }
 
 pub fn compile_to_wasm(modules: Vec<DslModule>) -> Vec<u8> {

@@ -7,6 +7,7 @@ use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use thiserror::Error;
 use uuid::Uuid;
+use serde_json;
 
 // Constant UUID for deterministic test snapshots
 #[cfg(test)]
@@ -992,7 +993,7 @@ impl Lowerer {
             )));
         }
 
-        let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
+        let block_pair_span = block_pair.as_span().clone(); // Clone span for potential multiple uses in error reporting
         let (_description, rules) = self.lower_block_common_fields(block_pair)?;
 
         let mut resource_type = String::new();
@@ -1006,30 +1007,60 @@ impl Lowerer {
                     if let DslValue::String(s) = rule.value {
                         resource_type = s;
                     } else {
-                        // Handle error or log: type should be a string
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "mint_token 'type' field must be a string."
+                                        .to_string(),
+                                },
+                                block_pair_span.clone(), // Clone span for this error instance
+                            ),
+                        )));
                     }
                 }
                 "recipient" | "recipients" => {
-                    // Handle both singular and plural
                     if let DslValue::String(s) = rule.value {
-                        // Assumes recipient is a string (identifier)
                         recipient = Some(s);
                     } else {
-                        // Handle error or log: recipient should be a string
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "mint_token 'recipient' (or 'recipients') field must be a string."
+                                        .to_string(),
+                                },
+                                block_pair_span.clone(), // Clone span for this error instance
+                            ),
+                        )));
                     }
                 }
                 "amount" => {
                     if let DslValue::Number(n) = rule.value {
                         amount = n as u64; // Consider potential precision loss or error handling
                     } else {
-                        // Handle error or log: amount should be a number
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message:
+                                        "mint_token 'amount' field must be a number.".to_string(),
+                                },
+                                block_pair_span.clone(), // Clone span for this error instance
+                            ),
+                        )));
                     }
                 }
                 "data" => {
                     if let DslValue::Map(map_rules) = rule.value {
                         data = Some(map_rules);
                     } else {
-                        // Handle error or log: data should be a map (block)
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "mint_token 'data' field must be a map (block)."
+                                        .to_string(),
+                                },
+                                block_pair_span.clone(), // Clone span for this error instance
+                            ),
+                        )));
                     }
                 }
                 _ => { /* Ignore other fields for now */ }
@@ -1043,7 +1074,7 @@ impl Lowerer {
                     pest::error::ErrorVariant::CustomError {
                         message: "mint_token requires a 'type' field".to_string(),
                     },
-                    block_pair_span, // Use stored span
+                    block_pair_span, // Use stored span, which was cloned initially
                 ),
             )));
         }
@@ -1082,7 +1113,7 @@ impl Lowerer {
             )));
         }
 
-        let block_pair_span = block_pair.as_span(); // Get span before moving block_pair
+        let block_pair_span = block_pair.as_span().clone(); // Get span before moving block_pair
         let (_description, rules) = self.lower_block_common_fields(block_pair)?;
 
         let mut data_reference = String::new();
@@ -1096,21 +1127,26 @@ impl Lowerer {
                     } // else: path should be string, consider error/logging
                 }
                 "data" | "payload_cid" => {
-                    match rule.value {
-                        DslValue::String(s) => {
-                            data_reference = s;
+                    // rule.value is the DslValue here
+                    match &rule.value { // Match on the DslValue
+                        DslValue::String(s_val) => { // If the value is a string
+                            data_reference = s_val.clone();
                         }
-                        DslValue::Map(map_rules) => {
-                            // For now, serialize the map to a placeholder string.
-                            // In the future, this might involve hashing the content or a more structured representation.
-                            data_reference = format!("map_content_placeholder_{:?}", map_rules);
+                        DslValue::Map(_map_rules_vec) => { // If the value is a DslValue::Map. _map_rules_vec is Vec<DslRule>
+                            // Serialize the original rule.value which is DslValue::Map(...)
+                            // This ensures the enum variant tag is handled correctly by serde if necessary,
+                            // or that the Vec<Rule> inside DslValue::Map is serialized as a map.
+                            // Given DslValue is #[serde(untagged)], DslValue::Map(rules) should serialize `rules` directly.
+                            match serde_json::to_string(&rule.value) {
+                                Ok(json_s) => data_reference = json_s,
+                                Err(_) => {
+                                    // Corrected the escape characters for the JSON string
+                                    data_reference = "{\"error\": \"failed to serialize anchor data map\"}".to_string();
+                                }
+                            }
                         }
-                        // Handle other DslValue types if necessary, or error
-                        _ => {
-                            // Could set to a generic placeholder or error out
-                            // For now, let's try to make a string representation to avoid panic
-                            data_reference =
-                                format!("unhandled_data_type_placeholder_{:?}", rule.value);
+                        other_dsl_value => { // For any other DslValue variant (Boolean, Number, List, Range, If etc.)
+                            data_reference = format!("{:?}", other_dsl_value); // Fallback to debug format
                         }
                     }
                 }
