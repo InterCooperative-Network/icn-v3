@@ -470,12 +470,12 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
 
     async fn host_account_get_mana(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        did_ptr: u32,
-        did_len: u32,
+        _caller: Caller<'_, ConcreteHostEnvironment>,
+        _did_ptr: u32,
+        _did_len: u32,
     ) -> Result<i64, anyhow::Error> {
         let host_env = caller.data();
-        let did_str = host_env.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+        let did_str = host_env.read_string_from_mem(&mut caller, _did_ptr, _did_len)?;
         let did = Did::from_str(&did_str).map_err(|e| anyhow!(e).context(HostAbiError::InvalidDIDFormat))?;
 
         match self.rt.mana_repository().get_mana_state(&did).await {
@@ -495,51 +495,42 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
         amount: u64,
     ) -> Result<i32, anyhow::Error> {
         let host_env = caller.data();
-        let did_str = host_env.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-        let did = Did::from_str(&did_str).map_err(|e| anyhow!(e).context(HostAbiError::InvalidDIDFormat))?;
+        let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
+        let did = Did::from_str(&did_str).map_err(|e| anyhow!("Invalid DID: {}", e))?;
 
-        let scope_key = self.scope_key();
-        let scope_str = match scope_key {
-            ScopeKey::Individual(id) => id, // Assumes Did::to_string() was used, includes "did:key:"
-            ScopeKey::Cooperative(id) => format!("coop:{}", id),
-            ScopeKey::Community(id) => format!("comm:{}", id),
-            ScopeKey::Federation(id) => format!("fed:{}", id),
-        };
+        // TODO: Determine if we use host_env.caller_did or the provided did_str for scope_key
+        // For now, assume the provided DID is the one whose mana is spent,
+        // and the scope_key (potentially derived from caller_did or org context) determines the ledger.
+        let scope = host_env.scope_key();
+        let mana_ledger = host_env.rt.mana_ledger.clone();
 
-        let token = ScopedResourceToken {
-            resource_type: "mana".to_string(),
-            scope: scope_str,
-            amount: amount,
-            expires_at: None,
-            issuer: None,
-        };
-
-        // Use host_env.rt for policy_enforcer and mana_repository
-        if let Err(e) = host_env.rt.policy_enforcer().check_authorization(&did, &token).await {
-            eprintln!("Policy check error: {:?}", e); // Consider proper logging
-            // TODO: Refine error mapping from policy error to HostAbiError
-            return Err(anyhow!(HostAbiError::ResourceLimitExceeded));
-        }
-
-        match host_env.rt.mana_repository().spend_mana(&did, amount).await {
-            Ok(_) => Ok(0),
+        match mana_ledger.spend(&did, amount, &scope).await {
+            Ok(_) => Ok(HostAbiError::Success as i32),
+            Err(ManaError::InsufficientBalance) => Ok(HostAbiError::InsufficientBalance as i32),
             Err(e) => {
-                // TODO: Consider more robust error inspection if e is not anyhow::Error directly wrapping ManaError
-                if let Some(mana_err) = e.downcast_ref::<ManaError>() {
-                    match mana_err {
-                        ManaError::InsufficientMana { .. } => {
-                            return Err(anyhow!(HostAbiError::InsufficientBalance));
-                        }
-                        _ => { // Other ManaErrors
-                            eprintln!("Mana spend error (other ManaError): {:?}", mana_err);
-                            return Err(anyhow!(HostAbiError::StorageError)); // Or a more specific error
-                        }
-                    }
-                }
-                eprintln!("Mana spend error (unknown/other): {:?}", e);
-                Err(anyhow!(HostAbiError::StorageError)) // Default for other errors
+                error!("Error spending mana for DID {}: {:?}", did_str, e);
+                Err(anyhow!("Failed to spend mana: {}", e))
             }
         }
+    }
+
+    async fn host_submit_mesh_job(
+        &self,
+        mut caller: Caller<'_, ConcreteHostEnvironment>,
+        job_data_ptr: u32,
+        job_data_len: u32,
+    ) -> Result<u64, anyhow::Error> {
+        let job_data = self.read_bytes_from_mem(&mut caller, job_data_ptr, job_data_len)?;
+        // Using debug print for potentially large/binary data. Consider hex for better readability if needed.
+        println!(
+            "FULL ABI: host_submit_mesh_job called. Job data ({} bytes): {:?}",
+            job_data.len(),
+            job_data 
+        );
+        // TODO: Actually deserialize job_data (e.g., MeshJobParams) and submit the job to the mesh network.
+        // This would involve interacting with other parts of the runtime or a P2P layer.
+        // For now, returning a dummy job ID.
+        Ok(1) // Dummy job ID for full ABI
     }
 }
 
@@ -660,7 +651,7 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
 
     async fn host_account_get_mana(
         &self,
-        _caller: Caller<ConcreteHostEnvironment>,
+        _caller: Caller<'_, ConcreteHostEnvironment>,
         _did_ptr: u32,
         _did_len: u32,
     ) -> Result<i64, anyhow::Error> {
@@ -673,16 +664,26 @@ impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
 
     async fn host_account_spend_mana(
         &self,
-        _caller: Caller<ConcreteHostEnvironment>,
-        _did_ptr: u32, // The DID of the account to spend from
+        _caller: Caller<'_, ConcreteHostEnvironment>,
+        _did_ptr: u32,
         _did_len: u32,
         _amount: u64,
     ) -> Result<i32, anyhow::Error> {
-        // This is a stub, so it doesn't execute real logic.
-        // It just needs to match the signature.
-        // The actual testing of scope resolution happens via the test shims
-        // and the full_host_abi implementation.
+        println!("STUB: host_account_spend_mana called");
         Ok(HostAbiError::NotSupported as i32)
+    }
+
+    async fn host_submit_mesh_job(
+        &self,
+        _caller: Caller<'_, ConcreteHostEnvironment>,
+        job_data_ptr: u32,
+        job_data_len: u32,
+    ) -> Result<u64, anyhow::Error> {
+        println!(
+            "STUB ABI: host_submit_mesh_job called with job_data_ptr: {}, job_data_len: {}",
+            job_data_ptr, job_data_len
+        );
+        Ok(0) // Dummy job ID for stub ABI
     }
 }
 

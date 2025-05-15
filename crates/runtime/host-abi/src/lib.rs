@@ -682,9 +682,26 @@ pub trait MeshHostAbi<T: Send + Sync + 'static>: Send + Sync + 'static {
     /// Returns 0 on success or `HostAbiError::InsufficientResources` style negative codes on failure.
     async fn host_account_spend_mana(
         &self,
-        caller: wasmtime::Caller<T>,
+        caller: wasmtime::Caller<'_, T>,
         did_ptr: u32,
         did_len: u32,
         amount: u64,
     ) -> Result<i32, AnyhowError>;
+
+    /// Submits a new mesh job to the network.
+    /// The job data (e.g., serialized `MeshJobParams`) is read from WASM memory.
+    ///
+    /// # Arguments
+    /// * `caller` (Caller<'_, T>): Reference to the WASM caller environment.
+    /// * `job_data_ptr` (u32): Pointer to the job data in WASM memory.
+    /// * `job_data_len` (u32): Length of the job data.
+    /// # Returns
+    /// * `Result<u64, AnyhowError>`: Ok(job_id) on successful submission, where job_id is a unique identifier for the job.
+    ///   Returns Err(HostAbiError) on failure.
+    async fn host_submit_mesh_job(
+        &self,
+        caller: wasmtime::Caller<'_, T>,
+        job_data_ptr: u32,
+        job_data_len: u32,
+    ) -> Result<u64, AnyhowError>;
 }
