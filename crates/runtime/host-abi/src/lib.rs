@@ -673,7 +673,7 @@ pub trait MeshHostAbi<T: Send + Sync + 'static>: Send + Sync + 'static {
     /// * `i64` – current mana balance (can be > i32::MAX). Negative `HostAbiError` codes on failure.
     async fn host_account_get_mana(
         &self,
-        caller: wasmtime::Caller<T>,
+        caller: wasmtime::Caller<'_, T>,
         did_ptr: u32,
         did_len: u32,
     ) -> Result<i64, AnyhowError>;

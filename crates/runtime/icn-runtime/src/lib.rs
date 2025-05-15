@@ -375,22 +375,22 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         let default_keypair = IcnKeyPair::generate();
         let default_did = default_keypair.did.clone();
 
-        let mut runtime_config = RuntimeConfig::default(); // Use a different var name to avoid conflict with outer config
+        let mut runtime_config = RuntimeConfig::default();
         runtime_config.node_did = default_did.to_string();
 
         let engine = Engine::default();
-        let linker = Linker::new(&engine);
+        let mut linker = Linker::new(&engine);
+        crate::wasm::register_host_functions(&mut linker)?;
 
-        let ledger = Arc::new(L::default()); // Create default ledger
-        let policy = RegenerationPolicy::FixedRatePerTick(10); // Default policy
+        let ledger = Arc::new(L::default());
+        let policy = RegenerationPolicy::FixedRatePerTick(10);
         let regenerator = Arc::new(ManaRegenerator::new(ledger.clone(), policy));
 
         let context: Arc<RuntimeContext<L>> = Arc::new(
-            // RuntimeContextBuilder::new is also generic and requires L: Default
             RuntimeContextBuilder::<L>::new()
                 .with_identity(default_keypair)
                 .with_executor_id(default_did.to_string())
-                .with_mana_regenerator(regenerator) // Set the regenerator
+                .with_mana_regenerator(regenerator)
                 .build(),
         );
 
@@ -548,14 +548,30 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         function_name: String,
         args: Vec<Val>,
     ) -> Result<Box<[Val]>, RuntimeError> {
-        let mut store_data = wasm::StoreData::new();
-        if let Some(host_env_arc) = &self.host_env {
-            let host_env_clone = host_env_arc.lock().unwrap();
-            store_data.set_host((*host_env_clone).clone());
-        } else {
-            return Err(RuntimeError::HostEnvironmentNotSet);
-        }
-        let mut store = Store::new(&self.engine, store_data);
+        #[cfg(not(feature = "full_host_abi"))]
+        let store_creator = |engine: &Engine, host_env_arc: &Option<Arc<Mutex<ConcreteHostEnvironment>>>| -> Result<Store<wasm::StoreData>, RuntimeError> {
+            let mut store_data = wasm::StoreData::new();
+            if let Some(env_arc) = host_env_arc {
+                let env_clone = env_arc.lock().map_err(|_| RuntimeError::ExecutionError("Host env mutex poisoned".to_string()))?;
+                store_data.set_host(env_clone.clone());
+                Ok(Store::new(engine, store_data))
+            } else {
+                Err(RuntimeError::HostEnvironmentNotSet)
+            }
+        };
+
+        #[cfg(feature = "full_host_abi")]
+        let store_creator = |engine: &Engine, host_env_arc: &Option<Arc<Mutex<ConcreteHostEnvironment>>>| -> Result<Store<wasm::StoreData>, RuntimeError> {
+            if let Some(env_arc) = host_env_arc {
+                let env_clone = env_arc.lock().map_err(|_| RuntimeError::ExecutionError("Host env mutex poisoned".to_string()))?;
+                // When full_host_abi is ON, wasm::StoreData is ConcreteHostEnvironment
+                Ok(Store::new(engine, env_clone.clone()))
+            } else {
+                Err(RuntimeError::HostEnvironmentNotSet)
+            }
+        };
+
+        let mut store = store_creator(&self.engine, &self.host_env)?;
 
         let module = self.load_module(wasm_bytes, &mut store).await?;
 
@@ -951,7 +967,9 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         };
 
         let engine = Engine::default();
-        let linker = Linker::new(&engine);
+        let mut linker = Linker::new(&engine);
+        crate::wasm::register_host_functions(&mut linker)
+            .expect("Failed to register host functions for Runtime::with_context");
 
         Self {
             config,
@@ -960,7 +978,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             engine,
             linker,
             host_env: None,
-            reputation_updater: None, // Can be set later via with_reputation_updater
+            reputation_updater: None,
         }
     }
 
