@@ -9,6 +9,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Helper struct for deserializing keypair file content
+#[derive(serde::Deserialize)]
+struct KeypairFileFormat {
+    did: String,
+    public_key: String,
+    secret_key: String,
+    generated_at: String,
+}
+
 /// Command-line interface for ICN governance
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -655,9 +664,18 @@ async fn create_federation(
     // Parse signer DIDs
     let signer_dids: Vec<Did> = signers_str
         .split(',')
-        .map(|s| s.trim().parse::<Did>())
-        .collect::<Result<Vec<Did>, _>>()
-        .map_err(|_| anyhow!("Invalid DID format in signers list"))?;
+        .map(|s| {
+            let trimmed_s = s.trim();
+            trimmed_s.parse::<Did>().map_err(|e| match e {
+                icn_identity::DidError::Malformed => {
+                    anyhow!("Invalid DID format for '{}'. A DID should start with 'did:key:' and be a base58btc encoded Ed25519 public key.", trimmed_s)
+                }
+                icn_identity::DidError::UnsupportedCodec(codec) => {
+                    anyhow!("Unsupported key type in DID '{}'. The multicodec prefix {:#x} is not supported. Only Ed25519 keys (prefix 0xed) are currently accepted.", trimmed_s, codec)
+                }
+            })
+        })
+        .collect::<Result<Vec<Did>, _>>()?; // Collect into Result<Vec<Did>, anyhow::Error>
 
     if signer_dids.is_empty() {
         return Err(anyhow!("At least one signer DID must be provided"));
@@ -725,19 +743,48 @@ async fn keypair_info(input: &Path) -> Result<()> {
     println!("Reading keypair from: {}", input.display());
 
     // Read the keypair file
-    let keypair_json = std::fs::read_to_string(input)?;
-    let keypair_info: serde_json::Value = serde_json::from_str(&keypair_json)?;
+    let keypair_json_str = std::fs::read_to_string(input)
+        .map_err(|e| anyhow!("Failed to read keypair file '{}': {}", input.display(), e))?;
+
+    // Deserialize into our specific struct
+    let keypair_data: KeypairFileFormat = serde_json::from_str(&keypair_json_str)
+        .map_err(|e| {
+            match e.classify() {
+                serde_json::error::Category::Io => {
+                    anyhow!("I/O error while parsing keypair file '{}': {}", input.display(), e)
+                }
+                serde_json::error::Category::Syntax => {
+                    anyhow!("Invalid JSON syntax in keypair file '{}' at line {} column {}: {}", input.display(), e.line(), e.column(), e)
+                }
+                serde_json::error::Category::Data => {
+                    anyhow!("Invalid data structure in keypair file '{}'. Ensure all fields (did, public_key, secret_key, generated_at) are present and have correct types. Error: {}", input.display(), e)
+                }
+                serde_json::error::Category::Eof => {
+                     anyhow!("Unexpected end of file in keypair file '{}' while parsing JSON.", input.display())
+                }
+            }
+        })?;
 
     // Display keypair information
-    println!("DID: {}", keypair_info["did"].as_str().unwrap_or("Unknown"));
-    println!(
-        "Public Key: {}",
-        keypair_info["public_key"].as_str().unwrap_or("Unknown")
-    );
-    println!(
-        "Generated: {}",
-        keypair_info["generated_at"].as_str().unwrap_or("Unknown")
-    );
+    match keypair_data.did.parse::<Did>() {
+        Ok(parsed_did) => {
+            println!("DID: {}", parsed_did);
+        }
+        Err(did_err) => {
+            let descriptive_error = match did_err {
+                icn_identity::DidError::Malformed => {
+                    format!("Malformed DID string '{}'. A DID should start with 'did:key:' and be a base58btc encoded Ed25519 public key.", keypair_data.did)
+                }
+                icn_identity::DidError::UnsupportedCodec(codec) => {
+                    format!("Unsupported key type in DID '{}'. The multicodec prefix {:#x} is not supported. Only Ed25519 keys (prefix 0xed) are currently accepted.", keypair_data.did, codec)
+                }
+            };
+            // Using .red() and .yellow() from the 'colored' crate which is already in use.
+            println!("DID: {} ({})", keypair_data.did.red(), descriptive_error.yellow());
+        }
+    }
+    println!("Public Key: {}", keypair_data.public_key);
+    println!("Generated: {}", keypair_data.generated_at);
 
     Ok(())
 }
