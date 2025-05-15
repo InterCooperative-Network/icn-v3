@@ -13,6 +13,9 @@ use std::{net::SocketAddr, sync::Arc};
 use tracing_subscriber;
 use std::collections::HashMap;
 
+// Declare the new reputation module
+pub mod reputation;
+
 // Assuming storage module is in the same directory or crate root
 mod storage;
 use storage::{InMemoryReputationStore, ReputationStore};
