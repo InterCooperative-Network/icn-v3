@@ -1,19 +1,35 @@
 use thiserror::Error;
+// Add imports for specific error types
+use icn_identity::vc::CredentialError;
+use icn_identity::did::DidError;
+use icn_crypto::jws::JwsError;
+use icn_identity::quorum::QuorumError;
+use icn_identity::trust_bundle::TrustBundleError;
+use serde_json;
 
 /// Errors related to identity operations
 #[derive(Error, Debug)]
 pub enum IdentityError {
-    #[error("Invalid credential: {0}")]
-    InvalidCredential(String),
+    #[error("Local Verifiable Credential error: {0}")]
+    LocalVc(#[from] VcError),
 
-    #[error("Invalid DID: {0}")]
-    InvalidDid(String),
+    #[error("External Credential processing error: {source}")]
+    ExternalCredentialProcessing { #[from] source: CredentialError },
 
-    #[error("Verification failed: {0}")]
-    VerificationFailed(String),
+    #[error("DID processing error: {source}")]
+    DidProcessing { #[from] source: DidError },
 
-    #[error("Deserialization failed: {0}")]
-    DeserializationFailed(String),
+    #[error("JWS processing error: {source}")]
+    JwsProcessing { #[from] source: JwsError },
+
+    #[error("Quorum rule processing error: {source}")]
+    QuorumProcessing { #[from] source: QuorumError },
+
+    #[error("Trust bundle processing error: {source}")]
+    TrustBundleProcessing { #[from] source: TrustBundleError },
+
+    #[error("JSON deserialization error: {source}")]
+    Deserialization { #[from] source: serde_json::Error },
 }
 
 /// Errors related to trust operations

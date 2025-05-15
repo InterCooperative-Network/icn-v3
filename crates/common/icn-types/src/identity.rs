@@ -277,19 +277,19 @@ impl VerifiableCredentialBuilder {
     pub fn build(self) -> Result<VerifiableCredential, IdentityError> {
         let id = self
             .id
-            .ok_or_else(|| IdentityError::InvalidCredential("ID is required".to_string()))?;
+            .ok_or_else(|| IdentityError::LocalVc(VcError::MissingField("ID is required".to_string())))?;
         let issuer = self
             .issuer
-            .ok_or_else(|| IdentityError::InvalidCredential("Issuer is required".to_string()))?;
+            .ok_or_else(|| IdentityError::LocalVc(VcError::MissingField("Issuer is required".to_string())))?;
         let issuance_date = self.issuance_date.ok_or_else(|| {
-            IdentityError::InvalidCredential("Issuance date is required".to_string())
+            IdentityError::LocalVc(VcError::MissingField("Issuance date is required".to_string()))
         })?;
         let subject_id = self.subject_id.ok_or_else(|| {
-            IdentityError::InvalidCredential("Subject ID is required".to_string())
+            IdentityError::LocalVc(VcError::MissingField("Subject ID is required".to_string()))
         })?;
         let proof = self
             .proof
-            .ok_or_else(|| IdentityError::InvalidCredential("Proof is required".to_string()))?;
+            .ok_or_else(|| IdentityError::LocalVc(VcError::MissingField("Proof is required".to_string())))?;
 
         Ok(VerifiableCredential {
             context: self.context,
