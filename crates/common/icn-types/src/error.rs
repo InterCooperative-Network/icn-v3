@@ -235,16 +235,33 @@ pub enum VcError {
 /// Mesh-related error types
 #[derive(thiserror::Error, Debug)]
 pub enum MeshError {
-    #[error("Network error: {0}")]
-    Network(String),
-    #[error("Job submission failed: {0}")]
+    #[error("Mesh network I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Failed to submit job to mesh: {0}")]
     JobSubmission(String),
-    #[error("Receipt error: {0}")]
-    ReceiptError(String),
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-    #[error("Operation timeout: {0}")]
-    Timeout(String),
-    #[error("Resource not found: {0}")]
-    NotFound(String),
+
+    #[error("Error related to mesh execution receipt: {0}")]
+    ReceiptProcessing(String),
+
+    #[error("Mesh configuration error: {0}")]
+    Configuration(String),
+
+    #[error("Mesh operation timed out: {0}")]
+    OperationTimeout(String),
+
+    #[error("Mesh resource not found - Type: {resource_type}, ID: {identifier}")]
+    ResourceNotFound {
+        resource_type: String,
+        identifier: String,
+    },
+
+    #[error("Invalid mesh message format: {0}")]
+    InvalidMessage(String),
+
+    #[error("Peer unreachable: {peer_id}")]
+    PeerUnreachable { peer_id: String },
+
+    #[error("Mesh protocol violation: {0}")]
+    ProtocolViolation(String),
 }
