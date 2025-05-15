@@ -19,6 +19,9 @@ icn-mesh-receipts = { path = "../../common/icn-mesh-receipts" }
 icn-mesh-protocol = { path = "../../common/icn-mesh-protocol" }
 icn-core-vm = { path = "../icn-core-vm" }
 icn-economics = { path = "../../common/icn-economics" }
+icn-actor-interfaces = { path = "../../actor-interfaces" }
+icn-dag-scheduler = { path = "../../dag-scheduler" }
+icn-stable-memory-wasm = { path = "../../stable-memory-wasm" }
 host-abi = { path = "../host-abi" }
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.74"

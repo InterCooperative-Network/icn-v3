@@ -5,7 +5,7 @@ use icn_identity::{KeyPair, TrustValidator}; // Removed Did, KeyPair as IcnKeyPa
 // use icn_reputation_integration::{HttpReputationUpdater, ReputationUpdater}; // Removed as per clippy
 // use icn_mesh_protocol::MeshJobServiceConfig; // Removed as per clippy (grep showed only import line)
 use icn_economics::{Economics, LedgerKey, mana::ManaManager, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter}; // ResourceType removed
-use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator, ManaState};
+use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
 use icn_identity::IdentityIndex;
 use icn_types::dag_store::SharedDagStore;
 use icn_types::mesh::MeshJob;

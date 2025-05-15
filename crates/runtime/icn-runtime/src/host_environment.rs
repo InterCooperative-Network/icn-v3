@@ -2,7 +2,7 @@ use crate::context::RuntimeContext;
 use crate::job_execution_context::JobExecutionContext;
 use anyhow::{anyhow, Result};
 use icn_economics::ResourceType;
-use icn_identity::Did;
+use icn_identity::{Did, ScopeKey};
 use host_abi::{
     HostAbiError, LogLevel, MeshHostAbi,
 };
@@ -10,15 +10,12 @@ use icn_types::org::{CommunityId, CooperativeId};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
-use icn_identity::ScopeKey;
-use icn_economics::PolicyEnforcer;
-use icn_economics::mana::ManaLedger;
-// Temp: Comment out ManaRepositoryReader import due to unresolved path
-// use icn_economics::mana::ManaRepositoryReader; 
-use icn_economics::ResourcePolicyEnforcer;
-use std::str::FromStr;
-use icn_economics::ScopedResourceToken;
-use icn_economics::mana::ManaError;
+use icn_actor_interfaces::actor_runtime::HostcallWasmError;
+use icn_actor_interfaces::Timestamp;
+use icn_dag_scheduler::commit::DagCommitAddress;
+use icn_dag_scheduler::protocol::JobId;
+use icn_stable_memory_wasm::StableMemoryError;
+use icn_types::error::DagError;
 
 /// Concrete implementation of the host environment for WASM execution
 #[derive(Clone)]
@@ -73,6 +70,7 @@ impl ConcreteHostEnvironment {
     }
 
     /// Determine the accounting scope key for mana operations.
+    #[allow(dead_code)] // TODO: This is likely used by mana hostcalls once fully implemented.
     fn scope_key(&self) -> ScopeKey {
         // 1) If explicit coop/community overrides exist, honour them first.
         if let Some(coop) = &self.coop_id {
