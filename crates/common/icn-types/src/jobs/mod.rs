@@ -6,6 +6,8 @@ pub type TokenAmount = u64;
 use crate::error::JobFailureReason;
 use icn_identity::Did;
 use serde::{Deserialize, Serialize};
+use serde_json;
+use tracing;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum JobStatus {
@@ -26,20 +28,25 @@ impl JobStatus {
             JobStatus::Pending => ("Pending".to_string(), None, None, None, None),
             JobStatus::Bidding => ("Bidding".to_string(), None, None, None, None),
             JobStatus::Assigned { bidder_did } => ("Assigned".to_string(), Some(bidder_did.to_string()), None, None, None),
-            JobStatus::Running { runner } => ("Running".to_string(), Some(runner.to_string()), None, None, None), // Assuming runner is Did
-            JobStatus::Completed => ("Completed".to_string(), None, None, None, None), // Adjust if it has fields like result_cid
-            JobStatus::Failed { reason } => ("Failed".to_string(), None, None, None, Some(format!("{:?}", reason))),
+            JobStatus::Running { runner } => ("Running".to_string(), Some(runner.to_string()), None, None, None),
+            JobStatus::Completed => ("Completed".to_string(), None, None, None, None),
+            JobStatus::Failed { reason } => (
+                "Failed".to_string(), 
+                None, 
+                None, 
+                None, 
+                serde_json::to_string(reason).ok()
+            ),
             JobStatus::Cancelled => ("Cancelled".to_string(), None, None, None, None),
             JobStatus::BiddingExpired => ("BiddingExpired".to_string(), None, None, None, Some("Bidding expired without assignment".to_string())),
-            // Handle other variants as needed, providing appropriate string representations and None for unused fields.
         }
     }
 
     pub fn from_db_fields(
         status_type: &str,
         bidder_did_str: Option<&str>,
-        _node_id_str: Option<&str>, // Assuming node_id is not directly part of JobStatus variants for now
-        _result_cid_str: Option<&str>, // Assuming result_cid is not directly part of JobStatus variants for now
+        _node_id_str: Option<&str>,
+        _result_cid_str: Option<&str>,
         error_message_str: Option<&str>,
     ) -> Result<Self, String> {
         match status_type {
@@ -55,9 +62,16 @@ impl JobStatus {
                                     .parse().map_err(|e| format!("Invalid DID for Running status: {} ({})", bidder_did_str.unwrap_or("None"), e))?;
                 Ok(JobStatus::Running { runner: did })
             },
-            "Completed" => Ok(JobStatus::Completed), // Adjust if it expects fields like result_cid
+            "Completed" => Ok(JobStatus::Completed),
             "Failed" => {
-                let reason = JobFailureReason::Unknown(error_message_str.unwrap_or("Unknown error from DB").to_string());
+                let reason = if let Some(msg_str) = error_message_str {
+                    serde_json::from_str(msg_str).unwrap_or_else(|e| {
+                        tracing::warn!("Failed to parse JobFailureReason from DB string '{}': {}. Falling back to Unknown.", msg_str, e);
+                        JobFailureReason::Unknown(format!("Unparsable failure reason from DB: {}", msg_str))
+                    })
+                } else {
+                    JobFailureReason::Unknown("No failure reason provided".to_string())
+                };
                 Ok(JobStatus::Failed { reason })
             },
             "Cancelled" => Ok(JobStatus::Cancelled),

@@ -1,5 +1,5 @@
 use crate::error::DagError;
-use cid::multihash::{Code, MultihashDigest};
+use multihash::Code;
 use cid::Cid;
 use serde::{Deserialize, Serialize};
 

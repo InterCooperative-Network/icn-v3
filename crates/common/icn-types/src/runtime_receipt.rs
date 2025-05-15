@@ -8,10 +8,18 @@ use crate::receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 // use bincode; // Removed unused import
 
 // NEW IMPORTS for CID generation
-use cid::multihash::{Code as MultihashCode, MultihashDigest}; // CORRECTED IMPORT for multihash types
+// use cid::multihash::{Code as MultihashCode, MultihashDigest}; // OLD, REMOVED
+use multihash::{Code as MultihashCode, Multihash}; // CORRECTED IMPORT for multihash types
 use cid::{Cid, Version}; // Simplified cid import
 use serde_cbor;
 // use thiserror::Error; // Removed unused import
+// use crate::error::SignError; // Made unused by previous changes, removing
+// use crate::org::{CommunityId, CooperativeId}; // Unused
+// use chrono::{DateTime, Utc}; // Unused
+// use icn_identity::error::IcnError as IdentityError; // Aliasing to avoid conflict with local IcnError - ALREADY COMMENTED
+// use icn_identity::{Did, KeyPair as IcnKeyPair}; // Unused
+// use std::collections::HashMap; // Unused
+// use std::time::SystemTime; // Unused
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct RuntimeExecutionMetrics {
@@ -50,7 +58,7 @@ impl RuntimeExecutionReceipt {
     // REMOVED: Old signed_payload method, replaced by trait impl below
     // fn signed_payload(&self) -> RuntimeExecutionReceiptPayload { ... }
 
-    // REMOVED: Old verify method, replaced by trait\'s default implementation
+    // REMOVED: Old verify method, replaced by trait's default implementation
     // pub fn verify(&self) -> Result<()> { ... }
 
     /// Generate a CID (Content Identifier) for this receipt.
@@ -100,7 +108,7 @@ impl VerifiableReceipt for RuntimeExecutionReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use icn_identity::KeyPair;
+    use icn_identity::KeyPair; // This was NOT listed as unused, so keep it
     // Ensure Signer trait is in scope if KeyPair::sign directly returns ed25519_dalek::Signature
     // and doesn't rely on a trait method from ed25519_dalek::Signer for KeyPair itself.
     // If KeyPair::sign is a direct method, this specific import might not be needed for keypair.sign().
