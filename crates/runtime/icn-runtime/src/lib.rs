@@ -18,6 +18,7 @@ use icn_types::JobFailureReason;
 use icn_mesh_protocol::P2PJobStatus;
 use icn_types::error::IcnError;
 use icn_types::error::EconomicsError;
+use icn_types::RuntimeJobFailureReport;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,6 +30,7 @@ use uuid::Uuid;
 use wasmtime::{
     Engine, Linker, Module, Store, Val,
 };
+use reqwest;
 
 use std::str::FromStr;
 use std::fs::{self, File};
@@ -993,11 +995,14 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
             self.config.node_did
         );
 
+        let http_client = reqwest::Client::new();
+
         loop {
             let maybe_job = self.poll_for_job().await;
 
             if let Some(job) = maybe_job {
                 info!(job_id = %job.job_id, "Received job");
+                let current_job_id_cid_for_reporting = job.job_id.clone();
 
                 match self.process_polled_job(job.clone()).await {
                     Ok(receipt) => {
@@ -1027,31 +1032,62 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                                     ));
                                 }
                             };
+                            
+                            if let Some(base_url) = &self.config.mesh_jobs_api_url {
+                                let report_payload = RuntimeJobFailureReport {
+                                    reporting_node_did: parsed_node_did.clone(),
+                                    reason: failure_reason.clone(),
+                                };
+                                let report_url = format!(
+                                    "{}/jobs/{}/runtime-failure",
+                                    base_url,
+                                    receipt.job_id.to_string()
+                                );
+                                info!("Reporting job failure for {} to: {}", receipt.job_id.to_string(), report_url);
+                                match http_client.post(&report_url).json(&report_payload).send().await {
+                                    Ok(response) if response.status().is_success() => {
+                                        info!(
+                                            "Successfully reported job failure for {} to mesh-jobs. Status: {}",
+                                            receipt.job_id.to_string(), response.status()
+                                        );
+                                    }
+                                    Ok(response) => {
+                                        let status = response.status();
+                                        error!(
+                                            job_id = %receipt.job_id.to_string(),
+                                            status = %status,
+                                            "Failed to report job failure to mesh-jobs. HTTP status: {}. Response: {:?}",
+                                            status,
+                                            response.text().await.unwrap_or_else(|_| "Failed to read response body".to_string())
+                                        );
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            job_id = %receipt.job_id.to_string(),
+                                            "HTTP client error reporting job failure to mesh-jobs: {:?}",
+                                            err
+                                        );
+                                    }
+                                }
+                            } else {
+                                warn!(
+                                    job_id = %receipt.job_id.to_string(),
+                                    "mesh_jobs_api_url not configured. Skipping job failure reporting."
+                                );
+                            }
 
-                            let failed_status_update = P2PJobStatus::Failed {
+                            let _failed_status_update = P2PJobStatus::Failed {
                                 node_id: parsed_node_did,
                                 reason: failure_reason,
                             };
-
-                            warn!(
-                                job_id = %receipt.job_id,
-                                "Job processing indicates failure in receipt. Status: {:?}",
-                                failed_status_update
-                            );
-                            // TODO: Implement actual failure reporting mechanism for this case too.
-                            
-                            // Skip anchoring a failed job's receipt if it explicitly failed.
-                            // Or, if failed receipts *should* be anchored, remove continue and adjust logic.
-                            // For now, skipping.
                             continue; 
                         }
 
-                        // If receipt.status is not Failed, proceed as normal.
-                        info!(job_id = %receipt.job_id, "Execution succeeded (receipt status is not Failed). Anchoring receipt...");
+                        info!(job_id = %receipt.job_id, "Execution succeeded. Anchoring receipt...");
                         self.anchor_mesh_receipt(&receipt).await?;
                     }
                     Err(e) => {
-                        warn!(job_id = %job.job_id, "Job processing failed: {:?}", e);
+                        warn!(job_id = %current_job_id_cid_for_reporting, "Job processing failed: {:?}", e);
                         
                         let failure_reason = if let Some(icn_err) = e.downcast_ref::<IcnError>() {
                             match icn_err {
@@ -1060,11 +1096,9 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                                 IcnError::InvalidUri(_) => JobFailureReason::InvalidInput,
                                 IcnError::NotFound(_) => JobFailureReason::NotFound,
                                 IcnError::PermissionDenied(s) => {
-                                    // PermissionDenied is unit, use ExecutionError to keep message
                                     JobFailureReason::ExecutionError(format!("Permission denied: {}", s))
                                 }
-                                IcnError::Identity(_) => JobFailureReason::PermissionDenied, // General category
-
+                                IcnError::Identity(_) => JobFailureReason::PermissionDenied,
                                 IcnError::Economics(econ_err) => match econ_err {
                                     EconomicsError::QuotaExceeded { .. } | EconomicsError::RateLimitExceeded { .. } => {
                                         JobFailureReason::ResourceLimitExceeded
@@ -1072,7 +1106,6 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                                     EconomicsError::AccessDenied { .. } => JobFailureReason::PermissionDenied,
                                     _ => JobFailureReason::ExecutionError(format!("Economics error: {}", econ_err)),
                                 },
-
                                 IcnError::Crypto(err) => JobFailureReason::ExecutionError(format!("Crypto error: {}", err)),
                                 IcnError::Dag(err) => JobFailureReason::ExecutionError(format!("DAG error: {}", err)),
                                 IcnError::Multicodec(err) => JobFailureReason::ExecutionError(format!("Multicodec error: {}", err)),
@@ -1085,46 +1118,71 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
                                 IcnError::Plugin(s) => JobFailureReason::ExecutionError(format!("Plugin error: {}", s)),
                                 IcnError::Consensus(s) => JobFailureReason::ExecutionError(format!("Consensus error: {}", s)),
                                 IcnError::InvalidOperation(s) => JobFailureReason::ExecutionError(format!("Invalid operation: {}", s)),
-                                
                                 IcnError::General(s) => JobFailureReason::Unknown(s.clone()),
-                                
-                                // Catch-all for any IcnError variants not explicitly handled.
-                                _ => JobFailureReason::Unknown(format!("An unclassified ICN error occurred: {}", icn_err)),
                             }
                         } else {
-                            // Fallback if 'e' is not an IcnError
                             JobFailureReason::ExecutionError(e.to_string())
                         };
                         
                         let executor_node_did_str = self.config.node_did.clone();
                         match Did::from_str(&executor_node_did_str) {
                             Ok(parsed_node_did) => {
-                                let failed_status_update = P2PJobStatus::Failed {
+                                if let Some(base_url) = &self.config.mesh_jobs_api_url {
+                                    let report_payload = RuntimeJobFailureReport {
+                                        reporting_node_did: parsed_node_did.clone(),
+                                        reason: failure_reason.clone(),
+                                    };
+                                    let report_url = format!(
+                                        "{}/jobs/{}/runtime-failure",
+                                        base_url,
+                                        current_job_id_cid_for_reporting.to_string()
+                                    );
+                                    info!("Reporting job failure for {} to: {}", current_job_id_cid_for_reporting.to_string(), report_url);
+                                    match http_client.post(&report_url).json(&report_payload).send().await {
+                                        Ok(response) if response.status().is_success() => {
+                                            info!(
+                                                "Successfully reported job failure for {} to mesh-jobs. Status: {}",
+                                                current_job_id_cid_for_reporting.to_string(), response.status()
+                                            );
+                                        }
+                                        Ok(response) => {
+                                            let status = response.status();
+                                            error!(
+                                                job_id = %current_job_id_cid_for_reporting.to_string(),
+                                                status = %status,
+                                                "Failed to report job failure to mesh-jobs. HTTP status: {}. Response: {:?}",
+                                                status,
+                                                response.text().await.unwrap_or_else(|_| "Failed to read response body".to_string())
+                                            );
+                                        }
+                                        Err(err) => {
+                                            error!(
+                                                job_id = %current_job_id_cid_for_reporting.to_string(),
+                                                "HTTP client error reporting job failure to mesh-jobs: {:?}",
+                                                err
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    warn!(
+                                        job_id = %current_job_id_cid_for_reporting.to_string(),
+                                        "mesh_jobs_api_url not configured. Skipping job failure reporting."
+                                    );
+                                }
+
+                                let _failed_status_update = P2PJobStatus::Failed {
                                     node_id: parsed_node_did,
                                     reason: failure_reason,
                                 };
-
-                                // TODO: Implement actual failure reporting mechanism.
-                                // This could involve:
-                                // 1. Finding the JobExecutionContext for this job_id and calling ctx.update_status(failed_status_update).
-                                // 2. Sending an HTTP request to icn-mesh-jobs to mark the job as failed.
-                                // 3. Broadcasting a P2P message with this status update.
-                                error!(
-                                    job_id = %job.job_id,
-                                    status = ?failed_status_update,
-                                    "Job failed. Status constructed. Reporting mechanism is TBD."
-                                );
                             }
                             Err(did_parse_err) => {
                                 error!(
-                                    job_id = %job.job_id,
-                                    original_job_error = ?e,
+                                    job_id = %current_job_id_cid_for_reporting,
+                                    original_job_error = %e,
                                     node_did_parse_error = ?did_parse_err,
                                     invalid_configured_node_did = %executor_node_did_str,
-                                    "Original job failed. Additionally, the runtime's configured node DID is invalid. Cannot form P2PJobStatus::Failed for reporting."
+                                    "Original job failed. Additionally, runtime node_did is invalid. Cannot report P2PJobStatus::Failed."
                                 );
-                                // At this point, we can't report the P2PJobStatus::Failed properly.
-                                // The original job failure still stands.
                             }
                         }
                     }

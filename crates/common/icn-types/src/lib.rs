@@ -12,6 +12,7 @@ pub mod reputation;
 pub mod resource;
 pub mod runtime_receipt;
 pub mod trust;
+pub mod reports;
 
 pub use error::{IcnError, CryptoError, DagError, MulticodecError, IdentityError, TrustError, MeshError, VcError, SignError, EconomicsError, JobFailureReason};
 pub use runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
@@ -32,3 +33,5 @@ pub use resource::ResourceType;
 // Re-export did and cid types from icn_identity and cid crates for convenience
 pub use icn_identity::{Did, DidError, CredentialError, QuorumError, TrustBundleError, /* TrustAnchor, */ TrustBundle};
 pub use cid::Cid;
+
+pub use reports::RuntimeJobFailureReport;

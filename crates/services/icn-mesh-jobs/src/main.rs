@@ -50,6 +50,7 @@ mod models; // Add models module
 // Import our types
 use crate::job_assignment::{DefaultExecutorSelector, ExecutorSelector, GovernedExecutorSelector, ExecutionPolicy}; // Updated import
 use crate::models::{BidEvaluatorConfig, ScoreComponent, ReputationSummary, BidExplanation, BidsExplainResponse};
+use icn_types::RuntimeJobFailureReport; // <-- ADD THIS IMPORT
 
 // ADDITION START
 // Define a type alias for the shared P2P node state
@@ -60,6 +61,9 @@ use planetary_mesh::node::MeshNode as PlanetaryMeshNode;
 use libp2p::Multiaddr;
 // ADDITION for the test listener channel type
 use planetary_mesh::protocol::MeshProtocolMessage as PlanetaryMeshMessage;
+
+use icn_types::jobs::JobStatus as IcnJobStatus; // Potentially already there, ensure it's used for the new handler
+use axum::routing; // Ensure 'routing' is available for routing::post
 
 #[derive(Deserialize)]
 struct ListJobsQuery { status: Option<String> }
@@ -248,6 +252,7 @@ pub async fn run_server(
         .route("/jobs/:job_id/begin_bidding", post(begin_bidding_handler))
         .route("/jobs/:job_id/bids/explain", get(get_bids_explained_handler))
         .route("/worker/:worker_did/jobs", get(get_jobs_for_worker_handler))
+        .route("/jobs/:job_id/runtime-failure", routing::post(report_runtime_failure_handler))
         .route("/metrics", metrics_route)
         .layer(Extension(store))
         .layer(Extension(reputation_url))
@@ -1079,4 +1084,42 @@ async fn metrics_handler() -> impl IntoResponse {
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to format metrics").into_response()
         }
     }
+}
+
+// Define the new handler function
+async fn report_runtime_failure_handler(
+    Path(job_id_str): Path<String>,
+    Extension(store): Extension<Arc<dyn MeshJobStore>>,
+    AxumJson(payload): AxumJson<RuntimeJobFailureReport>,
+    // Potentially: headers: HeaderMap for auth if the reporting node's DID needs to be validated against a signature or token
+) -> Result<StatusCode, AppError> {
+    // 1. Validate job_id_str to Cid
+    let job_id = Cid::try_from(job_id_str.clone())
+        .map_err(|e| AppError::InvalidCid(format!("Invalid Job ID CID format for report: {}, error: {}", job_id_str, e)))?;
+
+    // 2. Optional: Authenticate/Authorize the reporting_node_did from the payload.
+    //    For an internal endpoint, this might be trusted or have a simpler check.
+    tracing::info!(
+        job_id = %job_id,
+        reporter_did = %payload.reporting_node_did,
+        failure_reason = ?payload.reason,
+        "Received runtime failure report."
+    );
+
+    // 3. Update job status in the store
+    //    The `icn_types::jobs::JobStatus::Failed` enum now takes `JobFailureReason`.
+    store
+        .update_job_status(&job_id, IcnJobStatus::Failed { reason: payload.reason.clone() })
+        .await?; // This will map to AppError::StorageError if it fails
+
+    // 4. Log successful processing of the report
+    tracing::info!(
+        job_id = %job_id,
+        "Successfully processed runtime failure report and updated job status."
+    );
+
+    // 5. Potentially trigger other actions (notifications, further logging, etc.)
+    //    This is out of scope for the initial implementation.
+
+    Ok(StatusCode::OK)
 } 

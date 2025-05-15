@@ -41,6 +41,9 @@ pub struct RuntimeConfig {
     /// Defaults to 30 seconds if not specified.
     #[serde(default = "default_mana_tick_interval")]
     pub mana_tick_interval_seconds: Option<u64>,
+
+    /// Optional URL for the ICN Mesh Jobs API, used for reporting job failures.
+    pub mesh_jobs_api_url: Option<String>,
 }
 
 fn default_mana_tick_interval() -> Option<u64> {

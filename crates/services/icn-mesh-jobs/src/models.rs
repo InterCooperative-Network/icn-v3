@@ -1,5 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::types::Bid;
+use icn_identity::Did;
+use icn_types::JobFailureReason;
 
 /// Component of a bid score for explanation purposes
 #[derive(Debug, Clone, Serialize, Deserialize)]
