@@ -9,9 +9,9 @@ use crate::receipt_verification::{ExecutionReceiptPayload, VerifiableReceipt};
 
 // NEW IMPORTS for CID generation
 // use cid::multihash::{Code as MultihashCode, MultihashDigest}; // OLD, REMOVED
-use multihash::{Code as MultihashCode, Multihash}; // CORRECTED IMPORT for multihash types
-use cid::{Cid, Version}; // Simplified cid import
-use serde_cbor;
+// use multihash::{Code as MultihashCode, Multihash}; // TODO: Fix multihash::Code import
+use cid::Cid; // Version is no longer used
+// use serde_cbor; // No longer used directly in this file after commenting out cid generation
 // use thiserror::Error; // Removed unused import
 // use crate::error::SignError; // Made unused by previous changes, removing
 // use crate::org::{CommunityId, CooperativeId}; // Unused
@@ -67,16 +67,18 @@ impl RuntimeExecutionReceipt {
     /// The `receipt_cid` field itself is excluded during CID calculation
     /// by serializing a temporary clone where this field is None.
     pub fn cid(&self) -> Result<Cid, ReceiptCidError> {
-        let mut temp_receipt = self.clone();
-        temp_receipt.receipt_cid = None; // Ensure receipt_cid field is not part of its own hash
+        // TODO: Fix multihash::Code import and re-enable CID generation
+        // let mut temp_receipt = self.clone();
+        // temp_receipt.receipt_cid = None; // Ensure receipt_cid field is not part of its own hash
 
-        let bytes = serde_cbor::to_vec(&temp_receipt)
-            .map_err(|e| ReceiptCidError::Serialization(e.to_string()))?;
+        // let bytes = serde_cbor::to_vec(&temp_receipt)
+        //     .map_err(|e| ReceiptCidError::Serialization(e.to_string()))?;
 
-        let hash = MultihashCode::Sha2_256.digest(&bytes);
+        // let hash = MultihashCode::Sha2_256.digest(&bytes);
 
-        // Use raw u64 for DAG_CBOR codec (0x71) for robustness
-        Ok(Cid::new(Version::V1, 0x71, hash).expect("Failed to create CID v1 dag-cbor"))
+        // // Use raw u64 for DAG_CBOR codec (0x71) for robustness
+        // Ok(Cid::new(Version::V1, 0x71, hash).expect("Failed to create CID v1 dag-cbor"))
+        Err(ReceiptCidError::Serialization("CID generation temporarily disabled due to multihash::Code import issue".to_string()))
     }
 }
 

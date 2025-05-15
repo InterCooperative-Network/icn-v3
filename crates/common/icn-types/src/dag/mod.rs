@@ -1,5 +1,5 @@
 use crate::error::DagError;
-use multihash::Code;
+// use multihash::Code; // TODO: Fix multihash::Code import
 use cid::Cid;
 use serde::{Deserialize, Serialize};
 
@@ -171,10 +171,12 @@ where
 
 impl DagNode {
     pub fn cid(&self) -> Result<Cid, DagError> {
-        let encoded =
-            serde_cbor::to_vec(&self).map_err(DagError::Cbor)?;
-        let hash = Code::Sha2_256.digest(&encoded);
-        Ok(Cid::new_v1(0x71, hash))
+        // TODO: Fix multihash::Code import and re-enable CID generation
+        // let encoded =
+        //     serde_cbor::to_vec(&self).map_err(DagError::Cbor)?;
+        // let hash = Code::Sha2_256.digest(&encoded);
+        // Ok(Cid::new_v1(0x71, hash))
+        Err(DagError::NodeValidation { reason: "CID generation temporarily disabled due to multihash::Code import issue".to_string(), node_cid: None })
     }
 
     /// Creates a builder initialized with values from this DagNode
