@@ -487,8 +487,8 @@ mod tests {
         };
         let result = enforcer.check_authorization(&did, &token3).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
-            Some(ResourceAuthorizationError::QuotaExceeded(_)) => {} // Expected
+        match result.err().unwrap() {
+            ResourceAuthorizationError::QuotaExceeded { .. } => {} // Expected
             _ => panic!("Expected QuotaExceeded error"),
         }
     }
@@ -530,8 +530,8 @@ mod tests {
         let token4 = create_token();
         let result = enforcer.check_authorization(&did, &token4).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
-            Some(ResourceAuthorizationError::RateLimitExceeded(_)) => {} // Expected
+        match result.err().unwrap() {
+            ResourceAuthorizationError::RateLimitExceeded { .. } => {} // Expected
             _ => panic!("Expected RateLimitExceeded error"),
         }
 
@@ -565,8 +565,8 @@ mod tests {
         assert!(enforcer.check_authorization(&did2, &token).await.unwrap());
         let result = enforcer.check_authorization(&did3, &token).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
-            Some(ResourceAuthorizationError::AccessDenied(_)) => {} // Expected
+        match result.err().unwrap() {
+            ResourceAuthorizationError::AccessDenied { .. } => {} // Expected
             _ => panic!("Expected AccessDenied error"),
         }
     }
@@ -592,8 +592,8 @@ mod tests {
         };
         let result = enforcer.check_authorization(&test_did(), &token).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
-            Some(ResourceAuthorizationError::TokenExpired { .. }) => {} // Expected
+        match result.err().unwrap() {
+            ResourceAuthorizationError::TokenExpired { .. } => {} // Expected
             _ => panic!("Expected TokenExpired error for expired token"),
         }
     }
@@ -807,8 +807,8 @@ mod tests {
             .check_authorization(&did_alice, &mana_token_spend_25)
             .await;
         assert!(auth_result2.is_err(), "Auth check 2 should fail due to quota");
-        match auth_result2.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
-            Some(ResourceAuthorizationError::QuotaExceeded { .. }) => {} // Expected
+        match auth_result2.err().unwrap() {
+            ResourceAuthorizationError::QuotaExceeded { .. } => {} // Expected
             other_err => panic!("Expected QuotaExceeded error, got {:?}", other_err),
         }
 

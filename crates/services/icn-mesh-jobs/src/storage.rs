@@ -10,45 +10,46 @@ use std::collections::HashMap;
 use std::sync::Arc; // For Arc<InMemoryStore> if needed directly, but main.rs uses Arc<dyn MeshJobStore>
 use tokio::sync::{broadcast, RwLock};
 use multihash::{Code, Multihash};
+use crate::error::AppError;
 
 // Helper to generate CID for a JobRequest
-// This is a basic implementation. In a production system, you'd use a canonical serialization format.
-fn generate_job_cid<T: Serialize>(req: &T) -> Result<Cid> {
-    let serialized = serde_json::to_vec(req)?;
+fn generate_job_cid<T: Serialize>(req: &T) -> Result<Cid, AppError> {
+    let serialized = serde_json::to_vec(req).map_err(|e| AppError::Serialization(e.to_string()))?;
     let hash = Sha256::digest(&serialized);
-    let mh = Code::Sha2_256.digest(&hash);
+    let mh_result = Code::Sha2_256.digest(&hash);
+    let mh = mh_result.map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create multihash for CID: {}", e)))?;
     Ok(Cid::new_v1(0x71, mh))
 }
 
 #[async_trait]
 pub trait MeshJobStore: Send + Sync {
     /// Create a new job record; returns its CID.
-    async fn insert_job(&self, job_request: JobRequest) -> Result<Cid>;
+    async fn insert_job(&self, job_request: JobRequest) -> Result<Cid, AppError>;
 
     /// Fetch a job request + status.
-    async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>>;
+    async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>, AppError>;
 
     /// List all job IDs (optionally filtered by status).
     /// If status is None, list all jobs.
-    async fn list_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<Cid>>;
+    async fn list_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<Cid>, AppError>;
     
     /// Update job status
-    async fn update_job_status(&self, job_id: &Cid, new_status: JobStatus) -> Result<()>;
+    async fn update_job_status(&self, job_id: &Cid, new_status: JobStatus) -> Result<(), AppError>;
 
     /// Store a bid for a given job.
-    async fn insert_bid(&self, job_id: &Cid, bid: Bid) -> Result<()>;
+    async fn insert_bid(&self, job_id: &Cid, bid: Bid) -> Result<(), AppError>;
 
     /// Fetch all bids for a given job.
-    async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>>;
+    async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>, AppError>;
 
     /// Subscribe to bids for a given job.
-    async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>>;
+    async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>, AppError>;
 
     /// Assign a job to a bidder
-    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<()>;
+    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<(), AppError>;
 
     /// List all jobs (CID, request, and status) for a specific worker DID (either assigned or running).
-    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>>;
+    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>, AppError>;
 }
 
 // In-memory implementation for testing
@@ -83,7 +84,7 @@ impl InMemoryStore {
 
 #[async_trait]
 impl MeshJobStore for InMemoryStore {
-    async fn insert_job(&self, job_request: JobRequest) -> Result<Cid> {
+    async fn insert_job(&self, job_request: JobRequest) -> Result<Cid, AppError> {
         let job_cid = generate_job_cid(&job_request)?;
         let job_id = job_cid.to_string();
         let mut jobs_guard = self.jobs.write().await;
@@ -91,24 +92,24 @@ impl MeshJobStore for InMemoryStore {
         Ok(job_cid)
     }
 
-    async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>> {
+    async fn get_job(&self, job_id: &Cid) -> Result<Option<(JobRequest, JobStatus)>, AppError> {
         let jobs_guard = self.jobs.read().await;
         Ok(jobs_guard.get(job_id.to_string().as_str()).cloned())
     }
 
-    async fn list_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<Cid>> {
+    async fn list_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<Cid>, AppError> {
         let jobs_guard = self.jobs.read().await;
         let cids = jobs_guard
             .iter()
             .filter(|(_, (_, status))| {
                 status_filter.as_ref().map_or(true, |filter| status == filter)
             })
-            .map(|(job_id, _)| Cid::try_from(job_id.as_str()))
+            .map(|(job_id, _)| Cid::try_from(job_id.as_str()).map_err(|e| AppError::InvalidCid(format!("Stored job_id {} is not a valid CID: {}", job_id, e))))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(cids)
     }
 
-    async fn update_job_status(&self, job_id: &Cid, new_status: JobStatus) -> Result<()> {
+    async fn update_job_status(&self, job_id: &Cid, new_status: JobStatus) -> Result<(), AppError> {
         let mut jobs_guard = self.jobs.write().await;
         if let Some((req, current_status)) = jobs_guard.get_mut(job_id.to_string().as_str()) {
             match (current_status, new_status) {
@@ -116,28 +117,27 @@ impl MeshJobStore for InMemoryStore {
                     *current_status = new_status;
                     Ok(())
                 }
-                _ => Err(anyhow::anyhow!("Invalid status transition"))
+                _ => Err(AppError::InvalidStatusTransition(format!("Invalid status transition from {} to {}", current_status, new_status)))
             }
         } else {
-            Err(anyhow::anyhow!("Job not found"))
+            Err(AppError::NotFound(format!("Job not found: {}", job_id)))
         }
     }
 
-    async fn insert_bid(&self, job_id: &Cid, bid: Bid) -> Result<()> {
+    async fn insert_bid(&self, job_id: &Cid, bid: Bid) -> Result<(), AppError> {
         let job_id_str = job_id.to_string();
         let mut bids_guard = self.bids.write().await;
         let bids = bids_guard.entry(job_id_str.clone()).or_insert_with(Vec::new);
         bids.push(bid.clone());
 
-        // Broadcast the bid to any subscribers
         let broadcaster = self.get_or_create_broadcaster(job_id).await;
-        if let Err(e) = broadcaster.send(bid) {
-            tracing::debug!("Failed to broadcast bid for job {}: {}, no active subscribers?", job_id, e);
+        if broadcaster.send(bid).is_err() {
+            tracing::debug!("No active subscribers for bids on job {}", job_id);
         }
         Ok(())
     }
 
-    async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>> {
+    async fn list_bids(&self, job_id: &Cid) -> Result<Vec<Bid>, AppError> {
         let bids_guard = self.bids.read().await;
         Ok(bids_guard
             .get(job_id.to_string().as_str())
@@ -145,38 +145,41 @@ impl MeshJobStore for InMemoryStore {
             .unwrap_or_default())
     }
 
-    async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>> {
+    async fn subscribe_to_bids(&self, job_id: &Cid) -> Result<Option<broadcast::Receiver<Bid>>, AppError> {
         Ok(self.get_bid_receiver(job_id).await)
     }
 
-    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<()> {
+    async fn assign_job(&self, job_id: &Cid, bidder_did: Did) -> Result<(), AppError> {
         let mut jobs_guard = self.jobs.write().await;
         if let Some((_, current_status)) = jobs_guard.get_mut(job_id.to_string().as_str()) {
             match current_status {
                 JobStatus::InProgress => {
-                    *current_status = JobStatus::InProgress;
+                    *current_status = JobStatus::Assigned { bidder_did };
                     Ok(())
                 }
-                _ => Err(anyhow::anyhow!("Job cannot be assigned in current state"))
+                _ => Err(AppError::InvalidStatusTransition(format!("Job cannot be assigned in current state: {}", current_status)))
             }
         } else {
-            Err(anyhow::anyhow!("Job not found"))
+            Err(AppError::NotFound(format!("Job not found: {}", job_id)))
         }
     }
 
-    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>> {
+    async fn list_jobs_for_worker(&self, worker_did: &Did) -> Result<Vec<(Cid, JobRequest, JobStatus)>, AppError> {
         let jobs_guard = self.jobs.read().await;
         let worker_jobs = jobs_guard
             .iter()
-            .filter(|(_, (_, status))| matches!(status, JobStatus::InProgress))
-            .map(|(job_id, (req, status))| {
-                Ok((
-                    Cid::try_from(job_id.as_str())?,
-                    req.clone(),
-                    status.clone(),
-                ))
+            .filter_map(|(job_id_str, (req, status))| {
+                match status {
+                    JobStatus::Assigned { bidder } if bidder == worker_did => {
+                        Cid::try_from(job_id_str.as_str())
+                            .map(|cid| (cid, req.clone(), status.clone()))
+                            .map_err(|e| AppError::InvalidCid(format!("Stored job_id {} is not a valid CID: {}", job_id_str, e)))
+                            .ok()
+                    }
+                    _ => None,
+                }
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect();
         Ok(worker_jobs)
     }
 } 

@@ -1,58 +1,78 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result as AnyhowResult};
 use icn_identity::Did;
 use icn_types::reputation::{ReputationProfile, ReputationRecord}; // Assuming this path is correct based on icn-types structure
 use serde::{Deserialize, Serialize};
-use reqwest::Client;
+use reqwest::{Client, Error as ReqwestError, StatusCode};
 use std::time::Duration;
 use std::sync::Arc;
 use crate::models::BidEvaluatorConfig;
 use tracing;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ReputationClientError {
+    #[error("Network error while communicating with reputation service: {0}")]
+    Network(#[from] ReqwestError),
+    #[error("Reputation service returned HTTP error {status}: {message}")]
+    Http { status: StatusCode, message: String },
+    #[error("Failed to deserialize response from reputation service: {0}")]
+    Deserialization(String),
+    #[error("Failed to build HTTP client for reputation service: {0}")]
+    ClientBuild(ReqwestError),
+}
 
 /// Constants for configuration
 const DEFAULT_REPUTATION_API_TIMEOUT_SECS: u64 = 5;
 
 /// Fetches the reputation profile for a given node DID from the reputation service
 /// and returns its computed score.
-pub async fn get_reputation_score(node_id: &Did, base_url: &str) -> Result<Option<f64>> {
-    // Ensure base_url doesn't have a trailing slash, and construct the full URL.
+pub async fn get_reputation_score(node_id: &Did, base_url: &str) -> Result<Option<f64>, ReputationClientError> {
     let base = base_url.trim_end_matches('/');
-    let url = format!("{}/reputation/profiles/{}", base, node_id.0); // Accessing inner String of Did
+    let url = format!("{}/reputation/profiles/{}", base, node_id.0);
 
     tracing::debug!("Querying reputation score for {} at URL: {}", node_id.0, url);
 
     let client = reqwest::Client::new();
-    let resp = client.get(&url).send().await?;
+    let resp_result = client.get(&url).send().await;
 
-    if resp.status().is_success() {
-        // Attempt to deserialize the full ReputationProfile
-        match resp.json::<ReputationProfile>().await {
-            Ok(profile) => {
-                tracing::debug!("Successfully fetched reputation profile for {}: score = {}", node_id.0, profile.computed_score);
-                Ok(Some(profile.computed_score))
-            }
-            Err(e) => {
-                tracing::error!("Failed to deserialize ReputationProfile for {}: {}. Response: {:?}", node_id.0, e, resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string()));
-                Err(anyhow!("Failed to deserialize reputation profile: {}", e))
+    match resp_result {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                match resp.json::<ReputationProfile>().await {
+                    Ok(profile) => {
+                        tracing::debug!("Successfully fetched reputation profile for {}: score = {}", node_id.0, profile.computed_score);
+                        Ok(Some(profile.computed_score))
+                    }
+                    Err(e) => {
+                        let body_text = resp.text().await.unwrap_or_else(|_| "<failed to read body>".to_string());
+                        tracing::error!("Failed to deserialize ReputationProfile for {}: {}. Response body: {}", node_id.0, e, body_text);
+                        Err(ReputationClientError::Deserialization(format!("Failed to parse ReputationProfile: {}, body: {}", e, body_text)))
+                    }
+                }
+            } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                tracing::debug!("Reputation profile not found for {}", node_id.0);
+                Ok(None)
+            } else {
+                let status = resp.status();
+                let error_body = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
+                tracing::error!("Reputation query for {} failed with status {}: {}", node_id.0, status, error_body);
+                Err(ReputationClientError::Http {
+                    status,
+                    message: format!("Reputation service query failed for node {}: {}", node_id.0, error_body),
+                })
             }
         }
-    } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        tracing::debug!("Reputation profile not found for {}", node_id.0);
-        Ok(None) // Node has no reputation profile yet, or service returned 404 correctly
-    } else {
-        let status = resp.status();
-        let error_body = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-        tracing::error!("Reputation query for {} failed with status {}: {}", node_id.0, status, error_body);
-        Err(anyhow!(
-            "Reputation service query failed for node {} with status {}: {}",
-            node_id.0, status, error_body
-        ))
+        Err(e) => {
+            // This e is a reqwest::Error from client.get().send().await
+            Err(ReputationClientError::Network(e))
+        }
     }
 }
 
 /// Submits a reputation record to the reputation service.
-pub async fn submit_reputation_record(record: &ReputationRecord, base_url: &str) -> Result<()> {
+pub async fn submit_reputation_record(record: &ReputationRecord, base_url: &str) -> Result<(), ReputationClientError> {
     let base = base_url.trim_end_matches('/');
     let url = format!("{}/reputation/records", base);
 
@@ -75,36 +95,39 @@ pub async fn submit_reputation_record(record: &ReputationRecord, base_url: &str)
             "Failed to submit reputation record for subject {}. Status: {}. Body: {}",
             record.subject.0, status, error_body
         );
-        Err(anyhow!(
-            "Reputation service failed to accept record for subject {} with status {}: {}",
-            record.subject.0, status, error_body
-        ))
+        Err(ReputationClientError::Http {
+            status,
+            message: format!("Failed to submit reputation record for subject {}: {}", record.subject.0, error_body),
+        })
     }
 }
 
-pub async fn get_reputation_profile(did: &Did, reputation_url: &str) -> Result<Option<ReputationProfile>> {
+pub async fn get_reputation_profile(did: &Did, reputation_url: &str) -> Result<Option<ReputationProfile>, ReputationClientError> {
     let client = Client::builder()
         .timeout(Duration::from_secs(DEFAULT_REPUTATION_API_TIMEOUT_SECS))
         .build()
-        .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| ReputationClientError::ClientBuild(e))?;
     
     let url = format!("{}/profiles/{}/history/latest", reputation_url.trim_end_matches('/'), did.0);
     
     let response = client.get(&url)
         .send()
         .await
-        .map_err(|e| anyhow!("Failed to fetch reputation profile: {}", e))?;
+        .map_err(|e| ReputationClientError::Network(e))?;
         
     if response.status().is_success() {
         let profile = response.json::<ReputationProfile>().await
-            .map_err(|e| anyhow!("Failed to parse reputation profile: {}", e))?;
+            .map_err(|e| ReputationClientError::Deserialization(format!("Failed to parse reputation profile: {}", e)))?;
             
         Ok(Some(profile))
     } else if response.status().as_u16() == 404 {
         // Not found is a valid response - no reputation data exists yet
         Ok(None)
     } else {
-        Err(anyhow!("Failed to fetch reputation profile: HTTP status {}", response.status()))
+        Err(ReputationClientError::Http {
+            status: response.status(),
+            message: format!("Failed to fetch reputation profile: HTTP status {}", response.status()),
+        })
     }
 }
 
@@ -112,7 +135,7 @@ pub async fn get_reputation_profile(did: &Did, reputation_url: &str) -> Result<O
 #[async_trait::async_trait]
 pub trait ReputationClient: Send + Sync {
     /// Fetch a reputation profile for a DID
-    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>>;
+    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>, ReputationClientError>;
     
     /// Calculate a bid score using reputation data
     fn calculate_bid_score(
@@ -124,7 +147,7 @@ pub trait ReputationClient: Send + Sync {
     ) -> f64;
 
     /// Submit a reputation record
-    async fn submit_record(&self, record: ReputationRecord) -> Result<()>;
+    async fn submit_record(&self, record: ReputationRecord) -> Result<(), ReputationClientError>;
 }
 
 /// Default implementation of the reputation client
@@ -146,7 +169,7 @@ impl DefaultReputationClient {
 
 #[async_trait::async_trait]
 impl ReputationClient for DefaultReputationClient {
-    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>> {
+    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>, ReputationClientError> {
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{}/reputation/profiles/{}", base, did.to_string());
 
@@ -179,12 +202,10 @@ impl ReputationClient for DefaultReputationClient {
                 status,
                 error_body
             );
-            Err(anyhow::anyhow!(
-                "Failed to fetch reputation profile for {}: HTTP {} - {}",
-                did.to_string(),
+            Err(ReputationClientError::Http {
                 status,
-                error_body
-            ))
+                message: format!("Failed to fetch reputation profile for {}: HTTP {} - {}", did.to_string(), status, error_body),
+            })
         }
     }
     
@@ -215,7 +236,7 @@ impl ReputationClient for DefaultReputationClient {
         price_component + resource_component + reputation_component + timeliness_component
     }
 
-    async fn submit_record(&self, record: ReputationRecord) -> Result<()> {
+    async fn submit_record(&self, record: ReputationRecord) -> Result<(), ReputationClientError> {
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{}/reputation/records", base);
 
@@ -242,12 +263,10 @@ impl ReputationClient for DefaultReputationClient {
                 status,
                 error_body
             );
-            Err(anyhow::anyhow!(
-                "Failed to submit reputation record for subject {}: HTTP {} - {}",
-                record.subject.to_string(),
+            Err(ReputationClientError::Http {
                 status,
-                error_body
-            ))
+                message: format!("Failed to submit reputation record for subject {}: HTTP {} - {}", record.subject.to_string(), status, error_body),
+            })
         }
     }
 }
@@ -285,7 +304,7 @@ impl CachingReputationClient {
 
 #[async_trait::async_trait]
 impl ReputationClient for CachingReputationClient {
-    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>> {
+    async fn fetch_profile(&self, did: &Did) -> Result<Option<ReputationProfile>, ReputationClientError> {
         // Try to get from cache first
         if let Some(cached) = self.get_cached_profile(did).await {
             return Ok(Some(cached));
@@ -310,7 +329,7 @@ impl ReputationClient for CachingReputationClient {
         self.client.calculate_bid_score(config, profile, normalized_price, resource_match)
     }
 
-    async fn submit_record(&self, record: ReputationRecord) -> Result<()> {
+    async fn submit_record(&self, record: ReputationRecord) -> Result<(), ReputationClientError> {
         self.client.submit_record(record).await
     }
 } 
