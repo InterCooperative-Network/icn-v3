@@ -5,6 +5,7 @@ use axum::{
 };
 use serde_json::json;
 use utoipa::ToSchema;
+use icn_identity::DidError;
 
 #[derive(Debug, ToSchema)]
 pub enum ApiError {
@@ -37,5 +38,13 @@ impl IntoResponse for ApiError {
 impl<E: std::error::Error> From<E> for ApiError {
     fn from(err: E) -> Self {
         ApiError::InternalServerError(err.to_string())
+    }
+}
+
+// Added From impl for DidError
+impl From<DidError> for ApiError {
+    fn from(err: DidError) -> Self {
+        tracing::warn!("DID Error: {}", err.to_string());
+        ApiError::BadRequest(format!("Invalid DID format: {}", err))
     }
 }

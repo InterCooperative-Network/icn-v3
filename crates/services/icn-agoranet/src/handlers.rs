@@ -11,6 +11,8 @@ use chrono::{DateTime, Duration};
 use serde_json::Value;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use icn_identity::Did; // Added
+use std::str::FromStr; // Added
 
 use crate::error::ApiError;
 use crate::models::*; // Added ApiError import
@@ -712,6 +714,9 @@ pub async fn create_thread_handler(
     State(db): State<Db>,
     Json(payload): Json<NewThreadRequest>,
 ) -> Result<(StatusCode, Json<ThreadSummary>), ApiError> {
+    // Validate author_did
+    let author_did_validated = Did::from_str(&payload.author_did)?; 
+
     let mut store = db
         .write()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
@@ -720,7 +725,7 @@ pub async fn create_thread_handler(
         id: new_id.clone(),
         title: payload.title,
         created_at: Utc::now(),
-        author_did: payload.author_did,
+        author_did: author_did_validated.to_string(), // Use validated DID string
         scope: payload.scope,
     };
     let thread_detail = ThreadDetail {
@@ -856,6 +861,8 @@ pub async fn cast_vote_handler(
     State(db): State<Db>,
     Json(payload): Json<NewVoteRequest>,
 ) -> Result<(StatusCode, Json<Vote>), ApiError> {
+    let validated_voter_did = Did::from_str(&payload.voter_did)?;
+
     let mut store = db
         .write()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire write lock".to_string()))?;
@@ -863,11 +870,11 @@ pub async fn cast_vote_handler(
     if store
         .votes
         .iter()
-        .any(|v| v.proposal_id == payload.proposal_id && v.voter_did == payload.voter_did)
+        .any(|v| v.proposal_id == payload.proposal_id && v.voter_did == validated_voter_did.to_string())
     {
         return Err(ApiError::BadRequest(format!(
             "Voter {} has already voted on proposal {}",
-            payload.voter_did, payload.proposal_id
+            validated_voter_did.to_string(), payload.proposal_id
         )));
     }
 
@@ -902,7 +909,7 @@ pub async fn cast_vote_handler(
 
     let vote = Vote {
         proposal_id: payload.proposal_id.clone(),
-        voter_did: payload.voter_did.clone(),
+        voter_did: validated_voter_did.to_string(),
         vote_type: payload.vote_type,
         timestamp: Utc::now(),
         justification: payload.justification,

@@ -90,8 +90,16 @@ impl IntoResponse for AppError {
                 (StatusCode::BAD_GATEWAY, AxumJson(json!({ "error": "Error communicating with reputation service" }))).into_response()
             }
             AppError::SelectionFailure(err) => {
-                tracing::error!("Executor selection error: {:#}", err);
-                (StatusCode::INTERNAL_SERVER_ERROR, AxumJson(json!({ "error": format!("Failed to select executor: {}", err) }))).into_response()
+                match err {
+                    SelectionError::ReputationServiceError(ref r_err) => {
+                        tracing::error!("Executor selection failed due to reputation service error: {:#}", r_err);
+                        (StatusCode::BAD_GATEWAY, AxumJson(json!({ "error": format!("Failed to select executor: problem with reputation service: {}", r_err) }))).into_response()
+                    }
+                    SelectionError::Internal { reason } => {
+                        tracing::error!("Executor selection failed due to internal error: {}", reason);
+                        (StatusCode::INTERNAL_SERVER_ERROR, AxumJson(json!({ "error": format!("Failed to select executor: internal error: {}", reason) }))).into_response()
+                    }
+                }
             }
             AppError::P2pError(msg) => {
                 tracing::error!("P2P interaction error: {}", msg);

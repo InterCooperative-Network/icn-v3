@@ -14,6 +14,8 @@ use uuid;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use crate::models::{EntityRef, EntityType};
+use icn_identity::Did;
+use std::str::FromStr;
 
 // Add the revocation module
 pub mod revocation;
@@ -223,6 +225,9 @@ pub enum AuthError {
     #[error("operation only available to federation coordinators")]
     NotFederationCoordinator,
     
+    #[error("Invalid DID format for subject: {0}")]
+    InvalidSubjectDidFormat(String),
+    
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -241,6 +246,7 @@ impl IntoResponse for AuthError {
             AuthError::NotCoopOperator => (StatusCode::FORBIDDEN, "This operation requires cooperative operator role".to_string()),
             AuthError::NotCommunityOfficial => (StatusCode::FORBIDDEN, "This operation requires community official role".to_string()),
             AuthError::NotFederationCoordinator => (StatusCode::FORBIDDEN, "This operation requires federation coordinator role".to_string()),
+            AuthError::InvalidSubjectDidFormat(msg) => (StatusCode::BAD_REQUEST, msg),
             AuthError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Internal server error: {}", msg)),
         };
 
@@ -417,6 +423,10 @@ pub fn issue_token(
     issuer: Option<String>,
     config: &JwtConfig,
 ) -> Result<TokenResponse, AuthError> {
+    // Validate the subject DID
+    Did::from_str(&req.subject)
+        .map_err(|e| AuthError::InvalidSubjectDidFormat(e.to_string()))?;
+
     // Calculate expiration time
     let now = Utc::now();
     let expires_in = req.expires_in.unwrap_or(3600 * 24); // Default: 24 hours
