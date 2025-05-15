@@ -15,7 +15,7 @@ use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
 // use icn_dag_scheduler::commit::DagCommitAddress; // Temporarily commented out
 // use icn_dag_scheduler::protocol::JobId; // Temporarily commented out
 // use icn_stable_memory_wasm::StableMemoryError; // Temporarily commented out
-use icn_types::error::DagError;
+// use icn_types::error::DagError; // Removed unused import
 
 /// Concrete implementation of the host environment for WASM execution
 #[derive(Clone)]
