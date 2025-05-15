@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use icn_identity::Did; // Added
 use std::str::FromStr; // Added
+use cid::Cid; // Added
 
 use crate::error::ApiError;
 use crate::models::*; // Added ApiError import
@@ -1011,9 +1012,11 @@ pub async fn get_receipts_handler(
     )
 )]
 pub async fn get_receipt_detail_handler(
-    Path(cid): Path<String>,
+    Path(cid_str): Path<String>, // Renamed to cid_str for clarity
     State(db): State<Db>,
 ) -> Result<Json<ExecutionReceiptDetail>, ApiError> {
+    let validated_cid = Cid::try_from(cid_str.clone())?; // Parse the CID string
+
     let store = db
         .read()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
@@ -1021,9 +1024,9 @@ pub async fn get_receipt_detail_handler(
     store
         .receipts
         .iter()
-        .find(|r| r.summary.cid == cid)
+        .find(|r| r.summary.cid == validated_cid.to_string()) // Use validated_cid.to_string()
         .map(|r| Json(r.clone()))
-        .ok_or_else(|| ApiError::NotFound(format!("Receipt with CID {} not found", cid)))
+        .ok_or_else(|| ApiError::NotFound(format!("Receipt with CID {} not found", validated_cid.to_string())))
 }
 
 // GET /receipts/stats
@@ -1075,6 +1078,11 @@ pub async fn get_token_balances_handler(
     Query(params): Query<GetTokenBalancesQuery>,
     State(db): State<Db>,
 ) -> Result<Json<Vec<TokenBalance>>, ApiError> {
+    // Validate params.account if it's provided
+    if let Some(ref account_str) = params.account {
+        let _ = Did::from_str(account_str)?; // Validate DID format, error out if invalid
+    }
+
     let store = db
         .read()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
@@ -1113,6 +1121,11 @@ pub async fn get_token_transactions_handler(
     Query(params): Query<GetTokenTransactionsQuery>,
     State(db): State<Db>,
 ) -> Result<Json<Vec<TokenTransaction>>, ApiError> {
+    // Validate params.account if it's provided
+    if let Some(ref account_str) = params.account {
+        let _ = Did::from_str(account_str)?; // Validate DID format, error out if invalid
+    }
+
     let store = db
         .read()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
@@ -1559,26 +1572,36 @@ pub async fn process_entity_transfer(
     Path(federation_id): Path<String>,
     Json(request): Json<TransferRequest>,
 ) -> Result<Json<TransferResponse>, ApiError> {
-    // Validate that the user has federation access
+    // Authorization: Ensure the initiator has permission to transfer from the source entity
+    if !check_transfer_from_permission(&auth.claims, &request.from) {
+        return Err(ApiError::Forbidden(
+            "Initiator does not have permission to transfer from the source entity".to_string(),
+        ));
+    }
+
+    // Validate 'from' entity ID if it's a User or ResourceProvider
+    if request.from.entity_type == EntityType::User || request.from.entity_type == EntityType::ResourceProvider {
+        let _validated_from_did = Did::from_str(&request.from.id)?;
+    }
+
+    // Validate 'to' entity ID if it's a User or ResourceProvider
+    if request.to.entity_type == EntityType::User || request.to.entity_type == EntityType::ResourceProvider {
+        let _validated_to_did = Did::from_str(&request.to.id)?;
+    }
+
+    // Validate that the user has federation access TO THE FEDERATION SPECIFIED IN THE PATH
     if !auth.claims.has_federation_access(&federation_id) {
         return Err(ApiError::Unauthorized("No access to this federation".to_string()));
     }
-    
-    // Check if the user has permission to transfer from the source entity
-    check_transfer_from_permission(&auth, &request.from)
-        .await
-        .map_err(|e| ApiError::Forbidden(e.to_string()))?;
     
     // Ensure amount is greater than zero
     if request.amount == 0 {
         return Err(ApiError::BadRequest("Transfer amount must be greater than zero".to_string()));
     }
     
-    // Create a mock entity registry for this example
-    // In a real implementation, this would be fetched from a database or service
     let entity_registry = get_mock_entity_registry();
     
-    // Verify both entities belong to this federation
+    // Verify both entities belong to THIS federation (from the path)
     if !verify_entity_in_federation(&request.from, &federation_id, &entity_registry) {
         return Err(ApiError::BadRequest(format!("Source entity does not belong to federation {}", federation_id)));
     }
@@ -1587,18 +1610,15 @@ pub async fn process_entity_transfer(
         return Err(ApiError::BadRequest(format!("Destination entity does not belong to federation {}", federation_id)));
     }
     
-    // Calculate the fee
     let fee = calculate_fee(request.amount, &request.from, &request.to);
     
-    // Create the transfer record
     let transfer = create_transfer(
         &request,
-        federation_id.clone(),
+        federation_id.clone(), // Use federation_id from path
         auth.claims.sub.clone(),
         fee,
     );
 
-    // Access the store and get a read lock to access the ledger
     let store_read_guard = db.read()
         .map_err(|_| ApiError::InternalServerError("Failed to acquire read lock".to_string()))?;
     
