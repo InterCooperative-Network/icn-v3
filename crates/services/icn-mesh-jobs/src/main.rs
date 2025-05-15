@@ -659,7 +659,8 @@ async fn mark_job_completed_handler(
     headers: HeaderMap,
     AxumJson(details): AxumJson<JobCompletionDetails>,
 ) -> Result<StatusCode, AppError> {
-    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e)))?;
+    let job_id = Cid::try_from(job_id_str.clone())
+        .map_err(|e| AppError::InvalidCid(format!("Invalid Job ID format for mark_job_completed: {} - {}", job_id_str, e)))?;
 
     let worker_did_header = headers
         .get("X-Worker-DID")
@@ -668,8 +669,7 @@ async fn mark_job_completed_handler(
         .map_err(|_| AppError::BadRequest("Invalid X-Worker-DID header format".to_string()))?;
     let worker_did = Did(worker_did_header.to_string());
 
-    let (_, job_status) = store.get_job(&job_id).await
-        .map_err(AppError::Internal)?
+    let (_, job_status) = store.get_job(&job_id).await? 
         .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
 
     let runner_did = match job_status {
@@ -685,7 +685,7 @@ async fn mark_job_completed_handler(
         }
         _ => {
             tracing::error!("Job {} is in status {:?} and cannot be marked completed.", job_id, job_status);
-            return Err(AppError::BadRequest(format!("Job {} not in Running state. Current state: {:?}.", job_id, job_status)));
+            return Err(AppError::InvalidStatusTransition(format!("Job {} not in Running state, cannot mark completed. Current state: {:?}.", job_id, job_status)));
         }
     };
 
@@ -704,11 +704,9 @@ async fn mark_job_completed_handler(
         signature: None,
     };
 
-    if let Err(e) = reputation_client::submit_reputation_record(&record, &reputation_url).await {
-        tracing::error!("Failed to submit reputation record for job {}: {}. Proceeding with job completion.", job_id, e);
-    }
+    reputation_client::submit_reputation_record(&record, &reputation_url).await?;
 
-    store.update_job_status(&job_id, JobStatus::Completed).await.map_err(AppError::Internal)?;
+    store.update_job_status(&job_id, JobStatus::Completed).await?; 
     tracing::info!("Marked job {} as Completed. Reputation record submitted for runner {}.", job_id, runner_did.0);
     Ok(StatusCode::OK)
 }
@@ -720,7 +718,8 @@ async fn mark_job_failed_handler(
     headers: HeaderMap,
     AxumJson(details): AxumJson<JobFailureDetails>,
 ) -> Result<StatusCode, AppError> {
-    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e)))?;
+    let job_id = Cid::try_from(job_id_str.clone())
+        .map_err(|e| AppError::InvalidCid(format!("Invalid Job ID format for mark_job_failed: {} - {}", job_id_str, e)))?;
 
     let worker_did_header = headers
         .get("X-Worker-DID")
@@ -729,8 +728,7 @@ async fn mark_job_failed_handler(
         .map_err(|_| AppError::BadRequest("Invalid X-Worker-DID header format".to_string()))?;
     let worker_did = Did(worker_did_header.to_string());
 
-    let (_, job_status) = store.get_job(&job_id).await
-        .map_err(AppError::Internal)?
+    let (_, job_status) = store.get_job(&job_id).await?
         .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
 
     let runner_did = match job_status {
@@ -746,7 +744,7 @@ async fn mark_job_failed_handler(
         }
         _ => {
             tracing::error!("Job {} is in status {:?} and cannot be marked failed.", job_id, job_status);
-            return Err(AppError::BadRequest(format!("Job {} not in Running state. Current state: {:?}.", job_id, job_status)));
+            return Err(AppError::InvalidStatusTransition(format!("Job {} not in Running state, cannot mark failed. Current state: {:?}.", job_id, job_status)));
         }
     };
 
@@ -763,12 +761,10 @@ async fn mark_job_failed_handler(
         signature: None,
     };
 
-    if let Err(e) = reputation_client::submit_reputation_record(&record, &reputation_url).await {
-        tracing::error!("Failed to submit reputation record for failed job {}: {}. Proceeding.", job_id, e);
-    }
+    reputation_client::submit_reputation_record(&record, &reputation_url).await?;
 
-    store.update_job_status(&job_id, JobStatus::Failed { reason: details.reason }).await.map_err(AppError::Internal)?;
-    tracing::info!("Marked job {} as Failed. Reason: {}. Reputation record submitted for runner {}.", job_id, store.get_job(&job_id).await.map(|j| format!("{:?}", j.map(|(_,s)|s))).unwrap_or_default(), runner_did.0);
+    store.update_job_status(&job_id, JobStatus::Failed { reason: details.reason }).await?;
+    tracing::info!("Marked job {} as Failed. Reason: {}. Reputation record submitted for runner {}.", job_id, details.reason, runner_did.0);
     Ok(StatusCode::OK)
 }
 
@@ -861,15 +857,15 @@ async fn begin_bidding_handler(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Path(job_id_str): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e)))?;
+    let job_id = Cid::try_from(job_id_str.clone())
+        .map_err(|e| AppError::InvalidCid(format!("Invalid Job ID format for begin_bidding: {} - {}", job_id_str, e)))?;
 
-    let (_, current_status) = store.get_job(&job_id).await
-        .map_err(AppError::Internal)?
+    let (_, current_status) = store.get_job(&job_id).await?
         .ok_or_else(|| AppError::NotFound(format!("Job not found: {}", job_id)))?;
 
     match current_status {
         JobStatus::Pending => {
-            store.update_job_status(&job_id, JobStatus::Bidding).await.map_err(AppError::Internal)?;
+            store.update_job_status(&job_id, JobStatus::Bidding).await?;
             tracing::info!("Job {} has been moved to Bidding state.", job_id);
             Ok(StatusCode::OK)
         }
@@ -879,7 +875,7 @@ async fn begin_bidding_handler(
         }
         _ => {
             tracing::warn!("Job {} is in status {:?} and cannot be moved to Bidding state.", job_id, current_status);
-            Err(AppError::BadRequest(format!("Job {} is in status {:?} and cannot be moved to Bidding state.", job_id, current_status)))
+            Err(AppError::InvalidStatusTransition(format!("Job {} is in status {:?} and cannot be moved to Bidding state.", job_id, current_status)))
         }
     }
 }
@@ -892,7 +888,7 @@ async fn get_bids_explained_handler(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<AxumJson<BidsExplainResponse>, AppError> {
     let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| 
-        AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e))
+        AppError::InvalidCid(format!("Invalid Job ID format: {} - {}", job_id_str, e))
     )?;
     
     // Get job and bids
