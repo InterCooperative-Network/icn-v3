@@ -16,6 +16,8 @@ use icn_types::runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceip
 use icn_types::VerifiableReceipt;
 use icn_types::JobFailureReason;
 use icn_mesh_protocol::P2PJobStatus;
+use icn_types::error::IcnError;
+use icn_types::error::EconomicsError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -999,14 +1001,100 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
 
                 match self.process_polled_job(job.clone()).await {
                     Ok(receipt) => {
-                        info!(job_id = %receipt.job_id, "Execution succeeded. Anchoring receipt...");
+                        if receipt.status == IcnJobStatus::Failed {
+                            warn!(
+                                job_id = %receipt.job_id,
+                                "Job processing returned Ok(receipt), but receipt status is Failed."
+                            );
+
+                            let failure_reason = JobFailureReason::ExecutionError(
+                                "Job completed with a 'Failed' status in its execution receipt"
+                                    .to_string(),
+                            );
+
+                            let executor_node_did_str = self.config.node_did.clone();
+                            let parsed_node_did = match Did::from_str(&executor_node_did_str) {
+                                Ok(did) => did,
+                                Err(did_parse_err) => {
+                                    error!(
+                                        "CRITICAL: Runtime's configured node_did '{}' is invalid: {}. Cannot report job failure accurately.",
+                                        executor_node_did_str, did_parse_err
+                                    );
+                                    return Err(anyhow!(
+                                        "Runtime configuration error: node_did '{}' is invalid: {}",
+                                        executor_node_did_str,
+                                        did_parse_err
+                                    ));
+                                }
+                            };
+
+                            let failed_status_update = P2PJobStatus::Failed {
+                                node_id: parsed_node_did,
+                                reason: failure_reason,
+                            };
+
+                            warn!(
+                                job_id = %receipt.job_id,
+                                "Job processing indicates failure in receipt. Status: {:?}",
+                                failed_status_update
+                            );
+                            // TODO: Implement actual failure reporting mechanism for this case too.
+                            
+                            // Skip anchoring a failed job's receipt if it explicitly failed.
+                            // Or, if failed receipts *should* be anchored, remove continue and adjust logic.
+                            // For now, skipping.
+                            continue; 
+                        }
+
+                        // If receipt.status is not Failed, proceed as normal.
+                        info!(job_id = %receipt.job_id, "Execution succeeded (receipt status is not Failed). Anchoring receipt...");
                         self.anchor_mesh_receipt(&receipt).await?;
                     }
                     Err(e) => {
                         warn!(job_id = %job.job_id, "Job processing failed: {:?}", e);
                         
-                        let reason_str = format!("{:?}", e);
-                        let failure_reason = JobFailureReason::ExecutionError(reason_str);
+                        let failure_reason = if let Some(icn_err) = e.downcast_ref::<IcnError>() {
+                            match icn_err {
+                                IcnError::Io(_) => JobFailureReason::NetworkError,
+                                IcnError::Serialization(_) => JobFailureReason::OutputError,
+                                IcnError::InvalidUri(_) => JobFailureReason::InvalidInput,
+                                IcnError::NotFound(_) => JobFailureReason::NotFound,
+                                IcnError::PermissionDenied(s) => {
+                                    // PermissionDenied is unit, use ExecutionError to keep message
+                                    JobFailureReason::ExecutionError(format!("Permission denied: {}", s))
+                                }
+                                IcnError::Identity(_) => JobFailureReason::PermissionDenied, // General category
+
+                                IcnError::Economics(econ_err) => match econ_err {
+                                    EconomicsError::QuotaExceeded { .. } | EconomicsError::RateLimitExceeded { .. } => {
+                                        JobFailureReason::ResourceLimitExceeded
+                                    }
+                                    EconomicsError::AccessDenied { .. } => JobFailureReason::PermissionDenied,
+                                    _ => JobFailureReason::ExecutionError(format!("Economics error: {}", econ_err)),
+                                },
+
+                                IcnError::Crypto(err) => JobFailureReason::ExecutionError(format!("Crypto error: {}", err)),
+                                IcnError::Dag(err) => JobFailureReason::ExecutionError(format!("DAG error: {}", err)),
+                                IcnError::Multicodec(err) => JobFailureReason::ExecutionError(format!("Multicodec error: {}", err)),
+                                IcnError::Trust(err) => JobFailureReason::ExecutionError(format!("Trust error: {}", err)),
+                                IcnError::Mesh(err) => JobFailureReason::ExecutionError(format!("Mesh error: {}", err)),
+                                IcnError::Timeout(s) => JobFailureReason::ExecutionError(format!("Timeout: {}", s)),
+                                IcnError::Config(s) => JobFailureReason::ExecutionError(format!("Config error: {}", s)),
+                                IcnError::Storage(s) => JobFailureReason::ExecutionError(format!("Storage error: {}", s)),
+                                IcnError::Database(s) => JobFailureReason::ExecutionError(format!("Database error: {}", s)),
+                                IcnError::Plugin(s) => JobFailureReason::ExecutionError(format!("Plugin error: {}", s)),
+                                IcnError::Consensus(s) => JobFailureReason::ExecutionError(format!("Consensus error: {}", s)),
+                                IcnError::InvalidOperation(s) => JobFailureReason::ExecutionError(format!("Invalid operation: {}", s)),
+                                
+                                IcnError::General(s) => JobFailureReason::Unknown(s.clone()),
+                                
+                                // Catch-all for any IcnError variants not explicitly handled.
+                                _ => JobFailureReason::Unknown(format!("An unclassified ICN error occurred: {}", icn_err)),
+                            }
+                        } else {
+                            // Fallback if 'e' is not an IcnError
+                            JobFailureReason::ExecutionError(e.to_string())
+                        };
                         
                         let executor_node_did_str = self.config.node_did.clone();
                         match Did::from_str(&executor_node_did_str) {
