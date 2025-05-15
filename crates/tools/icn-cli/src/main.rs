@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use icn_ccl_compiler::CclCompiler;
 use icn_identity::{Did, FederationMetadata, KeyPair, QuorumProof, QuorumType, TrustBundle};
-use icn_runtime::{ExecutionReceipt, Proposal, ProposalState, QuorumStatus};
+use icn_runtime::{ExecutionReceipt, Proposal, ProposalState, QuorumStatus, RuntimeExecutionReceipt, VmContext as RuntimeVmContext};
+use icn_types::error::{IcnError, IdentityError as IcnTypesIdentityError, DagError as IcnTypesDagError, CryptoError as IcnTypesCryptoError, MeshError as IcnTypesMeshError, TrustError as IcnTypesTrustError, MulticodecError as IcnTypesMulticodecError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,6 +17,104 @@ struct KeypairFileFormat {
     public_key: String,
     secret_key: String,
     generated_at: String,
+}
+
+/// Formats an `icn_identity::DidError` into a user-friendly `anyhow::Error`.
+fn format_did_error(did_err: &icn_identity::DidError, problematic_input: &str) -> anyhow::Error {
+    match did_err {
+        icn_identity::DidError::Malformed => {
+            anyhow!("Invalid DID format for '{}'. A DID should start with 'did:key:' and be a base58btc encoded Ed25519 public key.", problematic_input)
+        }
+        icn_identity::DidError::UnsupportedCodec(codec) => {
+            anyhow!("Unsupported key type in DID '{}'. The multicodec prefix {:#x} is not supported. Only Ed25519 keys (prefix 0xed) are currently accepted.", problematic_input, codec)
+        }
+    }
+}
+
+/// Formats a `serde_json::Error` into a user-friendly `anyhow::Error` with file context.
+fn format_serde_json_error(err: &serde_json::Error, file_path: &Path, context_message: &str) -> anyhow::Error {
+    let display_path = file_path.display();
+    match err.classify() {
+        serde_json::error::Category::Io => {
+            anyhow!("{} I/O error while parsing JSON file '{}': {}", context_message, display_path, err)
+        }
+        serde_json::error::Category::Syntax => {
+            anyhow!("{} Invalid JSON syntax in file '{}' at line {} column {}: {}", context_message, display_path, err.line(), err.column(), err)
+        }
+        serde_json::error::Category::Data => {
+            anyhow!("{} Invalid data structure in JSON file '{}'. Error: {}", context_message, display_path, err)
+        }
+        serde_json::error::Category::Eof => {
+            anyhow!("{} Unexpected end of file in JSON file '{}' while parsing.", context_message, display_path)
+        }
+    }
+}
+
+/// Reads a file and parses its content as JSON into a specified type `T`.
+/// Provides context-aware error messages for both I/O and parsing failures.
+fn read_and_parse_json<T: serde::de::DeserializeOwned>(file_path: &Path, context_for_error: &str) -> Result<T> {
+    let json_str = std::fs::read_to_string(file_path)
+        .map_err(|io_err| anyhow!("Failed to read {} file '{}': {}", context_for_error, file_path.display(), io_err))?;
+
+    serde_json::from_str(&json_str)
+        .map_err(|json_err| format_serde_json_error(&json_err, file_path, &format!("Failed to parse {} from", context_for_error)))
+}
+
+/// Formats an `icn_types::error::IcnError` into a user-friendly `anyhow::Error` for the CLI.
+fn format_icn_error_for_cli(err: &IcnError, base_context_msg: &str) -> anyhow::Error {
+    let detailed_msg = match err {
+        IcnError::Io(io_err) => format!("Underlying I/O error: {}", io_err),
+        IcnError::Serialization(json_err) => format!("Underlying JSON serialization/deserialization error: {}", json_err),
+        IcnError::Identity(identity_err) => {
+            // Handle IcnTypesIdentityError specifically
+            match identity_err {
+                IcnTypesIdentityError::DidProcessing { source: did_err } => {
+                    // We need a 'problematic_input' string here. Since we don't have it directly,
+                    // we pass a generic placeholder. The outer context from anyhow will be more helpful.
+                    return format_did_error(did_err, "[DID processed during operation]")
+                        .context(format!("{}: Identity error involving DID processing", base_context_msg))
+                }
+                IcnTypesIdentityError::JwsProcessing { source: jws_err } => {
+                    format!("Identity error: JWS processing failed: {}", jws_err)
+                }
+                IcnTypesIdentityError::TrustBundleProcessing { source: tb_err } => {
+                    format!("Identity error: Trust Bundle processing failed: {}", tb_err)
+                }
+                // Add more specific IcnTypesIdentityError arms as needed
+                _ => format!("Underlying Identity error: {}", identity_err),
+            }
+        }
+        IcnError::Dag(dag_err) => {
+            match dag_err {
+                IcnTypesDagError::MalformedCid(cid_err) => format!("DAG error: Malformed CID: {}", cid_err),
+                IcnTypesDagError::LinkNotFound { cid } => format!("DAG error: Link not found for CID: {}", cid),
+                IcnTypesDagError::NodeValidation { reason, node_cid } => {
+                    if let Some(ncid) = node_cid {
+                        format!("DAG error: Node validation failed for CID {}: {}", ncid, reason)
+                    } else {
+                        format!("DAG error: Node validation failed: {}", reason)
+                    }
+                }
+                // Add more specific IcnTypesDagError arms as needed
+                _ => format!("Underlying DAG error: {}", dag_err),
+            }
+        }
+        IcnError::Crypto(crypto_err) => format!("Underlying Cryptography error: {}", crypto_err),
+        IcnError::Mesh(mesh_err) => format!("Underlying Mesh error: {}", mesh_err),
+        IcnError::Trust(trust_err) => format!("Underlying Trust error: {}", trust_err),
+        IcnError::Multicodec(mc_err) => format!("Underlying Multicodec error: {}", mc_err),
+        IcnError::InvalidUri(uri_err) => format!("Invalid URI encountered: {}", uri_err),
+        IcnError::Timeout(s) => format!("Operation timed out: {}", s),
+        IcnError::Config(s) => format!("Configuration error: {}", s),
+        IcnError::Storage(s) => format!("Storage error: {}", s),
+        IcnError::InvalidOperation(s) => format!("Invalid operation: {}", s),
+        IcnError::NotFound(s) => format!("Resource not found: {}", s),
+        IcnError::PermissionDenied(s) => format!("Permission denied: {}", s),
+        IcnError::General(s) => format!("General error: {}", s),
+        // Catch-all for any IcnError variants not explicitly handled above
+        _ => format!("An unspecified ICN error occurred: {}", err),
+    };
+    anyhow!("{}: {}", base_context_msg, detailed_msg)
 }
 
 /// Command-line interface for ICN governance
@@ -307,8 +406,7 @@ struct CliRuntimeStorage {
     wasm_modules: std::collections::HashMap<String, Vec<u8>>,
 
     /// Execution receipts stored in memory (CID -> receipt)
-    #[allow(dead_code)] // This is a mock and receipts aren't read in current CLI impl
-    receipts: std::collections::HashMap<String, String>,
+    receipts: std::collections::HashMap<String, RuntimeExecutionReceipt>,
 }
 
 impl CliRuntimeStorage {
@@ -333,7 +431,15 @@ impl icn_runtime::RuntimeStorage for CliRuntimeStorage {
 
     async fn update_proposal(&self, proposal: &Proposal) -> Result<()> {
         // In a real implementation, we would update the proposal in a database
-        println!("Updated proposal: {}", proposal.id);
+        // For CLI, let's simulate finding and updating or adding
+        if let Some(pos) = self.proposals.iter().position(|p| p.id == proposal.id) {
+            // Not directly modifying self.proposals due to &self, this mock is simplified.
+            // In a real scenario with &mut self or interior mutability, we'd update.
+            println!("Simulating update for proposal: {}", proposal.id);
+        } else {
+            // Cannot add to self.proposals with &self. This mock has limitations.
+            println!("Simulating add for new proposal: {}", proposal.id);
+        }
         Ok(())
     }
 
@@ -344,14 +450,30 @@ impl icn_runtime::RuntimeStorage for CliRuntimeStorage {
             .ok_or_else(|| anyhow!("WASM module not found: {}", cid))
     }
 
-    async fn store_receipt(&self, _receipt: &icn_runtime::ExecutionReceipt) -> Result<String> {
-        // Generate a CID for the receipt (just a UUID for simplicity)
+    // Added missing trait item
+    async fn store_wasm(&self, cid: &str, bytes: &[u8]) -> Result<()> {
+        // Not actually storing due to &self, this is a mock for CLI
+        // In a real scenario, would be self.wasm_modules.lock().unwrap().insert(cid.to_string(), bytes.to_vec());
+        println!("Simulating store for WASM: {} ({} bytes)", cid, bytes.len());
+        Ok(())
+    }
+
+    // Updated signature to use RuntimeExecutionReceipt
+    async fn store_receipt(&self, receipt: &RuntimeExecutionReceipt) -> Result<String> {
         let cid = format!("receipt-{}", Uuid::new_v4());
-
-        // In a real implementation, we would store the receipt in IPFS/Filecoin
-        println!("Stored receipt with CID: {}", cid);
-
+        // Not actually storing to self.receipts due to &self. This is a mock.
+        // In a real scenario, would be self.receipts.lock().unwrap().insert(cid.clone(), receipt.clone());
+        println!("Simulating store for receipt with mock CID: {} (for original ID: {})", cid, receipt.id);
         Ok(cid)
+    }
+
+    // Added missing trait item
+    async fn load_receipt(&self, receipt_id: &str) -> Result<RuntimeExecutionReceipt> {
+        // Not actually loading from self.receipts due to &self. This is a mock.
+        println!("Simulating load for receipt: {}", receipt_id);
+        Err(anyhow!("Mock load_receipt not implemented for CliRuntimeStorage: {}", receipt_id))
+        // Example if we could load:
+        // self.receipts.get(receipt_id).cloned().ok_or_else(|| anyhow!("Receipt not found: {}", receipt_id))
     }
 
     async fn anchor_to_dag(&self, cid: &str) -> Result<String> {
@@ -400,9 +522,8 @@ async fn create_proposal(ccl_file: &Path, _title: &str, output: Option<&Path>) -
 
 /// Vote on a proposal
 async fn vote_on_proposal(proposal_path: &Path, direction: &str, weight: u64) -> Result<()> {
-    // Load the proposal
-    let proposal_json = std::fs::read_to_string(proposal_path)?;
-    let mut proposal: Proposal = serde_json::from_str(&proposal_json)?;
+    // Load the proposal using the helper function
+    let mut proposal: Proposal = read_and_parse_json(proposal_path, "proposal data")?;
 
     // Update proposal state
     proposal.state = ProposalState::Voting;
@@ -444,9 +565,8 @@ async fn vote_on_proposal(proposal_path: &Path, direction: &str, weight: u64) ->
 
 /// Check the status of a proposal
 async fn check_proposal_status(proposal_path: &Path) -> Result<()> {
-    // Load the proposal
-    let proposal_json = std::fs::read_to_string(proposal_path)?;
-    let proposal: Proposal = serde_json::from_str(&proposal_json)?;
+    // Load the proposal using the helper function
+    let proposal: Proposal = read_and_parse_json(proposal_path, "proposal data")?;
 
     // Display the status
     println!("Proposal: {}", proposal.id);
@@ -545,11 +665,102 @@ async fn execute_wasm(
     let result = if governance {
         runtime
             .governance_execute_wasm(&wasm_bytes, context.clone())
-            .map_err(|e| anyhow!("Execution failed: {}", e))?
+            .map_err(|e: icn_runtime::RuntimeError| {
+                match e {
+                    icn_runtime::RuntimeError::ExecutionError(s) |
+                    icn_runtime::RuntimeError::Execution(s) => {
+                        anyhow!("WASM execution failed: {}", s)
+                    }
+                    icn_runtime::RuntimeError::LoadError(s) => {
+                        anyhow!("Failed to load WASM module for execution: {}", s)
+                    }
+                    icn_runtime::RuntimeError::ReceiptError(s) => {
+                        anyhow!("Runtime failed to generate an execution receipt: {}", s)
+                    }
+                    icn_runtime::RuntimeError::InvalidProposalState(s) => {
+                        anyhow!("Cannot execute WASM: Invalid proposal state: {}", s)
+                    }
+                    icn_runtime::RuntimeError::AuthorizationFailed(s) => {
+                        anyhow!("Execution forbidden: Authorization failed: {}", s)
+                    }
+                    icn_runtime::RuntimeError::TrustBundleVerificationError(tb_err) => {
+                        anyhow!("Execution failed due to trust bundle issue: {}", tb_err)
+                    }
+                    icn_runtime::RuntimeError::NoTrustValidator => {
+                        anyhow!("Execution failed: No trust validator is configured in the runtime.")
+                    }
+                    icn_runtime::RuntimeError::HostEnvironmentNotSet => {
+                        anyhow!("Execution failed: Runtime host environment is not set.")
+                    }
+                    icn_runtime::RuntimeError::Instantiation(s) => {
+                        anyhow!("WASM module instantiation failed: {}", s)
+                    }
+                    icn_runtime::RuntimeError::FunctionNotFound(s) => {
+                        anyhow!("WASM execution failed: Required function '{}' not found in module.", s)
+                    }
+                    icn_runtime::RuntimeError::DidError(did_err) => {
+                        // context.executor_did is passed as the problematic_input
+                        format_did_error(&did_err, &context.executor_did)
+                            .context("Execution failed due to an invalid executor DID configured in runtime context")
+                    }
+                    icn_runtime::RuntimeError::WasmError(source_anyhow_err) => {
+                        if let Some(icn_err) = source_anyhow_err.downcast_ref::<IcnError>() {
+                            format_icn_error_for_cli(icn_err, "WASM execution failed due to an underlying ICN system error")
+                        } else {
+                            anyhow!("WASM execution error: {}. Source: {}", source_anyhow_err, source_anyhow_err.root_cause())
+                        }
+                    }
+                }
+            })?
     } else {
         runtime
-            .execute_wasm(&wasm_bytes, context.clone())
-            .map_err(|e| anyhow!("Execution failed: {}", e))?
+            .execute_wasm(&wasm_bytes, context.clone()) // Use RuntimeVmContext here
+            .map_err(|e: icn_runtime::RuntimeError| { 
+                match e {
+                    icn_runtime::RuntimeError::ExecutionError(s) |
+                    icn_runtime::RuntimeError::Execution(s) => {
+                        anyhow!("WASM execution failed: {}", s)
+                    }
+                    icn_runtime::RuntimeError::LoadError(s) => {
+                        anyhow!("Failed to load WASM module for execution: {}", s)
+                    }
+                    icn_runtime::RuntimeError::ReceiptError(s) => {
+                        anyhow!("Runtime failed to generate an execution receipt: {}", s)
+                    }
+                    icn_runtime::RuntimeError::InvalidProposalState(s) => {
+                        anyhow!("Cannot execute WASM: Invalid proposal state: {}", s)
+                    }
+                    icn_runtime::RuntimeError::AuthorizationFailed(s) => {
+                        anyhow!("Execution forbidden: Authorization failed: {}", s)
+                    }
+                    icn_runtime::RuntimeError::TrustBundleVerificationError(tb_err) => {
+                        anyhow!("Execution failed due to trust bundle issue: {}", tb_err)
+                    }
+                    icn_runtime::RuntimeError::NoTrustValidator => {
+                        anyhow!("Execution failed: No trust validator is configured in the runtime.")
+                    }
+                    icn_runtime::RuntimeError::HostEnvironmentNotSet => {
+                        anyhow!("Execution failed: Runtime host environment is not set.")
+                    }
+                    icn_runtime::RuntimeError::Instantiation(s) => {
+                        anyhow!("WASM module instantiation failed: {}", s)
+                    }
+                    icn_runtime::RuntimeError::FunctionNotFound(s) => {
+                        anyhow!("WASM execution failed: Required function '{}' not found in module.", s)
+                    }
+                    icn_runtime::RuntimeError::DidError(did_err) => {
+                        format_did_error(&did_err, &context.executor_did) // Use RuntimeVmContext here
+                            .context("Execution failed due to an invalid executor DID configured in runtime context")
+                    }
+                    icn_runtime::RuntimeError::WasmError(source_anyhow_err) => {
+                        if let Some(icn_err) = source_anyhow_err.downcast_ref::<IcnError>() {
+                            format_icn_error_for_cli(icn_err, "WASM execution failed due to an underlying ICN system error")
+                        } else {
+                            anyhow!("WASM execution error: {}. Source: {}", source_anyhow_err, source_anyhow_err.root_cause())
+                        }
+                    }
+                }
+            })?
     };
 
     // Create a mock execution receipt
@@ -601,9 +812,8 @@ async fn execute_wasm(
 async fn verify_receipt(receipt_path: &Path) -> Result<()> {
     println!("Verifying execution receipt: {}", receipt_path.display());
 
-    // Load the receipt
-    let receipt_json = std::fs::read_to_string(receipt_path)?;
-    let receipt: ExecutionReceipt = serde_json::from_str(&receipt_json)?;
+    // Load the receipt using the helper function
+    let receipt: ExecutionReceipt = read_and_parse_json(receipt_path, "execution receipt data")?;
 
     // In a real implementation, we would verify the signature
     // For now, just display the receipt information
@@ -666,16 +876,9 @@ async fn create_federation(
         .split(',')
         .map(|s| {
             let trimmed_s = s.trim();
-            trimmed_s.parse::<Did>().map_err(|e| match e {
-                icn_identity::DidError::Malformed => {
-                    anyhow!("Invalid DID format for '{}'. A DID should start with 'did:key:' and be a base58btc encoded Ed25519 public key.", trimmed_s)
-                }
-                icn_identity::DidError::UnsupportedCodec(codec) => {
-                    anyhow!("Unsupported key type in DID '{}'. The multicodec prefix {:#x} is not supported. Only Ed25519 keys (prefix 0xed) are currently accepted.", trimmed_s, codec)
-                }
-            })
+            trimmed_s.parse::<Did>().map_err(|e| format_did_error(&e, trimmed_s))
         })
-        .collect::<Result<Vec<Did>, _>>()?; // Collect into Result<Vec<Did>, anyhow::Error>
+        .collect::<Result<Vec<Did>, _>>()?;
 
     if signer_dids.is_empty() {
         return Err(anyhow!("At least one signer DID must be provided"));
@@ -742,28 +945,9 @@ async fn generate_keypair(output: &Path) -> Result<()> {
 async fn keypair_info(input: &Path) -> Result<()> {
     println!("Reading keypair from: {}", input.display());
 
-    // Read the keypair file
-    let keypair_json_str = std::fs::read_to_string(input)
-        .map_err(|e| anyhow!("Failed to read keypair file '{}': {}", input.display(), e))?;
-
-    // Deserialize into our specific struct
-    let keypair_data: KeypairFileFormat = serde_json::from_str(&keypair_json_str)
-        .map_err(|e| {
-            match e.classify() {
-                serde_json::error::Category::Io => {
-                    anyhow!("I/O error while parsing keypair file '{}': {}", input.display(), e)
-                }
-                serde_json::error::Category::Syntax => {
-                    anyhow!("Invalid JSON syntax in keypair file '{}' at line {} column {}: {}", input.display(), e.line(), e.column(), e)
-                }
-                serde_json::error::Category::Data => {
-                    anyhow!("Invalid data structure in keypair file '{}'. Ensure all fields (did, public_key, secret_key, generated_at) are present and have correct types. Error: {}", input.display(), e)
-                }
-                serde_json::error::Category::Eof => {
-                     anyhow!("Unexpected end of file in keypair file '{}' while parsing JSON.", input.display())
-                }
-            }
-        })?;
+    // Use the new helper function to read and parse the keypair file.
+    // The context "keypair data" will be used in error messages.
+    let keypair_data: KeypairFileFormat = read_and_parse_json(input, "keypair data")?;
 
     // Display keypair information
     match keypair_data.did.parse::<Did>() {
@@ -771,16 +955,8 @@ async fn keypair_info(input: &Path) -> Result<()> {
             println!("DID: {}", parsed_did);
         }
         Err(did_err) => {
-            let descriptive_error = match did_err {
-                icn_identity::DidError::Malformed => {
-                    format!("Malformed DID string '{}'. A DID should start with 'did:key:' and be a base58btc encoded Ed25519 public key.", keypair_data.did)
-                }
-                icn_identity::DidError::UnsupportedCodec(codec) => {
-                    format!("Unsupported key type in DID '{}'. The multicodec prefix {:#x} is not supported. Only Ed25519 keys (prefix 0xed) are currently accepted.", keypair_data.did, codec)
-                }
-            };
-            // Using .red() and .yellow() from the 'colored' crate which is already in use.
-            println!("DID: {} ({})", keypair_data.did.red(), descriptive_error.yellow());
+            let descriptive_error = format_did_error(&did_err, &keypair_data.did);
+            println!("DID: {} ({})", keypair_data.did.red(), descriptive_error.to_string().yellow());
         }
     }
     println!("Public Key: {}", keypair_data.public_key);
@@ -793,9 +969,8 @@ async fn keypair_info(input: &Path) -> Result<()> {
 async fn anchor_trust_bundle(bundle_path: &Path, node_api: &str, output: &Path) -> Result<String> {
     println!("Anchoring trust bundle to DAG via node: {}", node_api);
 
-    // Read the trust bundle file
-    let bundle_json = std::fs::read_to_string(bundle_path)?;
-    let mut bundle: TrustBundle = serde_json::from_str(&bundle_json)?;
+    // Read the trust bundle file using the helper function
+    let mut bundle: TrustBundle = read_and_parse_json(bundle_path, "trust bundle data")?;
 
     // In a real implementation, we would:
     // 1. Send the bundle to the node API
