@@ -544,11 +544,17 @@ impl Lowerer {
                 let range_rule_data = self.lower_range_statement(value_pair)?;
                 Ok(DslValue::Range(Box::new(range_rule_data)))
             }
-            _ => Ok(DslValue::String(format!(
-                "UNPROCESSED_VALUE_RULE_{:?}_{}",
-                value_pair.as_rule(),
-                value_pair.as_str()
-            ))), // Placeholder
+            _ => Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Unhandled rule type '{:?}' encountered when expecting a value.",
+                            value_pair.as_rule()
+                        ),
+                    },
+                    value_pair.as_span(),
+                )
+            )))
         }
     }
 
@@ -1124,29 +1130,41 @@ impl Lowerer {
                 "path" => {
                     if let DslValue::String(s) = rule.value {
                         path = Some(s);
-                    } // else: path should be string, consider error/logging
+                    } else {
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "anchor_data 'path' field must be a string."
+                                        .to_string(),
+                                },
+                                block_pair_span.clone(),
+                            ),
+                        )));
+                    }
                 }
                 "data" | "payload_cid" => {
-                    // rule.value is the DslValue here
                     match &rule.value { // Match on the DslValue
                         DslValue::String(s_val) => { // If the value is a string
                             data_reference = s_val.clone();
                         }
                         DslValue::Map(_map_rules_vec) => { // If the value is a DslValue::Map. _map_rules_vec is Vec<DslRule>
-                            // Serialize the original rule.value which is DslValue::Map(...)
-                            // This ensures the enum variant tag is handled correctly by serde if necessary,
-                            // or that the Vec<Rule> inside DslValue::Map is serialized as a map.
-                            // Given DslValue is #[serde(untagged)], DslValue::Map(rules) should serialize `rules` directly.
                             match serde_json::to_string(&rule.value) {
                                 Ok(json_s) => data_reference = json_s,
                                 Err(_) => {
-                                    // Corrected the escape characters for the JSON string
                                     data_reference = "{\"error\": \"failed to serialize anchor data map\"}".to_string();
                                 }
                             }
                         }
-                        other_dsl_value => { // For any other DslValue variant (Boolean, Number, List, Range, If etc.)
-                            data_reference = format!("{:?}", other_dsl_value); // Fallback to debug format
+                        _other_dsl_value => { // For any other DslValue variant
+                            return Err(LowerError::Parse(Box::new(
+                                pest::error::Error::new_from_span(
+                                    pest::error::ErrorVariant::CustomError {
+                                        message: "anchor_data 'data' or 'payload_cid' field must be a string or a map."
+                                            .to_string(),
+                                    },
+                                    block_pair_span.clone(),
+                                ),
+                            )));
                         }
                     }
                 }
@@ -1155,6 +1173,15 @@ impl Lowerer {
         }
 
         if data_reference.is_empty() {
+            // This check might become less critical if 'data' or 'payload_cid' fields are mandatory,
+            // but good to keep for now as they might be optional but typed if present.
+            // If they become mandatory and typed, an empty data_reference would imply the field was missing,
+            // which should ideally be caught by a different check (e.g. ensuring mandatory fields are present).
+            // For now, let's assume the field is optional but if present, must be correctly typed.
+            // A truly empty data_reference might still occur if the string or map was empty.
+            // The current error message is "anchor_data requires a 'data' or 'payload_cid' field that yields a reference string or map"
+            // This implies the field itself is required.
+            // Let's keep this check as is for now.
             return Err(LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError { message: "anchor_data requires a 'data' or 'payload_cid' field that yields a reference string or map".to_string() },
                 block_pair_span, // Use stored span
@@ -1170,62 +1197,101 @@ impl Lowerer {
     fn lower_perform_metered_action(&self, pair: Pair<'_, Rule>) -> Result<ActionStep, LowerError> {
         // perform_metered_action = { "perform_metered_action" ~ "(" ~ string_literal ~ "," ~ identifier ~ "." ~ identifier ~ "," ~ number ~ ")" ~ ";" }
 
-        // Store the span for error reporting
-        let pair_span = pair.as_span();
-
+        let overall_span = pair.as_span(); // For top-level error reporting if structure is wrong
         let mut inner_pairs = pair.into_inner();
 
-        // Extract the action name (string literal)
+        // 1. Extract the action name (string_literal)
         let action_name_pair = inner_pairs.next().ok_or_else(|| {
-            // Error if action name is missing
             LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
-                    message: "Missing action name in perform_metered_action".to_string(),
+                    message: "Missing action name (string_literal) in perform_metered_action.".to_string(),
                 },
-                pair_span.clone(), // Use the cloned span
+                overall_span.clone(),
             )))
         })?;
-        let action_name = self.extract_string_literal(action_name_pair)?;
-
-        // Extract the ResourceType (namespace.identifier)
-        let resource_type_namespace = inner_pairs.next().ok_or_else(|| {
-            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: "Missing resource type namespace in perform_metered_action"
-                        .to_string(),
-                },
-                pair_span.clone(),
-            )))
-        })?;
-
-        // Skip the dot
-        inner_pairs.next();
-
-        let resource_type_name = inner_pairs.next().ok_or_else(|| {
-            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
-                pest::error::ErrorVariant::CustomError {
-                    message: "Missing resource type name in perform_metered_action".to_string(),
-                },
-                pair_span.clone(),
-            )))
-        })?;
-
-        // Combine namespace and name to get ResourceType
-        let namespace = resource_type_namespace.as_str();
-        let name = resource_type_name.as_str();
-
-        if namespace != "ResourceType" {
+        if action_name_pair.as_rule() != Rule::string_literal {
             return Err(LowerError::Parse(Box::new(
                 pest::error::Error::new_from_span(
                     pest::error::ErrorVariant::CustomError {
-                        message: format!("Expected ResourceType namespace, found '{}'", namespace),
+                        message: format!(
+                            "Expected action name as string_literal, found {:?}",
+                            action_name_pair.as_rule()
+                        ),
                     },
-                    resource_type_namespace.as_span(),
+                    action_name_pair.as_span(),
+                ),
+            )));
+        }
+        // extract_string_literal itself will validate it's a string_literal and handle errors.
+        let action_name = self.extract_string_literal(action_name_pair)?;
+
+        // 2. Extract the ResourceType Namespace (identifier)
+        let resource_type_namespace_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Missing resource type namespace (identifier) in perform_metered_action."
+                        .to_string(),
+                },
+                overall_span.clone(),
+            )))
+        })?;
+        if resource_type_namespace_pair.as_rule() != Rule::identifier {
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected resource type namespace as identifier, found {:?}",
+                            resource_type_namespace_pair.as_rule()
+                        ),
+                    },
+                    resource_type_namespace_pair.as_span(),
+                ),
+            )));
+        }
+        let namespace_str = resource_type_namespace_pair.as_str();
+        if namespace_str != "ResourceType" {
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected resource type namespace 'ResourceType', found '{}'",
+                            namespace_str
+                        ),
+                    },
+                    resource_type_namespace_pair.as_span(),
                 ),
             )));
         }
 
-        let resource_type = match name {
+        // 3. Skip the dot (already handled by Pest grammar, but good to be aware of structure)
+        // The dot itself might not appear as a separate pair if Pest consumes it as part of a larger rule.
+        // We rely on the sequence of identifier, identifier, number after the string literal.
+
+        // 4. Extract the ResourceType Name (identifier)
+        let resource_type_name_pair = inner_pairs.next().ok_or_else(|| {
+            LowerError::Parse(Box::new(pest::error::Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: "Missing resource type name (identifier) in perform_metered_action."
+                        .to_string(),
+                },
+                overall_span.clone(),
+            )))
+        })?;
+        if resource_type_name_pair.as_rule() != Rule::identifier {
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected resource type name as identifier, found {:?}",
+                            resource_type_name_pair.as_rule()
+                        ),
+                    },
+                    resource_type_name_pair.as_span(),
+                ),
+            )));
+        }
+        let name_str = resource_type_name_pair.as_str();
+        let resource_type = match name_str {
             "CPU" => ResourceType::Cpu,
             "MEMORY" => ResourceType::Memory,
             "TOKEN" => ResourceType::Token,
@@ -1234,32 +1300,60 @@ impl Lowerer {
                 return Err(LowerError::Parse(Box::new(
                     pest::error::Error::new_from_span(
                         pest::error::ErrorVariant::CustomError {
-                            message: format!("Unknown resource type '{}'", name),
+                            message: format!("Unknown resource type name '{}'", name_str),
                         },
-                        resource_type_name.as_span(),
+                        resource_type_name_pair.as_span(),
                     ),
                 )));
             }
         };
 
-        // Extract the amount (number)
+        // 5. Extract the amount (number)
         let amount_pair = inner_pairs.next().ok_or_else(|| {
             LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
-                    message: "Missing amount in perform_metered_action".to_string(),
+                    message: "Missing amount (number) in perform_metered_action.".to_string(),
                 },
-                pair_span,
+                overall_span.clone(),
             )))
         })?;
+        if amount_pair.as_rule() != Rule::number {
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: format!(
+                            "Expected amount as number, found {:?}",
+                            amount_pair.as_rule()
+                        ),
+                    },
+                    amount_pair.as_span(),
+                ),
+            )));
+        }
         let amount_str = amount_pair.as_str();
-        let amount = amount_str.parse::<u64>().map_err(|_| {
+        let amount = amount_str.parse::<u64>().map_err(|e| {
             LowerError::Parse(Box::new(pest::error::Error::new_from_span(
                 pest::error::ErrorVariant::CustomError {
-                    message: format!("Failed to parse amount '{}'", amount_str),
+                    message: format!(
+                        "Failed to parse amount '{}' as u64: {}",
+                        amount_str, e
+                    ),
                 },
                 amount_pair.as_span(),
             )))
         })?;
+
+        // 6. Ensure no extra arguments
+        if inner_pairs.next().is_some() {
+            return Err(LowerError::Parse(Box::new(
+                pest::error::Error::new_from_span(
+                    pest::error::ErrorVariant::CustomError {
+                        message: "Too many arguments in perform_metered_action.".to_string(),
+                    },
+                    overall_span, // Or span of the extra token if available
+                ),
+            )));
+        }
 
         Ok(ActionStep::PerformMeteredAction {
             ident: action_name,
@@ -1332,11 +1426,51 @@ impl Lowerer {
             )));
         }
 
-        // Remove the quotes from the string literal
+        let original_span = pair.as_span(); // For error reporting on invalid escapes
         let raw_str = pair.as_str();
+        // The content is between the first and last characters (quotes)
         let content = &raw_str[1..raw_str.len() - 1];
 
-        // TODO: Handle escape sequences properly
-        Ok(content.to_string())
+        let mut processed_string = String::with_capacity(content.len());
+        let mut chars = content.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('n') => processed_string.push('\n'),
+                    Some('t') => processed_string.push('\t'),
+                    Some('\"') => processed_string.push('"'),
+                    Some('\\') => processed_string.push('\\'),
+                    Some('r') => processed_string.push('\r'), // Common, though not in initial list
+                    // Add other simple escapes like \0, \' if needed by CCL spec
+                    Some(other) => {
+                        // Invalid escape sequence
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: format!("Invalid escape sequence: \\{}", other),
+                                },
+                                original_span, // Report error against the whole string literal
+                            ),
+                        )));
+                    }
+                    None => {
+                        // Dangling backslash at the end of the string
+                        return Err(LowerError::Parse(Box::new(
+                            pest::error::Error::new_from_span(
+                                pest::error::ErrorVariant::CustomError {
+                                    message: "Invalid escape sequence: dangling backslash at end of string.".to_string(),
+                                },
+                                original_span, // Report error against the whole string literal
+                            ),
+                        )));
+                    }
+                }
+            } else {
+                processed_string.push(ch);
+            }
+        }
+
+        Ok(processed_string)
     }
 }
