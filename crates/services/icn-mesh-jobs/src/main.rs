@@ -371,11 +371,24 @@ async fn get_job(
     Extension(store): Extension<Arc<dyn MeshJobStore>>,
     Path(job_id_str): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    let job_id = Cid::try_from(job_id_str.clone()).map_err(|e| AppError::BadRequest(format!("Invalid Job ID format: {} - {}", job_id_str, e)))?;
-    match store.get_job(&job_id).await {
-        Ok(Some((job_req, status))) => Ok(AxumJson(json!({ "request": job_req, "status": status })).into_response()),
-        Ok(None) => Err(AppError::NotFound(format!("Job not found: {}", job_id))),
-        Err(e) => Err(AppError::Internal(e)),
+    // TODO: Validate job_id_str format if necessary before parsing as CID
+    let job_id_cid = Cid::try_from(job_id_str.clone()).map_err(|e| {
+        AppError::InvalidCid(format!(
+            "Invalid Job ID format for get_job: '{}'. Error: {}",
+            job_id_str, e
+        ))
+    })?;
+
+    match store.get_job(&job_id_cid).await? {
+        Some((job_request, job_status)) => Ok(AxumJson(json!({
+            "job_id": job_id_cid.to_string(),
+            "request": job_request,
+            "status": job_status,
+        }))),
+        None => Err(AppError::NotFound(format!(
+            "Job with ID {} not found",
+            job_id_cid.to_string()
+        ))),
     }
 }
 

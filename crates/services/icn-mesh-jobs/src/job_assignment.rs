@@ -16,6 +16,9 @@ use thiserror::Error;
 pub enum SelectionError {
     #[error("Internal error during executor selection: {reason}")]
     Internal { reason: String },
+
+    #[error("Reputation service interaction failed: {0}")]
+    ReputationServiceError(#[from] ReputationClientError),
 }
 
 /// Defines the selection strategy to use for assigning jobs to executors
@@ -99,16 +102,15 @@ impl ExecutorSelector for ReputationExecutorSelector {
         }
         
         // Determine max_price safely
-        let max_price = bids.iter().map(|b| b.price_atto_icn).max().unwrap_or(1); // if bids is empty, unwrap_or(1) is fine.
-                                                                              // if not empty, max() returns Some, so unwrap is fine.
+        let max_price = bids.iter().map(|b| b.price_atto_icn).max().unwrap_or(1);
 
         let mut best: Option<(Bid, f64, String)> = None;
 
         for bid_item in bids {
             // Fetch reputation profile
-            let profile = match self.reputation_client.fetch_profile(&bid_item.bidder).await { // Corrected: bid_item.bidder
-                Ok(Some(p)) => p,
-                Ok(None) => {
+            let profile = match self.reputation_client.fetch_profile(&bid_item.bidder).await? {
+                Some(p) => p,
+                None => {
                     tracing::debug!("No reputation profile found for bidder {}. Constructing default profile.", bid_item.bidder);
                     ICNReputationProfile {
                         node_id: bid_item.bidder.clone(),
@@ -128,29 +130,22 @@ impl ExecutorSelector for ReputationExecutorSelector {
                         latest_anchor_cid: None,
                     }
                 }
-                Err(e) => {
-                    // This is ReputationClientError. Log and skip bid.
-                    // Does not cause SelectionError unless all bids are skipped this way leading to Ok(None).
-                    tracing::warn!("Failed to fetch reputation for {}: {}. Skipping bid.", bid_item.bidder, e);
-                    continue; 
-                }
             };
 
             // Mana Check (assuming JobRequest.params.required_mana)
-            if let Some(required_mana_amount) = request.params.required_mana { // Changed from request.requirements
+            if let Some(required_mana_amount) = request.params.required_mana {
                 let has_sufficient_mana = profile.mana_state.as_ref().map_or(false, |mana_details| {
-                    mana_details.current_mana >= required_mana_amount // Assuming mana_state has current_mana directly
+                    mana_details.current_mana >= required_mana_amount
                 });
 
                 if !has_sufficient_mana {
                     tracing::info!(
                         "Bidder {} for job {} disqualified due to insufficient mana. Required: {}, Available: {:?}.",
                         bid_item.bidder,
-                        bid_item.job_id, // Assuming Bid has job_id
+                        bid_item.job_id,
                         required_mana_amount,
                         profile.mana_state.as_ref().map(|ms| ms.current_mana)
                     );
-                    // metrics call removed for brevity, needs to be handled if metrics can fail
                     continue; 
                 }
             }
@@ -159,7 +154,7 @@ impl ExecutorSelector for ReputationExecutorSelector {
             
             // Assuming bid_item.data is of type ResourceEstimate matching calculate_resource_match
             // and request.params has the requirements.
-            let resource_match = self.calculate_resource_match(&bid_item.data, &request.params.requirements_v1); // Changed to params.requirements_v1 based on typical structure
+            let resource_match = self.calculate_resource_match(&bid_item.data, &request.params.requirements_v1);
             
             let score = self.reputation_client.calculate_bid_score(
                 &self.config,
@@ -238,21 +233,16 @@ impl ExecutorSelector for HybridExecutorSelector {
         let mut filtered_bids: Vec<Bid> = Vec::new();
         if let Some(min_rep) = self.policy.min_reputation {
             for bid_item in bids {
-                match self.reputation_client.fetch_profile(&bid_item.bidder).await {
-                    Ok(Some(profile)) => {
+                match self.reputation_client.fetch_profile(&bid_item.bidder).await? {
+                    Some(profile) => {
                         if profile.computed_score >= min_rep {
                             filtered_bids.push(bid_item.clone());
                         } else {
                             tracing::debug!("Bidder {} filtered out by min_reputation ({} < {})", bid_item.bidder, profile.computed_score, min_rep);
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         tracing::debug!("Bidder {} has no reputation profile, filtered out by min_reputation policy ({})", bid_item.bidder, min_rep);
-                    }
-                    Err(e) => {
-                        // If fetching reputation for a bid fails, this specific bid is skipped for min_reputation filter.
-                        // It could alternatively cause a SelectionError::ReputationServiceFailure(e) if critical.
-                        tracing::warn!("Failed to fetch reputation for {} during min_reputation filter: {}. Skipping bid for this filter.", bid_item.bidder, e);
                     }
                 }
             }
