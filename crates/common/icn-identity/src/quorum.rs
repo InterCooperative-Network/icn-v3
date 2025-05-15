@@ -32,17 +32,14 @@ pub enum QuorumError {
     #[error("unauthorized signer: {0}")]
     UnauthorizedSigner(Did),
 
-    #[error("invalid signature")]
-    InvalidSignature,
+    #[error("minimum threshold ({threshold}) exceeds the number of available authorized signers ({available_signers})")]
+    ThresholdTooHigh {
+        threshold: u8,
+        available_signers: usize,
+    },
 
-    #[error("minimum threshold exceeds available authorized signers")]
-    ThresholdTooHigh,
-
-    #[error("signer not in weight map: {0}")]
+    #[error("signer {0} is required by weighted quorum but not found in the provided weight map")]
     SignerNotInWeightMap(Did),
-
-    #[error("signature serialization error: {0}")]
-    SerializationError(String),
 }
 
 /// A collection of signatures that proves a quorum of authorized entities
@@ -255,7 +252,10 @@ impl QuorumProof {
             }
             QuorumType::Threshold(min) => {
                 if *min as usize > allowed_signers.len() {
-                    return Err(QuorumError::ThresholdTooHigh);
+                    return Err(QuorumError::ThresholdTooHigh {
+                        threshold: *min,
+                        available_signers: allowed_signers.len(),
+                    });
                 }
 
                 if valid_signatures.len() >= *min as usize {

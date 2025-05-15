@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use icn_ccl_compiler::CclCompiler;
-use icn_identity::{Did, FederationMetadata, KeyPair, QuorumProof, QuorumType, TrustBundle};
+use icn_identity::{Did, FederationMetadata, KeyPair, QuorumProof, QuorumType, TrustBundle, DidError, ED25519_KEY_LENGTH, ED25519_MULTICODEC_PREFIX};
 use icn_runtime::{ExecutionReceipt, Proposal, ProposalState, QuorumStatus, RuntimeExecutionReceipt, VmContext as RuntimeVmContext};
 use icn_types::error::{IcnError, IdentityError as IcnTypesIdentityError, DagError as IcnTypesDagError, CryptoError as IcnTypesCryptoError, MeshError as IcnTypesMeshError, TrustError as IcnTypesTrustError, MulticodecError as IcnTypesMulticodecError, VcError as IcnTypesVcError};
 use std::collections::HashMap;
@@ -22,11 +22,65 @@ struct KeypairFileFormat {
 /// Formats an `icn_identity::DidError` into a user-friendly `anyhow::Error`.
 fn format_did_error(did_err: &icn_identity::DidError, problematic_input: &str) -> anyhow::Error {
     match did_err {
-        icn_identity::DidError::Malformed => {
-            anyhow!("Invalid DID format for '{}'. A DID should start with 'did:key:' and be a base58btc encoded Ed25519 public key.", problematic_input)
+        DidError::EmptyInput => {
+            anyhow!("Invalid DID: The provided DID string '{}' is empty.", problematic_input)
         }
-        icn_identity::DidError::UnsupportedCodec(codec) => {
-            anyhow!("Unsupported key type in DID '{}'. The multicodec prefix {:#x} is not supported. Only Ed25519 keys (prefix 0xed) are currently accepted.", problematic_input, codec)
+        DidError::InvalidPrefix(prefix) => {
+            anyhow!(
+                "Invalid DID scheme for '{}': expected 'did:<method>:<id>', but found prefix '{}'. For Ed25519 keys, use 'did:key:...'.",
+                problematic_input,
+                prefix
+            )
+        }
+        DidError::UnsupportedMethod(method) => {
+            anyhow!(
+                "Unsupported DID method in '{}': expected method 'key', but found '{}'. Only 'did:key' DIDs are currently supported.",
+                problematic_input,
+                method
+            )
+        }
+        DidError::MissingMethodSpecificId => {
+            anyhow!(
+                "Invalid DID format for '{}': The method-specific identifier is missing. Expected format: 'did:key:<identifier>'.",
+                problematic_input
+            )
+        }
+        DidError::InvalidMethodSpecificIdEncoding { identifier_part, source } => {
+            anyhow!(
+                "Invalid encoding for identifier part '{}' in DID '{}': {}. The identifier must be a valid multibase (Base58BTC for Ed25519 keys) encoded string.",
+                identifier_part,
+                problematic_input,
+                source
+            )
+        }
+        DidError::EmptyDecodedMethodSpecificId => {
+            anyhow!(
+                "Invalid DID structure for '{}': After decoding the identifier, no multicodec prefix was found. The identifier should encode at least a multicodec prefix and key bytes.",
+                problematic_input
+            )
+        }
+        DidError::UnsupportedKeyMulticodec { expected_codec, found_codec } => {
+            anyhow!(
+                "Unsupported key type in DID '{}'. Expected multicodec prefix {:#x} (Ed25519), but found {:#x}.",
+                problematic_input,
+                expected_codec,
+                found_codec
+            )
+        }
+        DidError::InvalidKeyLength { expected_len, found_len } => {
+            anyhow!(
+                "Invalid key length in DID '{}'. Expected {} bytes for an Ed25519 key, but found {} bytes after decoding the multicodec prefix.",
+                problematic_input,
+                expected_len,
+                found_len
+            )
+        }
+        DidError::InvalidKeyBytes(source_err) => {
+            anyhow!(
+                "The key bytes in DID '{}' are invalid for an Ed25519 public key: {}.",
+                problematic_input,
+                source_err
+            )
         }
     }
 }

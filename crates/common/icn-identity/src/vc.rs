@@ -1,6 +1,6 @@
 use crate::{Did, KeyPair, Signature};
 use chrono::{DateTime, Utc};
-use ed25519_dalek::Verifier;
+use ed25519_dalek::{SignatureError as Ed25519SignatureError, Verifier};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -46,10 +46,8 @@ pub struct Proof {
 pub enum CredentialError {
     #[error("credential already signed")]
     AlreadySigned,
-    #[error("missing proof")]
-    MissingProof,
-    #[error("signature mismatch")]
-    InvalidSignature,
+    #[error("cryptographic signature verification failed: {0}")]
+    CryptoVerification(#[from] Ed25519SignatureError),
     #[error("serialization error: {0}")]
     Ser(#[from] serde_json::Error),
 }
@@ -112,10 +110,7 @@ where
 {
     pub fn verify(&self, pk: &ed25519_dalek::VerifyingKey) -> Result<(), CredentialError> {
         let bytes = self.vc.canonical_bytes()?;
-        if pk.verify(&bytes, &self.signature).is_ok() {
-            Ok(())
-        } else {
-            Err(CredentialError::InvalidSignature)
-        }
+        pk.verify(&bytes, &self.signature)?;
+        Ok(())
     }
 }

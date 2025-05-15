@@ -1,5 +1,5 @@
 use crate::{Did, QuorumError, QuorumProof};
-use cid::Cid;
+use cid::{Cid, Error as CidErrorType};
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,8 +15,8 @@ pub enum TrustBundleError {
     #[error("serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 
-    #[error("CID parse error: {0}")]
-    CidError(String),
+    #[error("CID processing error: {0}")]
+    CidProcessing(#[from] CidErrorType),
 
     #[error("missing required field: {0}")]
     MissingField(String),
@@ -70,8 +70,7 @@ impl TrustBundle {
 
     /// Parse a CID from the root_dag_cid string.
     pub fn parse_cid(&self) -> Result<Cid, TrustBundleError> {
-        Cid::try_from(self.root_dag_cid.as_str())
-            .map_err(|e| TrustBundleError::CidError(e.to_string()))
+        Cid::try_from(self.root_dag_cid.as_str()).map_err(TrustBundleError::from)
     }
 
     /// Calculates a deterministic hash of the bundle for signing.
