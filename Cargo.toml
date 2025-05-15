@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "crates/actor-interfaces",
+    "crates/dag-scheduler",
+    "crates/stable-memory-wasm",
     "crates/common/icn-types",
     "crates/common/icn-crypto",
     "crates/common/icn-identity",
