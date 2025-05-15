@@ -92,6 +92,80 @@ pub struct RuntimeContext<L: ManaLedger + Send + Sync + 'static = InMemoryManaLe
     pub mana_tick_interval: Option<Duration>,
 }
 
+// General impl block for accessors and methods not requiring L: Default
+impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
+    /// Get a reference to the trust validator, if present
+    pub fn trust_validator(&self) -> Option<&Arc<TrustValidator>> {
+        self.trust_validator.as_ref()
+    }
+
+    /// Update the execution status atomically.
+    pub fn update_status(&mut self, status: ExecutionStatus) {
+        self.execution_status = status;
+    }
+
+    pub fn dag_store(&self) -> Arc<SharedDagStore> {
+        self.dag_store.clone()
+    }
+
+    pub fn identity(&self) -> Option<&KeyPair> {
+        self.identity.as_ref()
+    }
+
+    pub fn reputation_service_url(&self) -> Option<&String> {
+        self.reputation_service_url.as_ref()
+    }
+
+    pub fn mesh_job_service_url(&self) -> Option<&String> {
+        self.mesh_job_service_url.as_ref()
+    }
+
+    /// Accessors for new components
+    pub fn policy_enforcer(&self) -> Arc<ResourcePolicyEnforcer> {
+        self.policy_enforcer.clone()
+    }
+
+    pub fn mana_repository(&self) -> Arc<ManaRepositoryAdapter<L>> {
+        self.mana_repository.clone()
+    }
+
+    /// Set the receipt store
+    pub fn with_receipt_store(mut self, receipt_store: Arc<SharedDagStore>) -> Self {
+        self.receipt_store = receipt_store;
+        self
+    }
+
+    /// Set the federation ID
+    pub fn with_federation_id(mut self, federation_id: impl Into<String>) -> Self {
+        self.federation_id = Some(federation_id.into());
+        self
+    }
+
+    /// Set the executor ID
+    pub fn with_executor_id(mut self, executor_id: impl Into<String>) -> Self {
+        self.executor_id = Some(executor_id.into());
+        self
+    }
+
+    /// Set the trust validator
+    pub fn with_trust_validator(mut self, trust_validator: Arc<TrustValidator>) -> Self {
+        self.trust_validator = Some(trust_validator);
+        self
+    }
+
+    /// Set the economics engine
+    pub fn with_economics(mut self, economics: Arc<Economics>) -> Self {
+        self.economics = economics;
+        self
+    }
+    
+    /// Set the identity index
+    pub fn with_identity_index(mut self, index: Arc<IdentityIndex>) -> Self {
+        self.identity_index = Some(index);
+        self
+    }
+}
+
 impl<L: ManaLedger + Send + Sync + 'static + Default> RuntimeContext<L> {
     /// Create a new context with default values
     pub fn new() -> Self {
@@ -153,80 +227,9 @@ impl<L: ManaLedger + Send + Sync + 'static + Default> RuntimeContext<L> {
         }
     }
 
-    /// Set the receipt store
-    pub fn with_receipt_store(mut self, receipt_store: Arc<SharedDagStore>) -> Self {
-        self.receipt_store = receipt_store;
-        self
-    }
-
-    /// Set the federation ID
-    pub fn with_federation_id(mut self, federation_id: impl Into<String>) -> Self {
-        self.federation_id = Some(federation_id.into());
-        self
-    }
-
-    /// Set the executor ID
-    pub fn with_executor_id(mut self, executor_id: impl Into<String>) -> Self {
-        self.executor_id = Some(executor_id.into());
-        self
-    }
-
-    /// Set the trust validator
-    pub fn with_trust_validator(mut self, trust_validator: Arc<TrustValidator>) -> Self {
-        self.trust_validator = Some(trust_validator);
-        self
-    }
-
-    /// Set the economics engine
-    pub fn with_economics(mut self, economics: Arc<Economics>) -> Self {
-        self.economics = economics;
-        self
-    }
-
-    /// Get a reference to the trust validator, if present
-    pub fn trust_validator(&self) -> Option<&Arc<TrustValidator>> {
-        self.trust_validator.as_ref()
-    }
-
-    /// Set the identity index
-    pub fn with_identity_index(mut self, index: Arc<IdentityIndex>) -> Self {
-        self.identity_index = Some(index);
-        self
-    }
-
     /// Return a builder for this context
     pub fn builder() -> RuntimeContextBuilder<L> {
         RuntimeContextBuilder::new()
-    }
-
-    /// Update the execution status atomically.
-    pub fn update_status(&mut self, status: ExecutionStatus) {
-        self.execution_status = status;
-    }
-
-    pub fn dag_store(&self) -> Arc<SharedDagStore> {
-        self.dag_store.clone()
-    }
-
-    pub fn identity(&self) -> Option<&KeyPair> {
-        self.identity.as_ref()
-    }
-
-    pub fn reputation_service_url(&self) -> Option<&String> {
-        self.reputation_service_url.as_ref()
-    }
-
-    pub fn mesh_job_service_url(&self) -> Option<&String> {
-        self.mesh_job_service_url.as_ref()
-    }
-
-    /// Accessors for new components
-    pub fn policy_enforcer(&self) -> Arc<ResourcePolicyEnforcer> {
-        self.policy_enforcer.clone()
-    }
-
-    pub fn mana_repository(&self) -> Arc<ManaRepositoryAdapter<L>> {
-        self.mana_repository.clone()
     }
 }
 

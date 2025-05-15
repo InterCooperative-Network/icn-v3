@@ -1,4 +1,5 @@
-use crate::error::TrustError;
+use crate::error::{IdentityError, TrustError};
+use icn_identity::{Did, QuorumError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -52,8 +53,8 @@ impl QuorumConfig {
     /// Create a new threshold quorum config
     pub fn new_threshold(authorized_dids: Vec<String>, threshold: u8) -> Result<Self, TrustError> {
         if threshold > 100 {
-            return Err(TrustError::InvalidQuorumConfig(
-                "Threshold must be between 0 and 100".to_string(),
+            return Err(TrustError::QuorumProcessing(
+                QuorumError::ThresholdTooHigh,
             ));
         }
 
@@ -73,8 +74,8 @@ impl QuorumConfig {
 
         // Ensure the threshold is achievable
         if threshold > total_weight {
-            return Err(TrustError::InvalidQuorumConfig(
-                "Threshold exceeds total possible weight".to_string(),
+            return Err(TrustError::QuorumProcessing(
+                QuorumError::ThresholdTooHigh,
             ));
         }
 
@@ -89,14 +90,19 @@ impl QuorumConfig {
         // Verify all signers are authorized
         for signer in signers {
             if !self.authorized_dids.contains(signer) {
-                return Err(TrustError::UnauthorizedSigner(signer.clone()));
+                let did_obj = signer.parse::<Did>().map_err(|did_err| {
+                    TrustError::Identity(IdentityError::DidProcessing { source: did_err })
+                })?;
+                return Err(TrustError::QuorumProcessing(QuorumError::UnauthorizedSigner(
+                    did_obj,
+                )));
             }
         }
 
         // Check for duplicate signers
         let unique_signers: std::collections::HashSet<&String> = signers.iter().collect();
         if unique_signers.len() != signers.len() {
-            return Err(TrustError::DuplicateSigners);
+            return Err(TrustError::QuorumProcessing(QuorumError::DuplicateSigner));
         }
 
         match &self.rule {

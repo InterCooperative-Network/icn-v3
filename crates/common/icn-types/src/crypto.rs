@@ -45,9 +45,9 @@ impl Keypair {
 
     /// Create a keypair from existing secret key bytes
     pub fn from_secret_key(secret_key_bytes: &[u8]) -> Result<Self, CryptoError> {
-        let sk_array: &[u8; 32] = secret_key_bytes.try_into().map_err(|_| {
-            CryptoError::KeyGenError("Invalid secret key length, must be 32 bytes".to_string())
-        })?;
+        let sk_array: &[u8; 32] = secret_key_bytes.try_into().map_err(|_|
+            CryptoError::KeyFormatGeneric("Invalid secret key length, must be 32 bytes".to_string())
+        )?;
         let signing_key = SigningKey::from_bytes(sk_array);
         Ok(Self { signing_key })
     }
@@ -69,16 +69,16 @@ impl Keypair {
 
     /// Verify a signature against a message using this keypair's public key
     pub fn verify(&self, message: &[u8], signature_bytes: &[u8]) -> Result<bool, CryptoError> {
-        let sig_array: &[u8; 64] = signature_bytes.try_into().map_err(|_| {
-            CryptoError::VerificationError("Invalid signature length, must be 64 bytes".to_string())
-        })?;
+        let sig_array: &[u8; 64] = signature_bytes.try_into().map_err(|_|
+            CryptoError::KeyFormatGeneric("Invalid signature length for verification, must be 64 bytes".to_string())
+        )?;
         let dalek_sig = DalekSignature::from_bytes(sig_array);
 
         self.signing_key
             .verifying_key()
             .verify(message, &dalek_sig)
             .map(|_| true)
-            .map_err(|e| CryptoError::VerificationError(e.to_string()))
+            .map_err(|e| CryptoError::Verification { source: e })
     }
 }
 
@@ -115,19 +115,19 @@ pub mod did {
     pub fn did_to_key(did_string: &str) -> Result<Vec<u8>, CryptoError> {
         // Changed arg name
         if !did_string.starts_with("did:key:z") {
-            return Err(CryptoError::KeyGenError(
-                "Invalid DID key format".to_string(),
+            return Err(CryptoError::KeyFormatGeneric(
+                "Invalid DID key format: must start with did:key:z".to_string(),
             ));
         }
 
         let encoded = &did_string[10..]; // Skip "did:key:z"
         let decoded = general_purpose::URL_SAFE_NO_PAD
             .decode(encoded)
-            .map_err(|e| CryptoError::KeyGenError(format!("Invalid base64: {}", e)))?;
+            .map_err(CryptoError::KeyFormatBase64)?;
 
         if decoded.len() < 3 || decoded[0] != 0xed || decoded[1] != 0x01 {
-            return Err(CryptoError::KeyGenError(
-                "Invalid multicodec prefix".to_string(),
+            return Err(CryptoError::KeyFormatGeneric(
+                "Invalid multicodec prefix after decoding DID key".to_string(),
             ));
         }
 

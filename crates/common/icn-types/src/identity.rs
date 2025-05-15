@@ -6,6 +6,7 @@ use crate::trust::{QuorumConfig, QuorumRule};
 use chrono::Utc;
 use ed25519_dalek::VerifyingKey;
 use icn_crypto::jws::{sign_detached_jws, verify_detached_jws};
+use icn_identity::QuorumError;
 use serde::{Deserialize, Serialize};
 use serde_json::{to_value, Map, Value};
 use std::collections::HashMap;
@@ -318,8 +319,9 @@ impl TrustBundle {
         for credential in &self.credentials {
             // Ensure each credential has a unique ID
             if !unique_ids.insert(&credential.id) {
-                return Err(TrustError::InvalidBundle(
-                    "Duplicate credential ID".to_string(),
+                // This implies an issue with the structure of credentials within the bundle
+                return Err(TrustError::LocalCredentialInBundle(
+                    VcError::InvalidStructure,
                 ));
             }
 
@@ -334,7 +336,7 @@ impl TrustBundle {
         // 3. Check for duplicate signers
         let unique_signers: HashSet<&String> = signers.iter().collect();
         if unique_signers.len() != signers.len() {
-            return Err(TrustError::DuplicateSigners);
+            return Err(TrustError::QuorumProcessing(QuorumError::DuplicateSigner));
         }
 
         // 4. Validate the quorum against the config
@@ -374,7 +376,7 @@ impl TrustBundle {
     pub fn validate_quorum(&self, authorized_dids: &[String]) -> Result<bool, TrustError> {
         // Parse the quorum rule from string
         let quorum_rule: QuorumRule = serde_json::from_str(&self.quorum_rule)
-            .map_err(|_| TrustError::InvalidBundle("Invalid quorum rule format".to_string()))?;
+            .map_err(|e| TrustError::Identity(IdentityError::Deserialization { source: e }))?;
 
         // Create a config with the parsed rule
         let config = QuorumConfig {

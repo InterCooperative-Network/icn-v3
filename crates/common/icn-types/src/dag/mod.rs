@@ -172,7 +172,7 @@ where
 impl DagNode {
     pub fn cid(&self) -> Result<Cid, DagError> {
         let encoded =
-            serde_cbor::to_vec(&self).map_err(|e| DagError::Serialization(e.to_string()))?;
+            serde_cbor::to_vec(&self).map_err(DagError::Cbor)?;
         let hash = Code::Sha2_256.digest(&encoded);
         Ok(Cid::new_v1(0x71, hash))
     }
@@ -248,18 +248,30 @@ impl DagNodeBuilder {
 
     /// Builds a DagNode if all required fields are set
     pub fn build(self) -> Result<DagNode, DagError> {
-        let content = self
-            .content
-            .ok_or_else(|| DagError::InvalidStructure("Content is required".to_string()))?;
-        let event_type = self
-            .event_type
-            .ok_or_else(|| DagError::InvalidStructure("Event type is required".to_string()))?;
-        let timestamp = self
-            .timestamp
-            .ok_or_else(|| DagError::InvalidStructure("Timestamp is required".to_string()))?;
-        let scope_id = self
-            .scope_id
-            .ok_or_else(|| DagError::InvalidStructure("Scope ID is required".to_string()))?;
+        let content = self.content.ok_or_else(|| {
+            DagError::NodeValidation {
+                reason: "Content is required for DagNode".to_string(),
+                node_cid: None,
+            }
+        })?;
+        let event_type = self.event_type.ok_or_else(|| {
+            DagError::NodeValidation {
+                reason: "Event type is required for DagNode".to_string(),
+                node_cid: None,
+            }
+        })?;
+        let timestamp = self.timestamp.ok_or_else(|| {
+            DagError::NodeValidation {
+                reason: "Timestamp is required for DagNode".to_string(),
+                node_cid: None,
+            }
+        })?;
+        let scope_id = self.scope_id.ok_or_else(|| {
+            DagError::NodeValidation {
+                reason: "Scope ID is required for DagNode".to_string(),
+                node_cid: None,
+            }
+        })?;
 
         Ok(DagNode {
             content,

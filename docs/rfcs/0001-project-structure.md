@@ -1,109 +1,209 @@
-# RFC-0001: Project Structure
+# RFC 0001: ICN Project Structure and Directory Layout
 
-## Status: Accepted
-## Date: 2025-05-09
-## Authors: ICN Core Team
+**Status:** Proposed
+**Author(s):** Matt Faherty, ICN Technical Core Team
+**Date:** 2025-05-14
+**Version:** 1.0
+**Replaces:** None
+**Replaced By:** —
+**Related To:** RFC 0000 (RFC Process), RFC 0002 (Code Conventions), RFC 0003 (CCL Context Model)
 
-## Abstract
+---
 
-This RFC defines the project structure for the InterCooperative Network (ICN) codebase, establishing the organization of repositories, crates, and components based on the layered architecture design. It serves as the foundation for all future development work.
+## 0. Abstract
 
-## Motivation
+This RFC defines the standardized project structure for the InterCooperative Network (ICN) monorepo. It documents the purpose and scope of each top-level directory, clarifies conventions for crate placement, service boundaries, configuration, and test suites. This structure is designed to support modularity, reproducibility, and developer onboarding.
 
-A well-defined project structure is critical for:
-- Maintaining clear separation of concerns
-- Enabling parallel development across teams
-- Ensuring components follow the layered architecture
-- Providing a coherent mental model for contributors
-- Facilitating onboarding of new developers
+Repository: [https://github.com/InterCooperative-Network/icn-v3](https://github.com/InterCooperative-Network/icn-v3)
 
-## Technical Design
+---
 
-### Repository Map & Responsibilities
+## 1. Introduction
 
-| Repository         | Purpose                                                                                        |
-| ------------------ | ---------------------------------------------------------------------------------------------- |
-| **icn-covm**       | Core CoVM runtime, Host ABI, CCL compiler, governance/economic opcodes                         |
-| **icn-agoranet**   | Deliberation & proposal threading service, DAG message storage                                 |
-| **icn-wallet**     | Mobile/desktop wallet for identity, tokens, credentials, and governance UX                     |
-| **planetary-mesh** | Compute commons (identity-bound WASM task mesh) integrated as ICN shared execution layer       |
-| **(dev tooling)**  | CLI, SDKs, docs generators, CI scripts (dev nodes are tooling wrappers, not core architecture) |
+The ICN is implemented as a unified multi-crate Rust monorepo, with supporting services, frontend components, documentation, and tooling. A clear, consistent directory structure ensures long-term maintainability, efficient collaboration, and simplified deployment.
 
-For the initial development phase, we're using a monorepo approach within the `icn-v3` repository.
+This document formalizes the structure currently in use across the ICN repository ([icn-v3](https://github.com/InterCooperative-Network/icn-v3)) and provides rationale for its design.
 
-### Crate Structure
+---
 
-The codebase is organized into the following high-level directories:
+## 2. Terminology
 
-1. `crates/common/` - Core types and utilities shared across all components
-   - `icn-types` - Core data structures (DAG, credentials, proofs)
-   - `icn-crypto` - Cryptographic primitives and wrappers
-   - `icn-identity` - DID and verifiable credential implementations
+* **Crate** – A Rust module compiled into a library or binary.
+* **Service** – A standalone backend component exposing an API or runtime behavior.
+* **Workspace** – A logical grouping of crates defined in a shared `Cargo.toml`.
+* **Devnet** – A local or containerized test network simulating federation behavior.
 
-2. `crates/runtime/` - CoVM implementation
-   - `covm-core` - Core VM implementation
-   - `covm-host` - Host interface for CoVM
-   - `covm-wasm` - WASM interpreter and runtime
+---
 
-3. `crates/ccl/` - Contract Chain Language
-   - `ccl-compiler` - CCL to DSL compiler
-   - `ccl-core` - CCL language primitives
-   - `ccl-templates` - Standard governance templates
+## 3. Project Structure
 
-4. `crates/p2p/` - Networking layer
-   - `icn-p2p-core` - libp2p mesh implementation
-   - `icn-discovery` - Peer discovery mechanisms
-   - `icn-transport` - Transport protocols
+```
+/                      # Root workspace
+├── Cargo.toml         # Workspace manifest
+├── crates/            # Core libraries and runtime components
+│   ├── ccl/           # Cooperative Contract Language toolchain
+│   ├── common/        # Shared logic: types, crypto, identity, economics
+│   ├── p2p/           # Mesh protocol and peer networking
+│   └── runtime/       # WASM runtime, core VM, and host ABI
+├── services/          # Independently deployable backend services
+│   ├── icn-agoranet/  # Proposal deliberation and governance API
+│   ├── icn-reputation/ # Reputation computation and scoring API
+│   └── icn-mesh-jobs/ # Job management, bidding, and lifecycle control
+├── dashboard/         # Next.js frontend dashboard
+├── wallet/            # Progressive Web App (PWA) for user key management
+├── devnet/            # Local federation simulation
+│   ├── configs/       # TOML files for federation, coop, and node setup
+│   └── scripts/       # Bootstrap scripts and helper tooling
+├── scripts/           # Generic CLI or shell helpers
+├── tests/             # Integration and system-level tests
+├── monitoring/        # Prometheus, Grafana, and alerting configuration
+├── content/           # Markdown for documentation, pages, blog
+├── docs/              # Technical design documents, diagrams, and RFCs
+│   ├── rfcs/          # Official Request for Comments (RFCs)
+│   └── architecture/  # Static diagrams and architectural notes
+└── .github/           # CI/CD workflows, PR templates, contribution guides
+```
 
-5. `crates/services/` - Network services
-   - `agoranet` - Deliberation layer
-   - `dag-sync` - DAG synchronization service
-   - `federation` - Federation management
+---
 
-6. `crates/wallet/` - Wallet implementation
-   - `wallet-core` - Core wallet functionality
-   - `wallet-ui` - UI components
-   - `wallet-mobile` - Mobile-specific code
+## 4. Crates Breakdown
 
-7. `crates/tools/` - Development and diagnostic tools
-   - `icn-cli` - Command-line interface
-   - `icn-node` - Development node
+### `crates/ccl/`
 
-### Development Workflows
+Contains:
 
-The repository will use:
-- GitHub Flow for pull requests and reviews
-- Conventional Commits for commit messages
-- Semantic versioning for releases
-- ADRs (Architecture Decision Records) for significant design decisions
-- RFCs for major feature proposals
+* `icn-ccl-parser`: Pest-based grammar for CCL DSL.
+* `icn-ccl-dsl`: Typed AST for cooperative logic.
+* `icn-ccl-compiler`: Compiles DSL to WASM.
+* `icn-ccl-wasm-codegen`: Final WASM emitter.
+* `ccl_std_env`: ABI utilities accessible within CCL contracts.
 
-## Implementation Plan
+### `crates/common/`
 
-The implementation will follow the phased approach outlined in the development roadmap:
+Contains foundational modules:
 
-1. Phase 0: Project Genesis - Repository setup, toolchain configuration
-2. Phase 1: Core Types & Cryptography - Implementation of foundational types
-3. Phase 2: CoVM & CCL - Building the governance execution layer
-4. Phase 3: AgoraNet & DAG - Implementing the deliberation and data layers
-5. Phase 4: Wallet & UX - Developing the client interfaces
-6. Phase 5: Federation & Network - Finalizing the federation layer
+* `icn-types`: Core data models and enums.
+* `icn-crypto`: Signature utilities and hashing.
+* `icn-identity`: DID-based trust model and scope resolution.
+* `icn-economics`: Mana regeneration, enforcement, and quotas.
+* `icn-mesh-protocol`: Libp2p protocol definitions.
+* `icn-mesh-receipts`: ExecutionReceipt anchoring and DAG logic.
 
-## Alternatives Considered
+### `crates/p2p/`
 
-1. **Multiple repositories**: While this would provide cleaner separation, it would complicate development workflows and coordination during the initial development phase. We plan to move to a multi-repo structure once the core components stabilize.
+* `planetary-mesh`: Libp2p-based mesh communication.
 
-2. **Language diversity**: While some components could benefit from languages other than Rust (e.g., TypeScript for web interfaces), the initial implementation will use Rust throughout for consistency and to leverage the WASM target for cross-platform compatibility.
+### `crates/runtime/`
 
-## Impact and Risks
+* `icn-runtime`: Executes mesh jobs, enforces policy, emits receipts.
+* `icn-core-vm`: WASM sandbox and syscall integration.
+* `host-abi`: Defines the interface between host and guest.
 
-This structure establishes the foundation for all future development. The main risks include:
+---
 
-1. **Crate boundaries**: Improper boundaries could lead to circular dependencies
-2. **Workspace organization**: Inefficient workspace setup could slow down build times
-3. **Testing strategy**: Ensuring all layers can be tested independently and together
+## 5. Services Breakdown
 
-To mitigate these risks, we'll:
-- Regularly review crate boundaries and dependencies
-- Monitor build times and optimize workspace organization
-- Establish comprehensive testing strategies at all levels 
+### `services/icn-agoranet`
+
+Provides a governance API:
+
+* Proposal submission
+* Voting
+* WebSocket-based event channels
+
+### `services/icn-mesh-jobs`
+
+Manages the job lifecycle:
+
+* Job creation and bidding
+* Assignment protocol
+* Receipt validation and metrics
+
+### `services/icn-reputation`
+
+Manages:
+
+* Execution scoring
+* Profile aggregation
+* Mana update submission
+
+---
+
+## 6. Frontend and Wallet
+
+### `dashboard/`
+
+* React + Next.js app
+* Visualizations for DAG, jobs, tokens, and reputation
+* Uses Recharts and REST/WebSocket integration
+
+### `wallet/icn-wallet-pwa/`
+
+* Secure browser wallet
+* Local key management and signing
+* Connects to AgoraNet and runtime endpoints
+
+---
+
+## 7. Devnet and CI Tooling
+
+### `devnet/`
+
+* Federation-wide simulation environment
+* Bootstrap templates for:
+
+  * Federations
+  * Cooperatives
+  * Communities
+  * Runtime nodes
+
+### `.github/`
+
+* GitHub Actions for testing, linting, deploy
+* Contribution guidelines and PR templates
+
+---
+
+## 8. Rationale and Alternatives
+
+This structure promotes:
+
+* **Modularity:** Distinct crates for core, services, and extensions.
+* **Reusability:** Shared crates prevent duplication.
+* **Developer Experience:** Clear entry points for CLI, wallet, and UI.
+* **Observability:** Integration of monitoring and metrics at all levels.
+
+Alternatives like multiple repositories were considered but rejected due to cohesion, coordination cost, and the tight coupling between federation components.
+
+---
+
+## 9. Backward Compatibility
+
+This document formalizes existing conventions. Deviations may be refactored in future RFCs but should maintain consistency with this layout until then.
+
+---
+
+## 10. Open Questions and Future Work
+
+* Should services be versioned independently or together?
+* Should DAG replication or proposal metadata move into dedicated crates?
+* Can `devnet/` evolve into a stable testnet deployment tool?
+
+---
+
+## 11. Acknowledgements
+
+Thanks to the ICN engineering team, contributors, and community members who helped evolve this structure through practical development.
+
+---
+
+## 12. References
+
+* \[RFC 0000: RFC Process and Structure]
+* \[RFC 0003: CCL Context Model (planned)]
+* \[RFC 0016: Mesh Execution Pipeline (planned)]
+* [ICN GitHub Repository](https://github.com/InterCooperative-Network/icn-v3)
+
+---
+
+**Filename:** `0001-project-structure.md`

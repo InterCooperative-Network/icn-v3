@@ -1,12 +1,8 @@
 use thiserror::Error;
 // Add imports for specific error types
-use icn_identity::vc::CredentialError;
-use icn_identity::did::DidError;
+use icn_identity::{CredentialError, DidError, QuorumError, TrustBundleError};
 use icn_crypto::jws::JwsError;
-use icn_identity::quorum::QuorumError;
-use icn_identity::trust_bundle::TrustBundleError;
 use serde_json;
-use std::io;
 use url;
 use ed25519_dalek;
 use base64;
@@ -43,16 +39,16 @@ pub enum IdentityError {
 #[derive(Error, Debug)]
 pub enum TrustError {
     #[error("Trust bundle processing error: {0}")]
-    BundleProcessing(#[from] icn_identity::trust_bundle::TrustBundleError),
+    BundleProcessing(#[from] TrustBundleError),
 
     #[error("Error with local credential in bundle: {0}")]
     LocalCredentialInBundle(#[from] VcError),
 
     #[error("Error with external credential in bundle: {0}")]
-    ExternalCredentialInBundle(#[from] icn_identity::vc::CredentialError),
+    ExternalCredentialInBundle(#[from] CredentialError),
 
     #[error("Quorum processing error: {0}")]
-    QuorumProcessing(#[from] icn_identity::quorum::QuorumError),
+    QuorumProcessing(#[from] QuorumError),
 
     #[error("JWS verification failed: {0}")]
     JwsVerification(#[from] icn_crypto::jws::JwsError),
@@ -179,10 +175,10 @@ pub enum DagError {
     MalformedCid(#[from] cid::Error),
 
     #[error("IPLD encoding failed: {0}")]
-    IpldEncode(#[from] IpldEncodeError),
+    IpldEncode(#[from] IpldEncodeError<serde_cbor::Error>),
 
     #[error("IPLD decoding failed: {0}")]
-    IpldDecode(#[from] IpldDecodeError),
+    IpldDecode(#[from] IpldDecodeError<serde_cbor::Error>),
 
     #[error("CBOR processing error: {0}")]
     Cbor(#[from] serde_cbor::Error),
