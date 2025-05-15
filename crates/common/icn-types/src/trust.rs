@@ -54,7 +54,10 @@ impl QuorumConfig {
     pub fn new_threshold(authorized_dids: Vec<String>, threshold: u8) -> Result<Self, TrustError> {
         if threshold > 100 {
             return Err(TrustError::QuorumProcessing(
-                QuorumError::ThresholdTooHigh,
+                QuorumError::ThresholdTooHigh {
+                    threshold,
+                    available_signers: authorized_dids.len(),
+                },
             ));
         }
 
@@ -74,9 +77,10 @@ impl QuorumConfig {
 
         // Ensure the threshold is achievable
         if threshold > total_weight {
-            return Err(TrustError::QuorumProcessing(
-                QuorumError::ThresholdTooHigh,
-            ));
+            return Err(TrustError::WeightedThresholdUnachievable {
+                requested: threshold,
+                maximum: total_weight,
+            });
         }
 
         Ok(Self {

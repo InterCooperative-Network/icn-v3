@@ -11,11 +11,12 @@ pub use economics::Economics;
 pub use icn_types::resource::ResourceType;
 pub use policy::ResourceAuthorizationPolicy;
 // Using a different name for the import to avoid conflict
-pub use economics::EconomicsError as ResourceAuthorizationError;
+pub use icn_types::EconomicsError as ResourceAuthorizationError;
 pub use economics::LedgerKey;
 
 // Use the canonical Did type from icn_identity
 use icn_identity::Did;
+// use icn_types::EconomicsError; // This direct import is fine, or can be removed if ResourceAuthorizationError is used exclusively
 
 // Mana-related types will be re-exported from the new mana.rs as needed.
 // For now, removing old re-exports if they conflict or are replaced by new design.
@@ -27,30 +28,10 @@ use async_trait::async_trait;
 // type Did = String; // DIDs are strings in the format did:key:...
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use thiserror::Error;
 use tokio::sync::Mutex;
 
 pub type UsageKey = (String, String, String);
 pub type UsageData = Vec<(u64, u64)>;
-
-/// Error types specific to the economics module
-#[derive(Error, Debug)]
-pub enum EconomicsError {
-    #[error("Resource quota exceeded: {0}")]
-    QuotaExceeded(String),
-
-    #[error("Resource rate limit exceeded: {0}")]
-    RateLimitExceeded(String),
-
-    #[error("Access denied: {0}")]
-    AccessDenied(String),
-
-    #[error("Invalid policy configuration: {0}")]
-    InvalidPolicy(String),
-
-    #[error("Invalid token: {0}")]
-    InvalidToken(String),
-}
 
 /// Resource token with a specific scope of usage
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -116,7 +97,7 @@ pub trait ResourceRepository: Send + Sync {
 #[async_trait]
 pub trait PolicyEnforcer: Send + Sync {
     /// Check if a resource usage is authorized
-    async fn check_authorization(&self, did: &Did, token: &ScopedResourceToken) -> Result<bool>;
+    async fn check_authorization(&self, did: &Did, token: &ScopedResourceToken) -> Result<bool, ResourceAuthorizationError>;
 }
 
 /// Resource policy enforcer implementation
@@ -152,31 +133,31 @@ impl ResourcePolicyEnforcer {
 
 #[async_trait]
 impl PolicyEnforcer for ResourcePolicyEnforcer {
-    async fn check_authorization(&self, did: &Did, token: &ScopedResourceToken) -> Result<bool> {
+    async fn check_authorization(&self, did: &Did, token: &ScopedResourceToken) -> Result<bool, ResourceAuthorizationError> {
         // Get the policy for this resource and scope
         let policy = self
             .get_policy(&token.resource_type, &token.scope)
             .ok_or_else(|| {
-                anyhow!(
-                    "No policy found for resource type {} in scope {}",
-                    token.resource_type,
-                    token.scope
-                )
+                ResourceAuthorizationError::NoPolicyFound {
+                    resource_type: token.resource_type.clone(),
+                    scope: token.scope.clone(),
+                }
             })?;
 
         // Check if the token is expired
         if let Some(expires_at) = token.expires_at {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| anyhow!("Error getting current time: {}", e))?
+                .map_err(|e| ResourceAuthorizationError::SystemTimeError(e.to_string()))?
                 .as_secs();
 
             if now > expires_at {
-                return Err(EconomicsError::InvalidToken(format!(
-                    "Token expired at {}, current time is {}",
-                    expires_at, now
-                ))
-                .into());
+                return Err(ResourceAuthorizationError::TokenExpired {
+                    expires_at,
+                    current_time: now,
+                    resource_type: token.resource_type.clone(),
+                    scope: token.scope.clone(),
+                });
             }
         }
 
@@ -192,16 +173,19 @@ impl PolicyEnforcer for ResourcePolicyEnforcer {
                 let usage = self
                     .repository
                     .get_usage(did, &token.resource_type, &token.scope)
-                    .await?;
+                    .await
+                    .map_err(|e| ResourceAuthorizationError::SystemTimeError(format!("Failed to get usage: {}", e)))?; // Assuming get_usage can also have misc errors, mapping to SystemTimeError for now or needs own variant
 
                 if usage + token.amount <= *quota {
                     Ok(true)
                 } else {
-                    Err(EconomicsError::QuotaExceeded(format!(
-                        "Quota of {} exceeded (usage: {}, requested: {})",
-                        quota, usage, token.amount
-                    ))
-                    .into())
+                    Err(ResourceAuthorizationError::QuotaExceeded {
+                        quota: *quota,
+                        current_usage: usage,
+                        requested_amount: token.amount,
+                        resource_type: token.resource_type.clone(),
+                        scope: token.scope.clone(),
+                    })
                 }
             }
 
@@ -212,7 +196,7 @@ impl PolicyEnforcer for ResourcePolicyEnforcer {
                 // Check usage within the time period
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|e| anyhow!("Error getting current time: {}", e))?
+                    .map_err(|e| ResourceAuthorizationError::SystemTimeError(e.to_string()))?
                     .as_secs();
 
                 let since = now.saturating_sub(*period_secs);
@@ -220,18 +204,22 @@ impl PolicyEnforcer for ResourcePolicyEnforcer {
                 let usage_history = self
                     .repository
                     .get_usage_history(did, &token.resource_type, &token.scope, since)
-                    .await?;
+                    .await
+                    .map_err(|e| ResourceAuthorizationError::SystemTimeError(format!("Failed to get usage history: {}", e)))?; // Similar to get_usage
 
                 let total_usage: u64 = usage_history.iter().map(|(_, amount)| amount).sum();
 
                 if total_usage + token.amount <= *amount {
                     Ok(true)
                 } else {
-                    Err(EconomicsError::RateLimitExceeded(format!(
-                        "Rate limit of {} per {} seconds exceeded (usage: {}, requested: {})",
-                        amount, period_secs, total_usage, token.amount
-                    ))
-                    .into())
+                    Err(ResourceAuthorizationError::RateLimitExceeded {
+                        limit_amount: *amount,
+                        period_seconds: *period_secs,
+                        current_usage_in_period: total_usage,
+                        requested_amount: token.amount,
+                        resource_type: token.resource_type.clone(),
+                        scope: token.scope.clone(),
+                    })
                 }
             }
 
@@ -240,11 +228,11 @@ impl PolicyEnforcer for ResourcePolicyEnforcer {
                 if permits.contains(did) {
                     Ok(true)
                 } else {
-                    Err(EconomicsError::AccessDenied(format!(
-                        "DID {} not in permit list for resource type {} in scope {}",
-                        did, token.resource_type, token.scope
-                    ))
-                    .into())
+                    Err(ResourceAuthorizationError::AccessDenied {
+                        did: did.clone(), // Assuming Did is Cloneable
+                        resource_type: token.resource_type.clone(),
+                        scope: token.scope.clone(),
+                    })
                 }
             }
         }
@@ -499,8 +487,8 @@ mod tests {
         };
         let result = enforcer.check_authorization(&did, &token3).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::QuotaExceeded(_)) => {} // Expected
+        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
+            Some(ResourceAuthorizationError::QuotaExceeded(_)) => {} // Expected
             _ => panic!("Expected QuotaExceeded error"),
         }
     }
@@ -542,8 +530,8 @@ mod tests {
         let token4 = create_token();
         let result = enforcer.check_authorization(&did, &token4).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::RateLimitExceeded(_)) => {} // Expected
+        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
+            Some(ResourceAuthorizationError::RateLimitExceeded(_)) => {} // Expected
             _ => panic!("Expected RateLimitExceeded error"),
         }
 
@@ -577,8 +565,8 @@ mod tests {
         assert!(enforcer.check_authorization(&did2, &token).await.unwrap());
         let result = enforcer.check_authorization(&did3, &token).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::AccessDenied(_)) => {} // Expected
+        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
+            Some(ResourceAuthorizationError::AccessDenied(_)) => {} // Expected
             _ => panic!("Expected AccessDenied error"),
         }
     }
@@ -604,9 +592,9 @@ mod tests {
         };
         let result = enforcer.check_authorization(&test_did(), &token).await;
         assert!(result.is_err());
-        match result.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::InvalidToken(_)) => {} // Expected
-            _ => panic!("Expected InvalidToken error for expired token"),
+        match result.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
+            Some(ResourceAuthorizationError::TokenExpired { .. }) => {} // Expected
+            _ => panic!("Expected TokenExpired error for expired token"),
         }
     }
 
@@ -819,8 +807,8 @@ mod tests {
             .check_authorization(&did_alice, &mana_token_spend_25)
             .await;
         assert!(auth_result2.is_err(), "Auth check 2 should fail due to quota");
-        match auth_result2.err().unwrap().downcast_ref::<EconomicsError>() {
-            Some(EconomicsError::QuotaExceeded(_)) => {} // Expected
+        match auth_result2.err().unwrap().downcast_ref::<ResourceAuthorizationError>() {
+            Some(ResourceAuthorizationError::QuotaExceeded { .. }) => {} // Expected
             other_err => panic!("Expected QuotaExceeded error, got {:?}", other_err),
         }
 

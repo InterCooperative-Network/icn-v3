@@ -13,7 +13,7 @@ pub mod resource;
 pub mod runtime_receipt;
 pub mod trust;
 
-pub use error::{CryptoError, DagError, IdentityError, TrustError, SignError};
+pub use error::{IcnError, CryptoError, DagError, MulticodecError, IdentityError, TrustError, MeshError, VcError, SignError, EconomicsError};
 pub use runtime_receipt::{RuntimeExecutionMetrics, RuntimeExecutionReceipt};
 pub use mesh::{JobStatus as MeshJobStatus, MeshJob, MeshJobParams, QoSProfile, WorkflowType};
 pub use org::{CommunityId, CooperativeId};

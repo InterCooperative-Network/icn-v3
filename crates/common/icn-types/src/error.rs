@@ -1,6 +1,6 @@
 use thiserror::Error;
 // Add imports for specific error types
-use icn_identity::{CredentialError, DidError, QuorumError, TrustBundleError};
+use icn_identity::{CredentialError, DidError, Did, QuorumError, TrustBundleError};
 use icn_crypto::jws::JwsError;
 use serde_json;
 use url;
@@ -9,6 +9,50 @@ use base64;
 use serde_cbor;
 use cid;
 use serde_ipld_dagcbor::{DecodeError as IpldDecodeError, EncodeError as IpldEncodeError};
+
+/// Error types specific to the economics module
+#[derive(Error, Debug)]
+pub enum EconomicsError {
+    #[error("Resource quota exceeded for {resource_type} in scope {scope}: quota={quota}, current_usage={current_usage}, requested={requested_amount}")]
+    QuotaExceeded {
+        quota: u64,
+        current_usage: u64,
+        requested_amount: u64,
+        resource_type: String,
+        scope: String,
+    },
+
+    #[error("Rate limit exceeded for {resource_type} in scope {scope}: limit={limit_amount}/{period_seconds}s, current_usage_in_period={current_usage_in_period}, requested={requested_amount}")]
+    RateLimitExceeded {
+        limit_amount: u64,
+        period_seconds: u64,
+        current_usage_in_period: u64,
+        requested_amount: u64,
+        resource_type: String,
+        scope: String,
+    },
+
+    #[error("Access denied for DID {did} to resource {resource_type} in scope {scope}")]
+    AccessDenied {
+        did: Did,
+        resource_type: String,
+        scope: String,
+    },
+
+    #[error("Token for {resource_type} in scope {scope} expired at {expires_at} (current time: {current_time})")]
+    TokenExpired {
+        expires_at: u64,
+        current_time: u64,
+        resource_type: String,
+        scope: String,
+    },
+
+    #[error("No policy found for resource type {resource_type} in scope {scope}")]
+    NoPolicyFound { resource_type: String, scope: String },
+
+    #[error("System time error: {0}")]
+    SystemTimeError(String),
+}
 
 /// Errors that can occur during receipt signing operations (moved from icn-mesh-receipts)
 #[derive(Debug, Error)]
@@ -83,6 +127,9 @@ pub enum TrustError {
 
     #[error("Cryptographic error underlying trust operation: {0}")]
     Crypto(#[from] CryptoError),
+
+    #[error("Weighted quorum threshold {requested} is unachievable, maximum possible is {maximum}")]
+    WeightedThresholdUnachievable { requested: u32, maximum: u32 },
 }
 
 /// Generic error type for ICN operations
@@ -103,7 +150,7 @@ pub enum IcnError {
     Mesh(#[from] MeshError),
     
     #[error("Economics error: {0}")]
-    Economics(String),
+    Economics(#[from] EconomicsError),
 
     // --- Common I/O, Parsing, and System Errors ---
     #[error("I/O error: {0}")]
