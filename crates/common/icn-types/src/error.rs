@@ -6,6 +6,13 @@ use icn_crypto::jws::JwsError;
 use icn_identity::quorum::QuorumError;
 use icn_identity::trust_bundle::TrustBundleError;
 use serde_json;
+use std::io;
+use url;
+use ed25519_dalek;
+use base64;
+use serde_cbor;
+use cid;
+use serde_ipld_dagcbor::{DecodeError as IpldDecodeError, EncodeError as IpldEncodeError};
 
 /// Errors related to identity operations
 #[derive(Error, Debug)]
@@ -35,52 +42,76 @@ pub enum IdentityError {
 /// Errors related to trust operations
 #[derive(Error, Debug)]
 pub enum TrustError {
-    #[error("Invalid trust bundle: {0}")]
-    InvalidBundle(String),
+    #[error("Trust bundle processing error: {0}")]
+    BundleProcessing(#[from] icn_identity::trust_bundle::TrustBundleError),
 
-    #[error("Invalid credential in bundle: {0}")]
-    InvalidCredential(String),
+    #[error("Error with local credential in bundle: {0}")]
+    LocalCredentialInBundle(#[from] VcError),
 
-    #[error("Invalid quorum configuration: {0}")]
-    InvalidQuorumConfig(String),
+    #[error("Error with external credential in bundle: {0}")]
+    ExternalCredentialInBundle(#[from] icn_identity::vc::CredentialError),
 
-    #[error("Quorum not satisfied")]
-    QuorumNotSatisfied,
+    #[error("Quorum processing error: {0}")]
+    QuorumProcessing(#[from] icn_identity::quorum::QuorumError),
 
-    #[error("Unauthorized signer: {0}")]
-    UnauthorizedSigner(String),
+    #[error("JWS verification failed: {0}")]
+    JwsVerification(#[from] icn_crypto::jws::JwsError),
 
-    #[error("Duplicate signers detected")]
-    DuplicateSigners,
+    #[error("Identity error underlying trust operation: {0}")]
+    Identity(#[from] IdentityError),
 
-    #[error("Verification failed: {0}")]
-    VerificationFailed(String),
-
-    #[error("Identity error: {0}")]
-    IdentityError(#[from] IdentityError),
-
-    #[error("Crypto error: {0}")]
-    CryptoError(#[from] CryptoError),
+    #[error("Cryptographic error underlying trust operation: {0}")]
+    Crypto(#[from] CryptoError),
 }
 
 /// Generic error type for ICN operations
 #[derive(Debug, thiserror::Error)]
 pub enum IcnError {
-    #[error("Crypto error: {0}")]
+    // --- Errors from dependent local ICN modules/types ---
+    #[error("Cryptography error: {0}")]
     Crypto(#[from] CryptoError),
-
-    #[error("DAG error: {0}")]
+    #[error("DAG processing error: {0}")]
     Dag(#[from] DagError),
-
     #[error("Multicodec error: {0}")]
     Multicodec(#[from] MulticodecError),
+    #[error("Identity operation error: {0}")]
+    Identity(#[from] IdentityError),
+    #[error("Trust operation error: {0}")]
+    Trust(#[from] TrustError),
+    #[error("Mesh operation error: {0}")]
+    Mesh(#[from] MeshError),
+    
+    #[error("Economics error: {0}")]
+    Economics(String),
 
-    #[error("Network error: {0}")]
-    Network(String),
+    // --- Common I/O, Parsing, and System Errors ---
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Serialization/Deserialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+    #[error("Invalid URI: {0}")]
+    InvalidUri(#[from] url::ParseError),
 
-    #[error("Storage error: {0}")]
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
+    #[error("Configuration error: {0}")]
+    Config(String),
+
+    // --- General Application-level Errors ---
+    #[error("Storage operation failed: {0}")]
     Storage(String),
-
+    #[error("Database error: {0}")]
+    Database(String),
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+    #[error("Consensus error: {0}")]
+    Consensus(String),
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
     #[error("General error: {0}")]
     General(String),
 }
@@ -88,73 +119,101 @@ pub enum IcnError {
 /// Crypto-related error types
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
-    #[error("Key generation error: {0}")]
-    KeyGenError(String),
+    #[error("Key generation failed: {source}")]
+    KeyGeneration { #[source] source: ed25519_dalek::SignatureError },
 
-    #[error("Signature error: {0}")]
-    SignatureError(String),
+    #[error("Digital signature creation failed: {0}")]
+    SignatureCreationFailure(String),
 
-    #[error("Verification error: {0}")]
-    VerificationError(String),
+    #[error("Signature verification failed: {source}")]
+    Verification { #[source] source: ed25519_dalek::SignatureError },
 
-    #[error("Invalid key format: {0}")]
-    InvalidKeyFormat(String),
+    // InvalidKeyFormat variants
+    #[error("Invalid key data for cryptographic operation: {0}")]
+    KeyDataInvalid(#[from] ed25519_dalek::SignatureError),
+    #[error("Invalid key format (base64 decode failed): {0}")]
+    KeyFormatBase64(#[from] base64::DecodeError),
+    #[error("Invalid key format (json deserialize failed): {0}")]
+    KeyFormatJson(#[from] serde_json::Error),
+    #[error("Invalid key format (unspecified): {0}")]
+    KeyFormatGeneric(String),
 
-    #[error("Encoding error: {0}")]
-    EncodingError(String),
+    // EncodingError variants
+    #[error("Base64 encoding/decoding error: {source}")]
+    Base64Processing { #[source] source: base64::DecodeError },
+    #[error("Generic encoding error: {0}")]
+    EncodingGeneric(String),
 
-    #[error("JWS error: {0}")]
-    JwsError(String),
+    #[error("JWS processing error: {0}")]
+    Jws(#[from] icn_crypto::jws::JwsError),
 
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
+    // SerializationError variants
+    #[error("JSON serialization/deserialization error: {source}")]
+    JsonProcessing { #[source] source: serde_json::Error },
+    #[error("CBOR serialization/deserialization error: {0}")]
+    CborProcessing(#[from] serde_cbor::Error),
+    #[error("Generic serialization error: {0}")]
+    SerializationGeneric(String),
+
+    #[error("Unknown or unspecified crypto error: {0}")]
+    Unknown(String),
 }
 
 /// Multicodec-related error types
 #[derive(Debug, thiserror::Error)]
 pub enum MulticodecError {
-    #[error("Unknown codec: {0}")]
-    UnknownCodec(String),
+    #[error("Multicodec processing error from underlying library: {0}")]
+    CidLib(#[from] cid::Error),
 
-    #[error("Unsupported codec: {0}")]
-    UnsupportedCodec(String),
+    #[error("Application does not support codec 0x{code:x}{}", name.as_ref().map_or_else(String::new, |n| format!(" ({})", n)))]
+    UnsupportedByApplication { code: u64, name: Option<String> },
 
-    #[error("Invalid multicodec header: {0}")]
-    InvalidHeader(String),
-
-    #[error("Encoding error: {0}")]
-    EncodingError(String),
-
-    #[error("Decoding error: {0}")]
-    DecodingError(String),
+    #[error("Application-specific multicodec logic error: {0}")]
+    AppLogic(String),
 }
 
 /// DAG-related error types
 #[derive(Debug, thiserror::Error)]
 pub enum DagError {
-    #[error("Invalid link: {0}")]
-    InvalidLink(String),
+    #[error("Invalid CID format or value: {0}")]
+    MalformedCid(#[from] cid::Error),
 
-    #[error("Missing link: {0}")]
-    MissingLink(String),
+    #[error("IPLD encoding failed: {0}")]
+    IpldEncode(#[from] IpldEncodeError),
 
-    #[error("Invalid CID: {0}")]
-    InvalidCid(String),
+    #[error("IPLD decoding failed: {0}")]
+    IpldDecode(#[from] IpldDecodeError),
 
-    #[error("Invalid DAG node: {0}")]
-    InvalidNode(String),
+    #[error("CBOR processing error: {0}")]
+    Cbor(#[from] serde_cbor::Error),
 
-    #[error("DAG verification failed: {0}")]
-    VerificationFailed(String),
+    #[error("Link target not found for CID: {cid}")]
+    LinkNotFound { cid: cid::Cid },
 
-    #[error("Invalid data: {0}")]
-    InvalidData(String),
+    #[error("Link is structurally invalid in node (CID: {node_cid:?}): {reason}. Link: '{link_value}'")]
+    LinkInvalidInNode {
+        reason: String,
+        node_cid: Option<cid::Cid>,
+        link_value: String,
+    },
 
-    #[error("Invalid structure: {0}")]
-    InvalidStructure(String),
+    #[error("Node content or structure is invalid after decoding (CID: {node_cid:?}): {reason}")]
+    NodeValidation {
+        reason: String,
+        node_cid: Option<cid::Cid>,
+    },
 
-    #[error("Serialization error: {0}")]
-    Serialization(String),
+    #[error("DAG integrity verification failed for CID {cid}: {reason}")]
+    Integrity { cid: cid::Cid, reason: String },
+
+    #[error("Cycle detected in DAG traversal: {context}")]
+    CycleDetected { context: String },
+
+    #[error("DAG traversal failed: {reason}")]
+    TraversalFailure { reason: String },
+
+    #[error("DAG operation failed due to unspecified reason: {0}")]
+    Unspecified(String),
 }
 
 /// Error types for Verifiable Credential operations
