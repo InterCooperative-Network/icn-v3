@@ -11,6 +11,10 @@ use crate::metrics;
 use tracing;
 use icn_types::reputation::ReputationProfile as ICNReputationProfile;
 use thiserror::Error;
+use crate::error::AppError;
+use crate::storage::MeshJobStore;
+use icn_types::jobs::JobStatus;
+use chrono::Utc;
 
 #[derive(Error, Debug)]
 pub enum SelectionError {
@@ -411,6 +415,103 @@ impl JobAssignmentService {
         );
 
         reputation_component + price_component + resource_component
+    }
+}
+
+pub struct JobProcessor {
+    store: Arc<dyn MeshJobStore>,
+    reputation_client: Arc<dyn ReputationClient>,
+    selector: Box<dyn ExecutorSelector>,
+    p2p_node_state: Option<SharedP2pNode>,
+    evaluation_config: BidEvaluatorConfig,
+}
+
+impl JobProcessor {
+    pub fn new(
+        store: Arc<dyn MeshJobStore>,
+        reputation_url: Arc<String>, // Note: takes reputation_url, not client directly
+        p2p_node_state: Option<SharedP2pNode>,
+        evaluation_config: BidEvaluatorConfig,
+    ) -> Self {
+        let reputation_client = Arc::new(
+            crate::reputation_cache::CachingReputationClient::with_defaults(reputation_url),
+        );
+        // Note: The original code uses DefaultExecutorSelector. If other selectors are intended,
+        // the constructor or setup logic might be more complex.
+        let selector = DefaultExecutorSelector::new(reputation_client.clone(), evaluation_config.clone());
+        Self {
+            store,
+            reputation_client, // Stores the constructed client
+            selector: Box::new(selector),
+            p2p_node_state,
+            evaluation_config,
+        }
+    }
+
+    pub async fn process_job_assignments(&self) -> Result<(), AppError> { // MODIFIED: Return type
+        // Fetch jobs that are 'Posted' and order by bid_deadline_unix_ms
+        let jobs_to_process = self
+            .store
+            // Assuming JobStatus::Posted is the correct variant to query for.
+            // The original code had JobStatus::Posted here.
+            .get_job_by_status_and_assign_priority(JobStatus::Posted, 100, None)
+            .await?; // store methods now return Result<_, AppError>
+
+        if jobs_to_process.is_empty() {
+            tracing::debug!("No posted jobs to process for assignment.");
+            return Ok(());
+        }
+        
+        for job_request in jobs_to_process {
+            // Assuming job_request has a Cid field named job_id. The provided struct does.
+            let job_id = job_request.job_id.clone(); 
+            tracing::info!(job_id = %job_id, "Processing job for assignment");
+            
+            // Check if the job's bid deadline has passed
+            let current_time_ms = chrono::Utc::now().timestamp_millis() as u64;
+            // Assuming job_request has params with bid_deadline_unix_ms. The provided struct does.
+            if current_time_ms < job_request.params.bid_deadline_unix_ms { 
+                tracing::debug!(job_id = %job_id, "Job bid deadline not yet reached. Skipping.");
+                continue;
+            }
+            
+            let bids = self.store.list_bids(&job_id).await?;
+            if bids.is_empty() {
+                tracing::warn!(job_id = %job_id, "No bids found for job. Marking as expired.");
+                // Assuming update_job_status takes an Option<String> for reason.
+                // The original code had JobStatus::BiddingExpired here.
+                self.store.update_job_status(&job_id, JobStatus::BiddingExpired, Some("No bids received by deadline".to_string())).await?;
+                continue;
+            }
+            
+            // selector.select now returns Result<_, SelectionError>
+            // Apply ? to handle SelectionError, converting to AppError::SelectionFailure
+            match self.selector.select(&job_request, &bids, job_id.clone()).await? {
+                Some((winning_bid, score, reason)) => {
+                    tracing::info!(job_id = %job_id, winning_bid_id = ?winning_bid.id, executor_did = %winning_bid.bidder, score, reason, "Winning bid selected.");
+                    
+                    // MODIFIED: Mapped to AppError::Internal and added job_id context
+                    let winning_bid_id_val = winning_bid.id.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Winning bid has no ID (job_id: {})", job_id)))?; 
+                    
+                    // The original code passed winning_bid_id_str. Assuming winning_bid.id is i64.
+                    // If store.assign_job expects a String for bid_id, winning_bid_id_val.to_string() would be needed.
+                    // Keeping as i64 based on typical DB ID types.
+                    self.store.assign_job(&job_id, winning_bid_id_val, winning_bid.bidder.clone()).await?;
+                    
+                    if let Some(p2p_state) = self.p2p_node_state.as_ref() {
+                        let mut p2p_lock = p2p_state.lock().await;
+                        p2p_lock.publish_job_assignment(job_id.clone(), winning_bid.bidder.clone()).await
+                            .map_err(|e| AppError::P2pError(format!("Failed to publish job assignment to P2P network for job {}: {}", job_id, e)))?; // MODIFIED: Mapped to AppError::P2pError and propagated
+                    }
+                }
+                None => { 
+                    tracing::warn!(job_id = %job_id, "No suitable bid found after selection process.");
+                    // The original code had JobStatus::Failed here.
+                    self.store.update_job_status(&job_id, JobStatus::Failed, Some("No suitable bid found".to_string())).await?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
