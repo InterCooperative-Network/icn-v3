@@ -12,6 +12,7 @@ use icn_identity::Did;
 use icn_types::jobs::{Bid, JobRequest, JobStatus, ResourceEstimate, ResourceRequirements};
 use icn_types::reputation::{ReputationRecord, ReputationUpdateEvent, ReputationProfile};
 use icn_types::mesh::MeshJobParams;
+use icn_types::JobFailureReason;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
@@ -748,13 +749,15 @@ async fn mark_job_failed_handler(
         }
     };
 
+    let failure_reason_obj = JobFailureReason::Unknown(details.reason.clone());
+
     let record = ReputationRecord {
         timestamp: Utc::now(),
         issuer: MESH_JOBS_SYSTEM_DID.clone(),
         subject: runner_did.clone(),
         event: ReputationUpdateEvent::JobFailed {
             job_id,
-            reason: details.reason.clone(),
+            reason: failure_reason_obj.clone(),
             anchor_cid: details.failure_anchor_cid,
         },
         anchor: details.failure_anchor_cid,
@@ -762,8 +765,8 @@ async fn mark_job_failed_handler(
     };
 
     reputation_client::submit_reputation_record(&record, &reputation_url).await?;
-
-    store.update_job_status(&job_id, JobStatus::Failed { reason: details.reason }).await?;
+    
+    store.update_job_status(&job_id, JobStatus::Failed { reason: failure_reason_obj }).await?;
     tracing::info!("Marked job {} as Failed. Reason: {}. Reputation record submitted for runner {}.", job_id, details.reason, runner_did.0);
     Ok(StatusCode::OK)
 }

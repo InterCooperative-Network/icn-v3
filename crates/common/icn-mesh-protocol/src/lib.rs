@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use icn_types::JobFailureReason;
 // use icn_types::mesh::{/* MeshJob, JobStatus as StandardJobStatus, QoSProfile, StageInputSource, WorkflowType, StageDefinition, OrgScopeIdentifier, */ JobId, JobParams, JobResult, JobStatus, MeshOperation, KnownPeer, ProtocolVersion}; // Commenting out entire problematic line
 use icn_identity::Did;
 // use cid::Cid; // Removed as per clippy
@@ -43,7 +44,7 @@ pub enum P2PJobStatus {
         /// DID of the node that failed the job
         node_id: Did,
         /// Error message
-        error_message: String,
+        reason: JobFailureReason,
     },
 }
 

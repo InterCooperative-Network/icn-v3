@@ -9,6 +9,7 @@ use base64;
 use serde_cbor;
 use cid;
 use serde_ipld_dagcbor::{DecodeError as IpldDecodeError, EncodeError as IpldEncodeError};
+use serde::{Deserialize, Serialize};
 
 /// Error types specific to the economics module
 #[derive(Error, Debug)]
@@ -332,4 +333,46 @@ pub enum MeshError {
 
     #[error("Mesh protocol violation: {0}")]
     ProtocolViolation(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Error)]
+pub enum JobFailureReason {
+    #[error("An internal error occurred")]
+    InternalError, // Consider InternalError(String) if more detail is often needed
+
+    #[error("Resource limit exceeded")]
+    ResourceLimitExceeded,
+
+    #[error("Job execution failed")]
+    ExecutionError, // Consider ExecutionError(String)
+
+    #[error("Permission denied")]
+    PermissionDenied,
+
+    #[error("Invalid input provided for the job")]
+    InvalidInput, // Consider InvalidInput(String)
+
+    #[error("Job timed out")]
+    Timeout,
+
+    #[error("Job was manually cancelled")]
+    ManuallyCancelled,
+
+    #[error("A dependency for the job failed")]
+    DependencyFailed,
+
+    #[error("Required resource or entity not found")]
+    NotFound,
+
+    #[error("A network error occurred")]
+    NetworkError,
+
+    #[error("Error processing job output")]
+    OutputError, // E.g. serialization, validation
+
+    #[error("Error reported by the service provider")]
+    ServiceProviderError, // General error from the SP, consider ServiceProviderError(String)
+
+    #[error("An unknown error occurred: {0}")]
+    Unknown(String), // Default / catch-all, now with a message
 }

@@ -14,7 +14,7 @@ use std::str::FromStr;
 use serde_json;
 use icn_identity::Did;
 use sqlx::Acquire;
-use icn_types::mesh::JobStatus;
+use icn_types::jobs::JobStatus;
 
 use crate::storage::{MeshJobStore, generate_job_cid};
 use crate::types::{Bid, JobRequest, JobRequirements};
