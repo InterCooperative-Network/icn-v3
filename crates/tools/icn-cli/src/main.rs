@@ -4,7 +4,7 @@ use colored::Colorize;
 use icn_ccl_compiler::CclCompiler;
 use icn_identity::{Did, FederationMetadata, KeyPair, QuorumProof, QuorumType, TrustBundle};
 use icn_runtime::{ExecutionReceipt, Proposal, ProposalState, QuorumStatus, RuntimeExecutionReceipt, VmContext as RuntimeVmContext};
-use icn_types::error::{IcnError, IdentityError as IcnTypesIdentityError, DagError as IcnTypesDagError, CryptoError as IcnTypesCryptoError, MeshError as IcnTypesMeshError, TrustError as IcnTypesTrustError, MulticodecError as IcnTypesMulticodecError};
+use icn_types::error::{IcnError, IdentityError as IcnTypesIdentityError, DagError as IcnTypesDagError, CryptoError as IcnTypesCryptoError, MeshError as IcnTypesMeshError, TrustError as IcnTypesTrustError, MulticodecError as IcnTypesMulticodecError, VcError as IcnTypesVcError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -63,16 +63,13 @@ fn read_and_parse_json<T: serde::de::DeserializeOwned>(file_path: &Path, context
 /// Formats an `icn_types::error::IcnError` into a user-friendly `anyhow::Error` for the CLI.
 fn format_icn_error_for_cli(err: &IcnError, base_context_msg: &str) -> anyhow::Error {
     let detailed_msg = match err {
-        IcnError::Io(io_err) => format!("Underlying I/O error: {}", io_err),
-        IcnError::Serialization(json_err) => format!("Underlying JSON serialization/deserialization error: {}", json_err),
+        IcnError::Io(io_err) => format!("I/O error: {}", io_err),
+        IcnError::Serialization(json_err) => format!("JSON processing error: {}", json_err),
         IcnError::Identity(identity_err) => {
-            // Handle IcnTypesIdentityError specifically
             match identity_err {
                 IcnTypesIdentityError::DidProcessing { source: did_err } => {
-                    // We need a 'problematic_input' string here. Since we don't have it directly,
-                    // we pass a generic placeholder. The outer context from anyhow will be more helpful.
                     return format_did_error(did_err, "[DID processed during operation]")
-                        .context(format!("{}: Identity error involving DID processing", base_context_msg))
+                        .context(format!("{}: Identity error - DID processing failed", base_context_msg))
                 }
                 IcnTypesIdentityError::JwsProcessing { source: jws_err } => {
                     format!("Identity error: JWS processing failed: {}", jws_err)
@@ -80,30 +77,87 @@ fn format_icn_error_for_cli(err: &IcnError, base_context_msg: &str) -> anyhow::E
                 IcnTypesIdentityError::TrustBundleProcessing { source: tb_err } => {
                     format!("Identity error: Trust Bundle processing failed: {}", tb_err)
                 }
-                // Add more specific IcnTypesIdentityError arms as needed
-                _ => format!("Underlying Identity error: {}", identity_err),
+                IcnTypesIdentityError::QuorumProcessing { source: q_err } => {
+                    format!("Identity error: Quorum processing failed: {}", q_err)
+                }
+                IcnTypesIdentityError::ExternalCredentialProcessing { source: cred_err } => {
+                    format!("Identity error: External credential processing failed: {}", cred_err)
+                }
+                IcnTypesIdentityError::LocalVc(vc_err) => {
+                    match vc_err {
+                        IcnTypesVcError::Serialization(s_err) => format!("Identity error: Local VC serialization failed: {}", s_err),
+                        IcnTypesVcError::Signing(j_err) => format!("Identity error: Local VC signing failed: {}", j_err),
+                        IcnTypesVcError::InvalidStructure => "Identity error: Local VC has invalid structure".to_string(),
+                        IcnTypesVcError::MissingField(f) => format!("Identity error: Local VC missing field '{}'", f),
+                    }
+                }
+                IcnTypesIdentityError::Deserialization { source: s_err } => {
+                    format!("Identity error: JSON deserialization failed: {}", s_err)
+                }
             }
         }
         IcnError::Dag(dag_err) => {
             match dag_err {
                 IcnTypesDagError::MalformedCid(cid_err) => format!("DAG error: Malformed CID: {}", cid_err),
+                IcnTypesDagError::IpldEncode(encode_err) => format!("DAG error: IPLD encoding failed: {}", encode_err),
+                IcnTypesDagError::IpldDecode(decode_err) => format!("DAG error: IPLD decoding failed: {}", decode_err),
                 IcnTypesDagError::LinkNotFound { cid } => format!("DAG error: Link not found for CID: {}", cid),
                 IcnTypesDagError::NodeValidation { reason, node_cid } => {
                     if let Some(ncid) = node_cid {
-                        format!("DAG error: Node validation failed for CID {}: {}", ncid, reason)
+                        format!("DAG error: Node validation failed for CID '{}': {}", ncid, reason)
                     } else {
                         format!("DAG error: Node validation failed: {}", reason)
                     }
                 }
-                // Add more specific IcnTypesDagError arms as needed
-                _ => format!("Underlying DAG error: {}", dag_err),
+                IcnTypesDagError::CycleDetected { context } => format!("DAG error: Cycle detected during traversal: {}", context),
+                IcnTypesDagError::TraversalFailure { reason } => format!("DAG error: Traversal failed: {}", reason),
+                IcnTypesDagError::Integrity { cid, reason } => format!("DAG error: Integrity check failed for CID '{}': {}", cid, reason),
+                _ => format!("DAG error: {}", dag_err), // Fallback for other DagError variants
             }
         }
-        IcnError::Crypto(crypto_err) => format!("Underlying Cryptography error: {}", crypto_err),
-        IcnError::Mesh(mesh_err) => format!("Underlying Mesh error: {}", mesh_err),
-        IcnError::Trust(trust_err) => format!("Underlying Trust error: {}", trust_err),
-        IcnError::Multicodec(mc_err) => format!("Underlying Multicodec error: {}", mc_err),
-        IcnError::InvalidUri(uri_err) => format!("Invalid URI encountered: {}", uri_err),
+        IcnError::Crypto(crypto_err) => {
+            match crypto_err {
+                IcnTypesCryptoError::KeyGeneration { source } => format!("Cryptography error: Key generation failed: {}", source),
+                IcnTypesCryptoError::SignatureCreationFailure(s) => format!("Cryptography error: Signature creation failed: {}", s),
+                IcnTypesCryptoError::Verification { source } => format!("Cryptography error: Signature verification failed: {}", source),
+                IcnTypesCryptoError::KeyDataInvalid(e) => format!("Cryptography error: Invalid key data: {}", e),
+                IcnTypesCryptoError::KeyFormatBase64(e) => format!("Cryptography error: Invalid key format (Base64 decoding): {}", e),
+                IcnTypesCryptoError::KeyFormatJson(e) => format!("Cryptography error: Invalid key format (JSON deserialization): {}", e),
+                IcnTypesCryptoError::Jws(jws_err) => format!("Cryptography error: JWS processing failed: {}", jws_err),
+                _ => format!("Cryptography error: {}", crypto_err), // Fallback for other CryptoError variants
+            }
+        }
+        IcnError::Mesh(mesh_err) => {
+            match mesh_err {
+                IcnTypesMeshError::Io(io_err) => format!("Mesh network I/O error: {}", io_err),
+                IcnTypesMeshError::JobSubmission(s) => format!("Mesh error: Job submission failed: {}", s),
+                IcnTypesMeshError::ReceiptProcessing(s) => format!("Mesh error: Receipt processing failed: {}", s),
+                IcnTypesMeshError::ResourceNotFound { resource_type, identifier } => format!("Mesh error: Resource '{}' with ID '{}' not found.", resource_type, identifier),
+                _ => format!("Mesh error: {}", mesh_err), // Fallback for other MeshError variants
+            }
+        }
+        IcnError::Trust(trust_err) => {
+            match trust_err {
+                IcnTypesTrustError::BundleProcessing(bp_err) => format!("Trust error: Bundle processing failed: {}", bp_err),
+                IcnTypesTrustError::JwsVerification(jws_err) => format!("Trust error: JWS verification failed: {}", jws_err),
+                IcnTypesTrustError::Identity(id_err) => format!("Trust error: Underlying identity issue: {}", id_err), // Could recurse or format IdentityError more deeply
+                _ => format!("Trust error: {}", trust_err), // Fallback for other TrustError variants
+            }
+        }
+        IcnError::Multicodec(mc_err) => {
+            match mc_err {
+                IcnTypesMulticodecError::CidLib(cid_err) => format!("Multicodec error: CID library issue: {}", cid_err),
+                IcnTypesMulticodecError::UnsupportedByApplication { code, name } => {
+                    if let Some(n) = name {
+                        format!("Multicodec error: Codec 0x{:x} ({}) is unsupported by the application.", code, n)
+                    } else {
+                        format!("Multicodec error: Codec 0x{:x} is unsupported by the application.", code)
+                    }
+                }
+                _ => format!("Multicodec error: {}", mc_err), // Fallback for other MulticodecError variants
+            }
+        }
+        IcnError::InvalidUri(uri_err) => format!("Invalid URI: {}", uri_err),
         IcnError::Timeout(s) => format!("Operation timed out: {}", s),
         IcnError::Config(s) => format!("Configuration error: {}", s),
         IcnError::Storage(s) => format!("Storage error: {}", s),
@@ -111,10 +165,21 @@ fn format_icn_error_for_cli(err: &IcnError, base_context_msg: &str) -> anyhow::E
         IcnError::NotFound(s) => format!("Resource not found: {}", s),
         IcnError::PermissionDenied(s) => format!("Permission denied: {}", s),
         IcnError::General(s) => format!("General error: {}", s),
-        // Catch-all for any IcnError variants not explicitly handled above
-        _ => format!("An unspecified ICN error occurred: {}", err),
+        IcnError::Economics(s) => format!("Economics subsystem error: {}", s),
+        IcnError::Database(s) => format!("Database error: {}", s),
+        IcnError::Plugin(s) => format!("Plugin error: {}", s),
+        IcnError::Consensus(s) => format!("Consensus error: {}", s),
+        // Fallback for any new variants that might be added to IcnError in the future
+        // and are not yet explicitly handled here.
+        _ => format!("An unspecified ICN system error occurred: {}", err),
     };
     anyhow!("{}: {}", base_context_msg, detailed_msg)
+}
+
+/// Writes string content to a file, providing context-aware error messages.
+fn write_string_to_file(content: &str, path: &Path, context_msg: &str) -> Result<()> {
+    std::fs::write(path, content)
+        .map_err(|e| anyhow!("Failed to write {} to file '{}': {}", context_msg, path.display(), e))
 }
 
 /// Command-line interface for ICN governance
@@ -647,7 +712,33 @@ async fn execute_wasm(
     let storage = Arc::new(CliRuntimeStorage::new());
 
     // Create a runtime instance
-    let runtime = icn_runtime::Runtime::new(storage);
+    let runtime = icn_runtime::Runtime::new(storage).map_err(|err| {
+        if let Some(rt_err) = err.downcast_ref::<icn_runtime::RuntimeError>() {
+            // Use a simplified version of the match from execute_wasm or a new specific helper for init errors
+            match rt_err {
+                icn_runtime::RuntimeError::LoadError(s) => {
+                    anyhow!("Runtime initialization failed: Error loading a required module/resource: {}", s)
+                }
+                icn_runtime::RuntimeError::TrustBundleVerificationError(tb_err) => {
+                    anyhow!("Runtime initialization failed due to a trust bundle issue: {}", tb_err)
+                }
+                icn_runtime::RuntimeError::NoTrustValidator => {
+                    anyhow!("Runtime initialization failed: No trust validator could be configured.")
+                }
+                icn_runtime::RuntimeError::DidError(did_err) => {
+                    format_did_error(did_err, "[runtime node DID]")
+                        .context("Runtime initialization failed due to an invalid node DID")
+                }
+                // Add other relevant RuntimeError variants for initialization if known
+                _ => anyhow!("Failed to initialize ICN runtime due to a runtime error: {}", rt_err)
+            }
+        } else if let Some(icn_err) = err.downcast_ref::<IcnError>() {
+            format_icn_error_for_cli(icn_err, "Failed to initialize ICN runtime due to an underlying ICN system error")
+        } else {
+            // Default if not a known specific error
+            anyhow!("Failed to initialize ICN runtime: {}", err)
+        }
+    })?;
 
     // Create a default context
     let context = icn_runtime::VmContext {
@@ -707,22 +798,27 @@ async fn execute_wasm(
                         if let Some(icn_err) = source_anyhow_err.downcast_ref::<IcnError>() {
                             format_icn_error_for_cli(icn_err, "WASM execution failed due to an underlying ICN system error")
                         } else {
-                            anyhow!("WASM execution error: {}. Source: {}", source_anyhow_err, source_anyhow_err.root_cause())
+                            anyhow!("WASM execution error (governance): {}. Source: {}", source_anyhow_err, source_anyhow_err.root_cause())
                         }
                     }
                 }
             })?
     } else {
+        // NOTE: Assuming non-governance execution should also yield an ExecutionResult.
+        // The previous call to `runtime.execute_wasm(&wasm_bytes, context.clone())` had a signature mismatch.
+        // Using `governance_execute_wasm` here as a placeholder, assuming the `governance` flag passed
+        // to the runtime or the context itself would differentiate behavior internally in icn-runtime.
+        // This might need revisiting if icn-runtime has a distinct non-governance method returning ExecutionResult.
         runtime
-            .execute_wasm(&wasm_bytes, context.clone()) // Use RuntimeVmContext here
+            .governance_execute_wasm(&wasm_bytes, context.clone()) 
             .map_err(|e: icn_runtime::RuntimeError| { 
                 match e {
                     icn_runtime::RuntimeError::ExecutionError(s) |
                     icn_runtime::RuntimeError::Execution(s) => {
-                        anyhow!("WASM execution failed: {}", s)
+                        anyhow!("WASM execution failed (non-governance): {}", s)
                     }
                     icn_runtime::RuntimeError::LoadError(s) => {
-                        anyhow!("Failed to load WASM module for execution: {}", s)
+                        anyhow!("Failed to load WASM module for execution (non-governance): {}", s)
                     }
                     icn_runtime::RuntimeError::ReceiptError(s) => {
                         anyhow!("Runtime failed to generate an execution receipt: {}", s)
@@ -749,16 +845,18 @@ async fn execute_wasm(
                         anyhow!("WASM execution failed: Required function '{}' not found in module.", s)
                     }
                     icn_runtime::RuntimeError::DidError(did_err) => {
-                        format_did_error(&did_err, &context.executor_did) // Use RuntimeVmContext here
-                            .context("Execution failed due to an invalid executor DID configured in runtime context")
+                        format_did_error(&did_err, &context.executor_did)
+                            .context("Execution failed due to an invalid executor DID (non-governance)")
                     }
                     icn_runtime::RuntimeError::WasmError(source_anyhow_err) => {
                         if let Some(icn_err) = source_anyhow_err.downcast_ref::<IcnError>() {
-                            format_icn_error_for_cli(icn_err, "WASM execution failed due to an underlying ICN system error")
+                            format_icn_error_for_cli(icn_err, "WASM execution failed due to an underlying ICN system error (non-governance)")
                         } else {
-                            anyhow!("WASM execution error: {}. Source: {}", source_anyhow_err, source_anyhow_err.root_cause())
+                            anyhow!("WASM execution error (non-governance): {}. Source: {}", source_anyhow_err, source_anyhow_err.root_cause())
                         }
                     }
+                    // Fallback for other errors in non-governance path
+                    _ => anyhow!("Runtime error during non-governance WASM execution: {}", e)
                 }
             })?
     };
@@ -783,8 +881,7 @@ async fn execute_wasm(
 
     // Save to file if requested
     if let Some(path) = receipt_path {
-        std::fs::write(path, &receipt_json)
-            .map_err(|e| anyhow!("Failed to write receipt to file: {}", e))?;
+        write_string_to_file(&receipt_json, path, "execution receipt")?;
         println!("Receipt saved to {}", path.display());
     }
 
@@ -910,7 +1007,7 @@ async fn create_federation(
 
     // Output the trust bundle
     let bundle_json = serde_json::to_string_pretty(&bundle)?;
-    std::fs::write(output, &bundle_json)?;
+    write_string_to_file(&bundle_json, output, "federation trust bundle")?;
     println!("Trust bundle saved to: {}", output.display());
 
     Ok(())
@@ -933,7 +1030,7 @@ async fn generate_keypair(output: &Path) -> Result<()> {
 
     // Output the keypair
     let keypair_json = serde_json::to_string_pretty(&keypair_info)?;
-    std::fs::write(output, &keypair_json)?;
+    write_string_to_file(&keypair_json, output, "keypair data")?;
 
     println!("Keypair saved to: {}", output.display());
     println!("DID: {}", keypair.did.as_str());
@@ -984,7 +1081,7 @@ async fn anchor_trust_bundle(bundle_path: &Path, node_api: &str, output: &Path) 
     // Update the trust bundle with the CID and save it
     bundle.root_dag_cid = cid.clone();
     let updated_bundle = serde_json::to_string_pretty(&bundle)?;
-    std::fs::write(output, &updated_bundle)?;
+    write_string_to_file(&updated_bundle, output, "updated trust bundle")?;
 
     Ok(cid)
 }
@@ -1037,7 +1134,7 @@ actions {{
     // Write to a temporary file
     let temp_dir = tempfile::tempdir()?;
     let ccl_path = temp_dir.path().join("transfer.ccl");
-    std::fs::write(&ccl_path, ccl)?;
+    write_string_to_file(&ccl, &ccl_path, "CCL transfer script")?;
 
     // Compile and execute
     let receipt_cid = execute_ccl(&ccl_path, None).await?;
