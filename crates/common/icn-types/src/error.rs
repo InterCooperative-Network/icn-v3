@@ -10,6 +10,31 @@ use serde_cbor;
 use cid;
 use serde_ipld_dagcbor::{DecodeError as IpldDecodeError, EncodeError as IpldEncodeError};
 
+/// Errors that can occur during receipt signing operations (moved from icn-mesh-receipts)
+#[derive(Debug, Error)]
+pub enum SignError {
+    #[error("CBOR serialization/deserialization error: {0}")]
+    Serialization(#[from] serde_cbor::Error),
+
+    #[error("Provided keypair DID '{keypair_did}' does not match receipt executor DID '{executor_did}'")]
+    ExecutorMismatch {
+        keypair_did: String,
+        executor_did: String,
+    },
+
+    #[error("Signature is missing from the receipt")]
+    MissingSignature,
+
+    #[error("Signature has an invalid format: {reason}")]
+    InvalidSignatureFormat { reason: String },
+
+    #[error("Cryptographic signature verification failed")]
+    VerificationFailed,
+
+    #[error("Failed to process executor DID for signature verification: {0}")]
+    DidProcessingError(#[from] DidError),
+}
+
 /// Errors related to identity operations
 #[derive(Error, Debug)]
 pub enum IdentityError {
@@ -238,7 +263,7 @@ pub enum MeshError {
     JobSubmission(String),
 
     #[error("Error related to mesh execution receipt: {0}")]
-    ReceiptProcessing(String),
+    ReceiptProcessing(#[from] SignError),
 
     #[error("Mesh configuration error: {0}")]
     Configuration(String),

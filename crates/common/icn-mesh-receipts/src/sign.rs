@@ -1,31 +1,16 @@
 use crate::ExecutionReceipt;
 use ed25519_dalek::Signature as DalekSignature;
 use icn_identity::KeyPair;
-use thiserror::Error;
-use anyhow::Result;
+use icn_types::error::SignError;
+use serde_cbor;
 use signature::Verifier;
-
-/// Errors that can occur during receipt signing operations
-#[derive(Debug, Error)]
-pub enum SignError {
-    #[error("Serialization error: {0}")]
-    Serialization(String),
-
-    #[error("Invalid signature: {0}")]
-    InvalidSignature(String),
-
-    #[error("DID conversion error: {0}")]
-    DidConversion(String),
-}
 
 /// Creates the canonical byte representation of the receipt for signing or verification.
 /// This involves temporarily emptying the signature field before serialization.
 fn get_receipt_signing_payload(receipt: &ExecutionReceipt) -> Result<Vec<u8>, SignError> {
     let mut receipt_clone = receipt.clone();
     receipt_clone.signature = Vec::new(); // Ensure signature field is empty for payload generation
-    serde_cbor::to_vec(&receipt_clone).map_err(|e| {
-        SignError::Serialization(format!("Failed to serialize receipt for payload: {}", e))
-    })
+    Ok(serde_cbor::to_vec(&receipt_clone)?)
 }
 
 /// Sign an ExecutionReceipt to prove authenticity and store the signature within the receipt.
@@ -37,11 +22,11 @@ pub fn sign_receipt_in_place(
     kp: &KeyPair,
 ) -> Result<(), SignError> {
     // Ensure the DID in the receipt matches the keypair trying to sign it.
-    if receipt.executor != kp.did {
-        return Err(SignError::InvalidSignature(format!(
-            "KeyPair DID '{}' does not match receipt executor DID '{}'",
-            kp.did, receipt.executor
-        )));
+    if receipt.executor.as_str() != kp.did.as_str() {
+        return Err(SignError::ExecutorMismatch {
+            keypair_did: kp.did.to_string(),
+            executor_did: receipt.executor.to_string(),
+        });
     }
 
     let payload_bytes = get_receipt_signing_payload(receipt)?;
@@ -56,27 +41,31 @@ pub fn sign_receipt_in_place(
 /// emptying the signature field of a cloned receipt before verification.
 pub fn verify_embedded_signature(receipt: &ExecutionReceipt) -> Result<bool, SignError> {
     if receipt.signature.is_empty() {
-        return Err(SignError::InvalidSignature(
-            "Receipt has no signature to verify.".to_string(),
-        ));
+        return Err(SignError::MissingSignature);
     }
 
     let payload_bytes = get_receipt_signing_payload(receipt)?;
 
-    let signature_bytes: &[u8; 64] =
-        receipt.signature.as_slice().try_into().map_err(|_| {
-            SignError::InvalidSignature("Signature is not 64 bytes long".to_string())
-        })?;
+    let signature_bytes_slice = receipt.signature.as_slice();
+    if signature_bytes_slice.len() != 64 {
+        return Err(SignError::InvalidSignatureFormat {
+            reason: format!(
+                "Signature is not 64 bytes long, found {} bytes",
+                signature_bytes_slice.len()
+            ),
+        });
+    }
+    let signature_bytes_array: &[u8; 64] = signature_bytes_slice.try_into().unwrap();
 
-    let dalek_signature = DalekSignature::from_bytes(signature_bytes);
+    let dalek_signature = DalekSignature::from_bytes(signature_bytes_array);
 
-    let verifying_key = receipt.executor.to_ed25519().map_err(|e| {
-        SignError::DidConversion(format!("Failed to convert DID to ed25519 key: {}", e))
-    })?;
+    let verifying_key = receipt.executor.to_ed25519()?;
 
-    Ok(verifying_key
-        .verify(&payload_bytes, &dalek_signature)
-        .is_ok())
+    if verifying_key.verify(&payload_bytes, &dalek_signature).is_ok() {
+        Ok(true)
+    } else {
+        Err(SignError::VerificationFailed)
+    }
 }
 
 #[cfg(test)]
@@ -167,10 +156,10 @@ mod tests {
         let verification_result = verify_embedded_signature(&receipt_no_sig);
         assert!(verification_result.is_err());
         match verification_result.unwrap_err() {
-            SignError::InvalidSignature(msg) => {
-                assert!(msg.contains("Receipt has no signature to verify"))
+            SignError::MissingSignature => {
+                assert!(true)
             }
-            _ => panic!("Expected InvalidSignature error for empty signature verification"),
+            _ => panic!("Expected MissingSignature error for empty signature verification"),
         }
     }
 }

@@ -2,13 +2,14 @@
 
 mod sign;
 
-pub use sign::{sign_receipt_in_place, verify_embedded_signature, SignError};
+pub use sign::{sign_receipt_in_place, verify_embedded_signature};
 
 use chrono::{DateTime, Utc};
 use cid::multihash::MultihashDigest;
 use cid::{multihash, Cid};
 use icn_economics::ResourceType;
 use icn_identity::Did;
+use icn_types::error::SignError;
 use icn_types::mesh::JobStatus;
 use icn_types::org::{CommunityId, CooperativeId};
 use serde::{Deserialize, Serialize};
