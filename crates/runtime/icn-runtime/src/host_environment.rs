@@ -160,80 +160,79 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
 
     // ---------------------- Helper memory access methods ----------------------
 
-    /// Helper to safely obtain the linear memory exported by the guest module.
-    pub fn get_memory(
-        &self,
-        caller: &mut Caller<'_, ConcreteHostEnvironment<T_param>>,
-    ) -> Result<WasmtimeMemory, HostAbiError> {
-        match caller.get_export("memory") {
-            Some(Extern::Memory(mem)) => Ok(mem),
-            _ => Err(HostAbiError::MemoryAccessError("Memory export not found".to_string())),
-        }
-    }
+    // REMOVED HELPERS FROM HERE
+}
 
-    /// Helper to read a string from WASM memory, using StoreContextMut and pre-fetched Memory
-    pub fn read_string_from_mem_ctx(
-        &self,
-        store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
-        memory: &WasmtimeMemory,
-        ptr: u32,
-        len: u32,
-    ) -> Result<String, HostAbiError> {
-        let mut buffer = vec![0u8; len as usize];
-        memory.read(store_ctx, ptr as usize, &mut buffer)
-            .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory read failed: {}", e)))?;
-        String::from_utf8(buffer)
-            .map_err(|e| HostAbiError::DataEncodingError(format!("UTF-8 conversion failed: {}", e)))
-    }
+// --- Standalone Helper memory access functions ---
 
-    /// Write a UTF-8 string `s` into guest memory buffer, using StoreContextMut and pre-fetched Memory
-    pub fn write_string_to_mem_ctx(
-        &self,
-        store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
-        memory: &WasmtimeMemory,
-        s: &str,
-        ptr: u32,
-        len: u32,
-    ) -> Result<i32, HostAbiError> {
-        let bytes = s.as_bytes();
-        if bytes.len() > len as usize {
-            return Err(HostAbiError::BufferTooSmall("String too large for buffer".to_string()));
-        }
-        memory.write(store_ctx, ptr as usize, bytes)
-            .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory write failed: {}", e)))?;
-        Ok(bytes.len() as i32)
+/// Helper to safely obtain the linear memory exported by the guest module.
+pub fn get_memory<T_param: Send + Sync + 'static>(
+    caller: &mut Caller<'_, ConcreteHostEnvironment<T_param>>,
+) -> Result<WasmtimeMemory, HostAbiError> {
+    match caller.get_export("memory") {
+        Some(Extern::Memory(mem)) => Ok(mem),
+        _ => Err(HostAbiError::MemoryAccessError("Memory export not found".to_string())),
     }
+}
 
-    /// Read a raw byte slice from guest memory, using StoreContextMut and pre-fetched Memory
-    pub fn read_bytes_from_mem_ctx(
-        &self,
-        store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
-        memory: &WasmtimeMemory,
-        ptr: u32,
-        len: u32,
-    ) -> Result<Vec<u8>, HostAbiError> {
-        let mut buffer = vec![0u8; len as usize];
-        memory.read(store_ctx, ptr as usize, &mut buffer)
-            .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory read failed: {}", e)))?;
-        Ok(buffer)
-    }
+/// Helper to read a string from WASM memory, using StoreContextMut and pre-fetched Memory
+pub fn read_string_from_mem_ctx<T_param: Send + Sync + 'static>(
+    store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
+    memory: &WasmtimeMemory,
+    ptr: u32,
+    len: u32,
+) -> Result<String, HostAbiError> {
+    let mut buffer = vec![0u8; len as usize];
+    memory.read(store_ctx, ptr as usize, &mut buffer)
+        .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory read failed: {}", e)))?;
+    String::from_utf8(buffer)
+        .map_err(|e| HostAbiError::DataEncodingError(format!("UTF-8 conversion failed: {}", e)))
+}
 
-    /// Write raw bytes to guest memory buffer, using StoreContextMut and pre-fetched Memory
-    pub fn write_bytes_to_mem_ctx(
-        &self,
-        store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
-        memory: &WasmtimeMemory,
-        bytes: &[u8],
-        ptr: u32,
-        len: u32,
-    ) -> Result<i32, HostAbiError> {
-        if bytes.len() > len as usize {
-            return Err(HostAbiError::BufferTooSmall("Bytes too large for buffer".to_string()));
-        }
-        memory.write(store_ctx, ptr as usize, bytes)
-            .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory write failed: {}", e)))?;
-        Ok(bytes.len() as i32)
+/// Write a UTF-8 string `s` into guest memory buffer, using StoreContextMut and pre-fetched Memory
+pub fn write_string_to_mem_ctx<T_param: Send + Sync + 'static>(
+    store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
+    memory: &WasmtimeMemory,
+    s: &str,
+    ptr: u32,
+    len: u32,
+) -> Result<i32, HostAbiError> {
+    let bytes = s.as_bytes();
+    if bytes.len() > len as usize {
+        return Err(HostAbiError::BufferTooSmall("String too large for buffer".to_string()));
     }
+    memory.write(store_ctx, ptr as usize, bytes)
+        .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory write failed: {}", e)))?;
+    Ok(bytes.len() as i32)
+}
+
+/// Read a raw byte slice from guest memory, using StoreContextMut and pre-fetched Memory
+pub fn read_bytes_from_mem_ctx<T_param: Send + Sync + 'static>(
+    store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
+    memory: &WasmtimeMemory,
+    ptr: u32,
+    len: u32,
+) -> Result<Vec<u8>, HostAbiError> {
+    let mut buffer = vec![0u8; len as usize];
+    memory.read(store_ctx, ptr as usize, &mut buffer)
+        .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory read failed: {}", e)))?;
+    Ok(buffer)
+}
+
+/// Write raw bytes to guest memory buffer, using StoreContextMut and pre-fetched Memory
+pub fn write_bytes_to_mem_ctx<T_param: Send + Sync + 'static>(
+    store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
+    memory: &WasmtimeMemory,
+    bytes: &[u8],
+    ptr: u32,
+    len: u32,
+) -> Result<i32, HostAbiError> {
+    if bytes.len() > len as usize {
+        return Err(HostAbiError::BufferTooSmall("Bytes too large for buffer".to_string()));
+    }
+    memory.write(store_ctx, ptr as usize, bytes)
+        .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory write failed: {}", e)))?;
+    Ok(bytes.len() as i32)
 }
 
 #[async_trait::async_trait]
@@ -246,11 +245,11 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         title_ptr: u32,
         title_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let kind = self.read_string_from_mem_ctx(&mut store_context, &memory, kind_ptr, kind_len)?;
+        let kind = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, kind_ptr, kind_len)?;
         let title = if title_len > 0 {
-            Some(self.read_string_from_mem_ctx(&mut store_context, &memory, title_ptr, title_len)?)
+            Some(read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, title_ptr, title_len)?)
         } else {
             None
         };
@@ -276,10 +275,10 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         value_json_ptr: u32,
         value_json_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let key = self.read_string_from_mem_ctx(&mut store_context, &memory, key_ptr, key_len)?;
-        let value_json = self.read_string_from_mem_ctx(&mut store_context, &memory, value_json_ptr, value_json_len)?;
+        let key = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, key_ptr, key_len)?;
+        let value_json = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, value_json_ptr, value_json_len)?;
         let mut ctx = self.ctx.lock().await;
         ctx.set_property(key, value_json)?;
         Ok(0)
@@ -293,10 +292,10 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         data_ref_ptr: u32,
         data_ref_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let path = self.read_string_from_mem_ctx(&mut store_context, &memory, path_ptr, path_len)?;
-        let data_ref = self.read_string_from_mem_ctx(&mut store_context, &memory, data_ref_ptr, data_ref_len)?;
+        let path = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, path_ptr, path_len)?;
+        let data_ref = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, data_ref_ptr, data_ref_len)?;
         let mut ctx = self.ctx.lock().await;
         ctx.anchor_data(path, data_ref)?;
         Ok(0)
@@ -310,10 +309,10 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         args_payload_ptr: u32,
         args_payload_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let fn_name = self.read_string_from_mem_ctx(&mut store_context, &memory, fn_name_ptr, fn_name_len)?;
-        let args_payload = self.read_string_from_mem_ctx(&mut store_context, &memory, args_payload_ptr, args_payload_len)?;
+        let fn_name = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, fn_name_ptr, fn_name_len)?;
+        let args_payload = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, args_payload_ptr, args_payload_len)?;
         let mut ctx = self.ctx.lock().await;
         ctx.generic_call(fn_name, args_payload)?;
         Ok(0)
@@ -329,11 +328,11 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         version_ptr: u32,
         version_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let id = self.read_string_from_mem_ctx(&mut store_context, &memory, id_ptr, id_len)?;
-        let title = self.read_string_from_mem_ctx(&mut store_context, &memory, title_ptr, title_len)?;
-        let version = self.read_string_from_mem_ctx(&mut store_context, &memory, version_ptr, version_len)?;
+        let id = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, id_ptr, id_len)?;
+        let title = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, title_ptr, title_len)?;
+        let version = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, version_ptr, version_len)?;
         let mut ctx = self.ctx.lock().await;
         ctx.create_proposal(id, title, version)?;
         Ok(0)
@@ -350,12 +349,12 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         data_json_ptr: u32,
         data_json_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let resource_type_str = self.read_string_from_mem_ctx(&mut store_context, &memory, resource_type_ptr, resource_type_len)?;
-        let recipient_did_str = self.read_string_from_mem_ctx(&mut store_context, &memory, recipient_did_ptr, recipient_did_len)?;
+        let resource_type_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, resource_type_ptr, resource_type_len)?;
+        let recipient_did_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, recipient_did_ptr, recipient_did_len)?;
         let data_json = if data_json_len > 0 {
-            Some(self.read_string_from_mem_ctx(&mut store_context, &memory, data_json_ptr, data_json_len)?)
+            Some(read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, data_json_ptr, data_json_len)?)
         } else {
             None
         };
@@ -372,9 +371,9 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         condition_str_ptr: u32,
         condition_str_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let condition_str = self.read_string_from_mem_ctx(&mut store_context, &memory, condition_str_ptr, condition_str_len)?;
+        let condition_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, condition_str_ptr, condition_str_len)?;
         let mut ctx = self.ctx.lock().await;
         ctx.if_condition_eval(condition_str)?;
         Ok(0)
@@ -404,9 +403,9 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         msg_ptr: u32,
         msg_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let msg = self.read_string_from_mem_ctx(&mut store_context, &memory, msg_ptr, msg_len)?;
+        let msg = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, msg_ptr, msg_len)?;
         tracing::warn!("[TODO FROM WASM]: {}", msg);
         Ok(0)
     }
@@ -417,9 +416,9 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         event_ptr: u32,
         event_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let event_name = self.read_string_from_mem_ctx(&mut store_context, &memory, event_ptr, event_len)?;
+        let event_name = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, event_ptr, event_len)?;
         let mut ctx = self.ctx.lock().await;
         ctx.on_event(event_name)?;
         Ok(0)
@@ -431,9 +430,9 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         message_ptr: u32,
         message_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let message = self.read_string_from_mem_ctx(&mut store_context, &memory, message_ptr, message_len)?;
+        let message = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, message_ptr, message_len)?;
         eprintln!("[HOST ABI DEBUG DEPRECATED]: {}", message);
         Ok(0)
     }
@@ -462,9 +461,9 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         resource_type_len: u32,
         amount: u64,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let resource_type_str = self.read_string_from_mem_ctx(&mut store_context, &memory, resource_type_ptr, resource_type_len)?;
+        let resource_type_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, resource_type_ptr, resource_type_len)?;
         
         // Use a match statement for ResourceType parsing
         let resolved_resource_type = match resource_type_str.as_str() {
@@ -498,11 +497,11 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         recipient_did_ptr: u32,
         recipient_did_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let token_type_str = self.read_string_from_mem_ctx(&mut store_context, &memory, token_type_ptr, token_type_len)?;
-        let sender_did_str = self.read_string_from_mem_ctx(&mut store_context, &memory, sender_did_ptr, sender_did_len)?;
-        let recipient_did_str = self.read_string_from_mem_ctx(&mut store_context, &memory, recipient_did_ptr, recipient_did_len)?;
+        let token_type_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, token_type_ptr, token_type_len)?;
+        let sender_did_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, sender_did_ptr, sender_did_len)?;
+        let recipient_did_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, recipient_did_ptr, recipient_did_len)?;
         let _sender_did = Did::from_str(&sender_did_str).map_err(|e| HostAbiError::InvalidDid(format!("Invalid sender DID: {}, e: {}", sender_did_str, e)))?;
         let _recipient_did = Did::from_str(&recipient_did_str).map_err(|e| HostAbiError::InvalidDid(format!("Invalid recipient DID: {}, e: {}", recipient_did_str, e)))?;
         let mut ctx = self.ctx.lock().await;
@@ -518,13 +517,13 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         job_id_buffer_ptr: u32,
         job_id_buffer_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let memory = self.get_memory(&mut caller)?;
+        let memory = get_memory::<T_param>(&mut caller)?;
         let mut store_context = caller.as_context_mut();
-        let cbor_payload = self.read_bytes_from_mem_ctx(&mut store_context, &memory, cbor_payload_ptr, cbor_payload_len)?;
+        let cbor_payload = read_bytes_from_mem_ctx::<T_param>(&mut store_context, &memory, cbor_payload_ptr, cbor_payload_len)?;
         let mut ctx = self.ctx.lock().await;
         let job_id_len = ctx.submit_mesh_job(
             cbor_payload, 
-            |job_id_str: &str| self.write_string_to_mem_ctx(&mut store_context, &memory, job_id_str, job_id_buffer_ptr, job_id_buffer_len)
+            |job_id_str: &str| write_string_to_mem_ctx::<T_param>(&mut store_context, &memory, job_id_str, job_id_buffer_ptr, job_id_buffer_len)
         )?;
         Ok(job_id_len as i32)
     }
