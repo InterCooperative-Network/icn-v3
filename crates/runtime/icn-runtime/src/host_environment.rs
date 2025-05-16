@@ -55,6 +55,25 @@ impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
         }
     }
 
+    pub fn new_with_context(ctx: JobExecutionContext) -> Self {
+        // This constructor is simplified for testing. A real scenario might need more
+        // context like RuntimeContext, caller_did, etc. For ABI tests focusing on JEC
+        // interaction, this should suffice.
+        // We'll need a dummy RuntimeContext and Did for now.
+        let dummy_did = icn_identity::Did::from_str("did:icn:test_caller").expect("Failed to create dummy DID");
+        let dummy_runtime_ctx = Arc::new(crate::context::RuntimeContext::minimal_for_testing());
+
+        Self {
+            ctx: Arc::new(Mutex::new(ctx)),
+            rt: dummy_runtime_ctx,
+            caller_did: dummy_did,
+            is_governance: false,
+            coop_id: None,
+            community_id: None,
+            _phantom: PhantomData,
+        }
+    }
+
     pub fn new_governance(
         ctx: Arc<Mutex<JobExecutionContext>>,
         caller_did: Did,
@@ -467,7 +486,7 @@ impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
     ) -> Result<i64, HostAbiError> {
         let scope_key = self.scope_key(); // Assuming this exists and returns ScopeKey
         // Use the ResourceRepository::get_usage method for mana
-        match self.rt.mana_repository().get_usage(did, "mana", &scope_key.to_string()).await {
+        match self.rt.mana_repository().get_usage(did, "mana", &format!("{:?}", scope_key)).await {
             Ok(mana_amount) => Ok(mana_amount as i64),
             Err(_e) => {
                 eprintln!("Test shim get_usage for mana error: {:?}", _e);
@@ -482,7 +501,7 @@ impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
         amount: u64,
     ) -> Result<i32, HostAbiError> {
         let scope_key = self.scope_key();
-        let scope_str = scope_key.to_string(); // Use the ScopeKey's display/to_string impl
+        let scope_str = format!("{:?}", scope_key); // Use the ScopeKey's debug representation
 
         let token = ScopedResourceToken {
             resource_type: "mana".to_string(),

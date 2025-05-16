@@ -8,6 +8,7 @@ use icn_mesh_protocol::{JobInteractiveInputV1, P2PJobStatus};
 use icn_types::mesh::MeshJobParams;
 use std::collections::VecDeque;
 use host_abi::HostAbiError;
+use std::collections::HashMap;
 
 // Conceptual internal representation of job permissions/capabilities.
 // This would be more complex in a real system, potentially derived from tokens or policies.
@@ -31,6 +32,13 @@ impl Default for JobPermissions {
             max_log_level_allowed: LogLevel::Info, // Default reasonable log level
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct SectionContext {
+    pub kind: String,
+    pub title: Option<String>,
+    pub properties: HashMap<String, String>,
 }
 
 /// Holds the runtime state and context for a single executing Mesh Job.
@@ -58,6 +66,9 @@ pub struct JobExecutionContext {
 
     // Timestamp for when the job/stage started execution, for timeouts etc.
     pub execution_start_time_ms: u64,
+
+    // For ABI tests
+    pub section_stack: Vec<SectionContext>,
 }
 
 impl JobExecutionContext {
@@ -104,6 +115,7 @@ impl JobExecutionContext {
             memory_mb_peak_usage: 0,
             permissions,
             execution_start_time_ms: current_time_ms,
+            section_stack: Vec::new(),
         }
     }
 
@@ -119,19 +131,30 @@ impl JobExecutionContext {
     // --- ABI Method Stubs ---
     pub fn begin_section(&mut self, kind: String, title: Option<String>) -> Result<(), HostAbiError> {
         println!("[JEC STUB] begin_section: kind={}, title={:?}", kind, title);
-        // TODO: Implement actual logic (e.g., push to a context stack)
+        self.section_stack.push(SectionContext {
+            kind,
+            title,
+            properties: HashMap::new(),
+        });
         Ok(())
     }
 
     pub fn end_section(&mut self) -> Result<(), HostAbiError> {
         println!("[JEC STUB] end_section");
-        // TODO: Implement actual logic (e.g., pop from context stack)
+        if self.section_stack.pop().is_none() {
+            eprintln!("[JEC WARN] end_section called with empty section_stack");
+        }
         Ok(())
     }
 
     pub fn set_property(&mut self, key: String, value_json: String) -> Result<(), HostAbiError> {
         println!("[JEC STUB] set_property: key={}, value_json={}", key, value_json);
-        // TODO: Implement actual logic (e.g., set property on current context)
+        if let Some(current_section) = self.section_stack.last_mut() {
+            current_section.properties.insert(key, value_json);
+        } else {
+            eprintln!("[JEC WARN] set_property called with no active section");
+            return Err(HostAbiError::InvalidOperation("No active section to set property".to_string()));
+        }
         Ok(())
     }
 
@@ -203,8 +226,42 @@ impl JobExecutionContext {
 
     pub fn submit_mesh_job(&mut self, cbor_payload: Vec<u8>, write_back_fn: impl FnOnce(&str) -> Result<i32, HostAbiError>) -> Result<i32, HostAbiError> {
         println!("[JEC STUB] submit_mesh_job: payload_len={}", cbor_payload.len());
-        // TODO: Implement actual logic (e.g., deserialize payload, submit to mesh, get real job_id)
         let dummy_job_id = "dummy_mesh_job_123";
         write_back_fn(dummy_job_id)
+    }
+}
+
+// Default implementation for JobExecutionContext for testing
+impl Default for JobExecutionContext {
+    fn default() -> Self {
+        let dummy_did = Did::from_str("did:icn:test_originator").unwrap_or_else(|_| {
+            panic!("Failed to create dummy DID for JobExecutionContext::default");
+        });
+        let dummy_host_did = Did::from_str("did:icn:test_host").unwrap_or_else(|_| {
+            panic!("Failed to create dummy host DID for JobExecutionContext::default");
+        });
+
+        JobExecutionContext {
+            job_id: "test_job_id".to_string(),
+            originator_did: dummy_did,
+            job_params: MeshJobParams::default(),
+            current_status: P2PJobStatus::Running {
+                node_id: dummy_host_did,
+                current_stage_index: None,
+                current_stage_id: None,
+                progress_percent: Some(0),
+                status_message: Some("Default JEC initialized".to_string()),
+            },
+            current_stage_index: None,
+            current_stage_id: None,
+            interactive_input_queue: VecDeque::new(),
+            interactive_output_sequence_num: 0,
+            mana_consumed: 0,
+            cpu_time_us_consumed: 0,
+            memory_mb_peak_usage: 0,
+            permissions: JobPermissions::default(),
+            execution_start_time_ms: 0,
+            section_stack: Vec::new(),
+        }
     }
 }
