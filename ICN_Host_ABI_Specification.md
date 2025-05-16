@@ -1168,7 +1168,62 @@ Focus on `kind` attribute, properties, parent/child relationships.
 
 ---
 #### 5.3.2. Common Section `kind` Schemas
-*(This subsection will detail schemas for common, general-purpose section kinds like `metadata`, `terms_and_conditions`, `data_anchors_group`, and `range_START_END`.)*
+This subsection details schemas for common, general-purpose section kinds that can be broadly utilized across various contexts within a proposal or other top-level structures. These sections typically provide descriptive information, link to external resources, or group related data anchors. Examples include `metadata`, `terms_and_conditions`, and `data_anchors_list`.
+
+---
+##### 5.3.2.1. `section.kind: metadata`
+
+*   **Description:**
+    Provides a flexible mechanism for attaching arbitrary, structured key-value metadata to any context (e.g., a proposal, another section, a role definition, a budget). This allows for rich, non-operational descriptive data, links, annotations, or other contextual information not covered by more specific section kinds.
+
+*   **Expected Parent `kind`(s) or Context:**
+    *   `proposal`
+    *   Any other section `kind` (e.g., `role`, `budget_definition`, `permissions_policy`, even another `metadata` section for nesting)
+    *   Essentially, any context where attaching general key-value metadata is relevant.
+
+*   **Permitted Child `section.kind`(s):**
+    *   `metadata` (0 or more - allowing for nested metadata structures if complex information needs to be organized hierarchically)
+    *   Other specific section kinds MAY be permitted by a host's schema if the `metadata` section serves as a grouping context for them, but typically `metadata` sections are leaf nodes or only contain further `metadata` children.
+
+*   **Schema Table for `props`:**
+    The `props` object of a `metadata` section is itself the collection of metadata. It consists of arbitrary key-value pairs.
+
+    | Category         | Constraint                                                                                                                               |
+    |------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+    | Keys             | MUST be valid UTF-8 strings. SHOULD follow a consistent naming convention (e.g., `snake_case` or `camelCase`) and avoid characters that might conflict with CEL pathing (e.g. `.`, `[`, `]`) if these properties might be referenced. Max length of 128 characters is recommended. |
+    | Values           | CAN be any valid JSON type: `string`, `number`, `boolean`, `array`, or `object` (allowing for nested structures), or `null`.                 |
+    | Required Keys    | None are mandated by the `metadata` schema itself. The contract author determines the necessary keys for their use case.                     |
+    | Host Interpretation| Generally, the host treats these properties as opaque data provided by the contract. However, specific keys MAY be recognized by host extensions or higher-level application schemas if prefixed (e.g., `app::my_data_id`). |
+    | Size/Depth Limits| Hosts MAY impose limits on the total size of the `props` object, the number of keys, or the nesting depth of objects/arrays within values to prevent abuse. |
+
+*   **Notes:**
+    *   The `metadata` section is designed for flexibility. Its primary role is to store descriptive or referential information that doesn't fit into strictly typed sections.
+    *   While keys are arbitrary, contracts SHOULD use clear, descriptive, and consistently cased keys.
+    *   For complex, highly structured metadata that might be queried or validated frequently, defining a custom section `kind` with a specific schema might be more appropriate than using a generic `metadata` section.
+
+*   **Example JSON Snippet:**
+
+    ```json
+    {
+      "kind": "metadata",
+      "title": "Additional Project Details",
+      "props": {
+        "project_code": "ICN-ALPHA-007",
+        "external_tracking_url": "https://tracker.example.com/issue/ICN-789",
+        "responsible_team": "Core Development",
+        "tags": ["governance", "milestone-2", "api-design"],
+        "review_status": {
+          "status_code": "pending_community_review",
+          "last_updated": "2024-07-15T10:00:00Z",
+          "reviewer_pool": ["role:auditor", "did:coop:membergroupX"]
+        },
+        "related_documents_cids": [
+          "bafybeiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bafybeibbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      }
+    }
+    ```
 
 ---
 #### 5.3.3. Role-Based Access Control (RBAC) and Governance Schemas
