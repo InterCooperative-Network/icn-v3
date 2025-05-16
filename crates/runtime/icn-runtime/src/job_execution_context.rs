@@ -9,6 +9,7 @@ use icn_types::mesh::MeshJobParams;
 use std::collections::VecDeque;
 use host_abi::HostAbiError;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 // Conceptual internal representation of job permissions/capabilities.
 // This would be more complex in a real system, potentially derived from tokens or policies.
@@ -153,7 +154,7 @@ impl JobExecutionContext {
             current_section.properties.insert(key, value_json);
         } else {
             eprintln!("[JEC WARN] set_property called with no active section");
-            return Err(HostAbiError::InvalidOperation("No active section to set property".to_string()));
+            return Err(HostAbiError::InvalidState);
         }
         Ok(())
     }

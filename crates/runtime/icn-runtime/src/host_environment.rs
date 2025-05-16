@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
 use std::marker::PhantomData;
+use std::str::FromStr;
 // use icn_actor_interfaces::actor_runtime::HostcallWasmError; // Temporarily commented out
 // use icn_actor_interfaces::Timestamp; // Temporarily commented out
 // use icn_dag_scheduler::commit::DagCommitAddress; // Temporarily commented out
@@ -60,8 +61,11 @@ impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
         // context like RuntimeContext, caller_did, etc. For ABI tests focusing on JEC
         // interaction, this should suffice.
         // We'll need a dummy RuntimeContext and Did for now.
+        use std::str::FromStr; // Ensure FromStr is in scope for Did::from_str if still needed here
         let dummy_did = icn_identity::Did::from_str("did:icn:test_caller").expect("Failed to create dummy DID");
-        let dummy_runtime_ctx = Arc::new(crate::context::RuntimeContext::minimal_for_testing());
+        
+        // Adjust to specify the ManaLedger type if minimal_for_testing is generic
+        let dummy_runtime_ctx = Arc::new(crate::context::RuntimeContext::<icn_economics::mana::InMemoryManaLedger>::minimal_for_testing());
 
         Self {
             ctx: Arc::new(Mutex::new(ctx)),

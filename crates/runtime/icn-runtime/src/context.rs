@@ -405,3 +405,68 @@ impl<L: ManaLedger + Send + Sync + Default + 'static> Default for RuntimeContext
         Self::new()
     }
 }
+
+impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
+    pub fn minimal_for_testing() -> Self {
+        use icn_identity::Did;
+        use std::str::FromStr;
+
+        let test_federation_did_str = "did:icn:federation:test_fixture";
+        let test_node_did_str = "did:icn:node:test_fixture";
+
+        let federation_did = Did::from_str(test_federation_did_str)
+            .expect("Failed to parse test_federation_did_str for RuntimeContext::minimal_for_testing. Check DID format and feature flags.");
+        
+        let test_keypair = KeyPair::generate();
+        let node_did = test_keypair.did.clone();
+
+        #[cfg(feature = "testing_utils")]
+        let dag_store_instance = Arc::new(mock_dag_store::InMemoryDagStore::new());
+        #[cfg(not(feature = "testing_utils"))]
+        let dag_store_instance = {
+            struct FallbackDagStore;
+            #[async_trait::async_trait]
+            impl DagStore for FallbackDagStore {
+                async fn get(&self, _id: &icn_types::dag::DagNodeIdentifier) -> anyhow::Result<Option<icn_types::dag::DagNode>> { Ok(None) }
+                async fn insert(&self, _node: icn_types::dag::DagNode) -> anyhow::Result<icn_types::dag::DagNodeIdentifier> { Err(anyhow::anyhow!("FallbackDagStore insert not impl")) }
+                async fn finalize(&self, _id: &icn_types::dag::DagNodeIdentifier) -> anyhow::Result<()> { Ok(()) }
+                async fn get_batch(&self, _ids: &[icn_types::dag::DagNodeIdentifier]) -> anyhow::Result<Vec<Option<icn_types::dag::DagNode>>> { Ok(vec![])}
+                async fn has(&self, _id: &icn_types::dag::DagNodeIdentifier) -> anyhow::Result<bool> { Ok(false) }
+            }
+            Arc::new(FallbackDagStore)
+        };
+
+        let mana_ledger = Arc::new(InMemoryManaLedger::new());
+        let mana_repository = Arc::new(ManaRepositoryAdapter::new(mana_ledger.clone()));
+        let policy_enforcer = Arc::new(ResourcePolicyEnforcer::default());
+        
+        let mut default_config = RuntimeConfig::default();
+        default_config.node_did = node_did.to_string();
+
+        RuntimeContext {
+            federation_id: Some(federation_did),
+            identity: Some(Arc::new(test_keypair)),
+            node_did: Some(node_did),
+            dag_store: dag_store_instance,
+            mana_ledger: Some(mana_ledger.clone()),
+            mana_regenerator: Some(Arc::new(ManaRegenerator::new(
+                mana_ledger,
+                RegenerationPolicy::FixedRatePerTick(10),
+            ))),
+            trust_validator: None,
+            identity_index: None,
+            policy_enforcer,
+            mana_repository,
+            config: Arc::new(default_config),
+            receipt_store: Arc::new(SharedDagStore::new()),
+            pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
+            mana_manager: Arc::new(Mutex::new(ManaManager::new())),
+            execution_status: ExecutionStatus::Running,
+            interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
+            reputation_service_url: None,
+            mesh_job_service_url: None,
+            reputation_scoring_config: ReputationScoringConfig::default(),
+            mana_tick_interval: None,
+        }
+    }
+}
