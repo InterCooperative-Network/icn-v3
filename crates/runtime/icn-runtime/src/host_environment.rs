@@ -122,12 +122,12 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
         }
     }
 
-    pub fn check_resource_authorization(&self, _rt_type: ResourceType, _amt: u64) -> i32 {
+    pub fn check_resource_authorization(&self, _rt_type: ResourceType, _amt: u64) -> Result<i32, HostAbiError> {
         // TODO: Implement actual resource authorization logic
-        HostAbiError::NotSupported as i32
+        Err(HostAbiError::NotSupported("check_resource_authorization not implemented".to_string()))
     }
-    pub async fn record_resource_usage(&self, _rt_type: ResourceType, _amt: u64) -> i32 {
-        HostAbiError::NotSupported as i32
+    pub async fn record_resource_usage(&self, _rt_type: ResourceType, _amt: u64) -> Result<i32, HostAbiError> {
+        Err(HostAbiError::NotSupported("record_resource_usage not implemented".to_string()))
     }
     pub fn is_governance_context(&self) -> i32 {
         if self.is_governance {
@@ -136,16 +136,16 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
             0
         }
     }
-    pub async fn mint_token(&self, _recipient_did_str: &str, _amount: u64) -> i32 {
-        HostAbiError::NotSupported as i32
+    pub async fn mint_token(&self, _recipient_did_str: &str, _amount: u64) -> Result<i32, HostAbiError> {
+        Err(HostAbiError::NotSupported("ConcreteHostEnvironment::mint_token direct call not supported, use ABI".to_string()))
     }
     pub async fn transfer_token(
         &self,
         _sender_did_str: &str,
         _recipient_did_str: &str,
         _amount: u64,
-    ) -> i32 {
-        HostAbiError::NotSupported as i32
+    ) -> Result<i32, HostAbiError> {
+        Err(HostAbiError::NotSupported("ConcreteHostEnvironment::transfer_token direct call not supported, use ABI".to_string()))
     }
 
     /// Anchor a signed execution receipt to the DAG and broadcast an announcement.
@@ -237,10 +237,10 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
 }
 
 #[async_trait::async_trait]
-impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_phantom>> for ConcreteHostEnvironment<T_phantom> {
+impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param>> for ConcreteHostEnvironment<T_param> {
     async fn host_begin_section(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         kind_ptr: u32,
         kind_len: u32,
         title_ptr: u32,
@@ -261,7 +261,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_end_section(
         &self,
-        _caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        _caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
     ) -> Result<i32, HostAbiError> {
         let mut ctx = self.ctx.lock().await;
         ctx.end_section()?;
@@ -270,7 +270,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_set_property(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         key_ptr: u32,
         key_len: u32,
         value_json_ptr: u32,
@@ -287,7 +287,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_anchor_data(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         path_ptr: u32,
         path_len: u32,
         data_ref_ptr: u32,
@@ -304,7 +304,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_generic_call(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         fn_name_ptr: u32,
         fn_name_len: u32,
         args_payload_ptr: u32,
@@ -321,7 +321,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_create_proposal(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         id_ptr: u32,
         id_len: u32,
         title_ptr: u32,
@@ -341,7 +341,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_mint_token(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         resource_type_ptr: u32,
         resource_type_len: u32,
         amount: u64,
@@ -368,7 +368,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_if_condition_eval(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         condition_str_ptr: u32,
         condition_str_len: u32,
     ) -> Result<i32, HostAbiError> {
@@ -382,7 +382,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_else_handler(
         &self,
-        _caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        _caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
     ) -> Result<i32, HostAbiError> {
         let mut ctx = self.ctx.lock().await;
         ctx.else_handler()?;
@@ -391,7 +391,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_endif_handler(
         &self,
-        _caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        _caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
     ) -> Result<i32, HostAbiError> {
         let mut ctx = self.ctx.lock().await;
         ctx.endif_handler()?;
@@ -400,7 +400,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_log_todo(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         msg_ptr: u32,
         msg_len: u32,
     ) -> Result<i32, HostAbiError> {
@@ -413,7 +413,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_on_event(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         event_ptr: u32,
         event_len: u32,
     ) -> Result<i32, HostAbiError> {
@@ -427,7 +427,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_log_debug_deprecated(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         message_ptr: u32,
         message_len: u32,
     ) -> Result<i32, HostAbiError> {
@@ -440,7 +440,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_range_check(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         value: i64,
         min_val: i64,
         max_val: i64,
@@ -457,7 +457,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_use_resource(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         resource_type_ptr: u32,
         resource_type_len: u32,
         amount: u64,
@@ -483,7 +483,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_transfer_token(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         token_type_ptr: u32,
         token_type_len: u32,
         amount: u64,
@@ -506,7 +506,7 @@ impl<T_phantom: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_pha
 
     async fn host_submit_mesh_job(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment<T_phantom>>,
+        mut caller: Caller<'_, ConcreteHostEnvironment<T_param>>,
         cbor_payload_ptr: u32,
         cbor_payload_len: u32,
         job_id_buffer_ptr: u32,
@@ -536,7 +536,7 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
             Ok(mana_amount) => Ok(mana_amount as i64),
             Err(_e) => {
                 eprintln!("Test shim get_usage for mana error: {:?}", _e);
-                Err(HostAbiError::StorageError)
+                Err(HostAbiError::StorageError("Failed to get mana usage in test".to_string()))
             }
         }
     }
@@ -588,7 +588,7 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
                 } else {
                     eprintln!("Test shim record_usage (spend_mana) unknown error: {:?}", e);
                 }
-                Err(HostAbiError::StorageError) // Fallback error
+                Err(HostAbiError::StorageError("Failed to spend mana in test due to unknown repository error".to_string())) // Fallback error
             }
         }
     }

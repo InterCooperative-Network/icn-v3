@@ -3,42 +3,42 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HostAbiError {
-    #[error("Unknown error")]
-    UnknownError,
-    #[error("Memory access error")]
-    MemoryAccessError,
-    #[error("Buffer too small")]
-    BufferTooSmall,
-    #[error("Invalid arguments")]
-    InvalidArguments,
-    #[error("Not found")]
-    NotFound,
-    #[error("Timeout")]
-    Timeout,
+    #[error("Unknown error: {0}")]
+    UnknownError(String),
+    #[error("Memory access error: {0}")]
+    MemoryAccessError(String),
+    #[error("Buffer too small: {0}")]
+    BufferTooSmall(String),
+    #[error("Invalid arguments: {0}")]
+    InvalidArguments(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error("Timeout: {0}")]
+    Timeout(String),
     #[error("Not permitted")]
     NotPermitted,
     #[error("Not supported")]
     NotSupported,
-    #[error("Resource limit exceeded")]
-    ResourceLimitExceeded,
-    #[error("Data encoding error (UTF8/CBOR)")]
-    DataEncodingError,
-    #[error("Invalid state")]
-    InvalidState,
-    #[error("Network error")]
-    NetworkError,
-    #[error("Storage error")]
-    StorageError,
-    #[error("Serialization error")]
-    SerializationError,
-    #[error("Invalid DID format")]
-    InvalidDIDFormat,
-    #[error("Invalid CID format")]
-    InvalidCIDFormat,
-    #[error("Queue full")]
-    QueueFull,
-    #[error("Channel closed")]
-    ChannelClosed,
+    #[error("Resource limit exceeded: {0}")]
+    ResourceLimitExceeded(String),
+    #[error("Data encoding error (UTF8/CBOR): {0}")]
+    DataEncodingError(String),
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+    #[error("Network error: {0}")]
+    NetworkError(String),
+    #[error("Storage error: {0}")]
+    StorageError(String),
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+    #[error("Invalid DID format: {0}")]
+    InvalidDIDFormat(String),
+    #[error("Invalid CID format: {0}")]
+    InvalidCIDFormat(String),
+    #[error("Queue full: {0}")]
+    QueueFull(String),
+    #[error("Channel closed: {0}")]
+    ChannelClosed(String),
     #[error("Insufficient balance")]
     InsufficientBalance,
     #[error("Invalid DID string: {0}")]
