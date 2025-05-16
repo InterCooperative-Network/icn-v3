@@ -601,7 +601,7 @@ Each context may hold its own properties and nested elements.
 * **Interaction with Other Host Functions:**
     1.  `host_on_event` initiates a *definition block* for an event handler.
     2.  Subsequent host function calls that represent actions (e.g., `host_mint_token`, `host_anchor_data`, `host_perform_metered_action`, `host_transfer_token`, `host_call_host` for actions) and control flow (e.g., `host_if_condition_eval`, `host_else_handler`, `host_endif_handler`) are collected as part of this handler's definition.
-    3.  The actual *execution* of these collected actions does not occur when `host_on_event` or the subsequent action-defining calls are processed. Execution happens *later*, when the host environment itself detects and triggers an event matching the registered `event` string (this triggering mechanism is outside the scope of this specific host function call but is a core part of the host's runtime).
+    3.  The actual *execution* of these collected actions does not occur when `host_on_event` or the subsequent action-defining calls are processed. Execution happens *later*, when the host environment itself detects and triggers an event matching the registered `event` string (this triggering mechanism is outside the scope of this specific host function but is a core part of the host's runtime).
     4.  The definition block is implicitly finalized by the next top-level opcode or the end of the WASM program. At this point, the fully defined handler is registered.
 
 ---
@@ -931,7 +931,7 @@ All CEL expressions are evaluated within the scope of the "current active contex
     *   If the current context is a section nested within a proposal, `props` refers to the section's properties. Access to parent proposal properties might require a different mechanism or be disallowed for simplicity.
 
 *   **`meta`**: Accesses built-in metadata about the current active context or the execution environment. The exact available fields under `meta` are defined by the host schema.
-    *   Example: `meta.context_kind` (e.g., `"proposal"`, `"section"`), `meta.context_id` (if applicable, e.g. proposal ID).
+    *   Example: `meta.context_kind` (e.g., `"proposal"`, `"section"`), `meta.context_id` (if applicable, from `Opcode::CreateProposal`).
 
 *   **`env`**: Accesses properties related to the broader runtime environment or transaction details. The exact available fields under `env` are defined by the host schema.
     *   Example: `env.current_timestamp` (e.g., block timestamp), `env.invoker_id` (e.g., the identity invoking the current transaction or contract).
@@ -1167,60 +1167,89 @@ Focus on `kind` attribute, properties, parent/child relationships.
 *(Details to be added for the overall Proposal context, including its standard properties like id, title, version, and permitted top-level child section kinds.)*
 
 ---
-#### 5.3.2. Common Section `kind` Schemas
+#### 5.3.2. Common Section kind Schemas
 This subsection details schemas for common, general-purpose section kinds that can be broadly utilized across various contexts within a proposal or other top-level structures. These sections typically provide descriptive information, link to external resources, or group related data anchors. Examples include `metadata`, `terms_and_conditions`, and `data_anchors_list`.
-
 ---
-##### 5.3.2.1. `section.kind: metadata`
+
+##### **5.3.2.1. `section.kind: metadata`**
 
 *   **Description:**
-    Provides a flexible mechanism for attaching arbitrary, structured key-value metadata to any context (e.g., a proposal, another section, a role definition, a budget). This allows for rich, non-operational descriptive data, links, annotations, or other contextual information not covered by more specific section kinds.
+    Provides a flexible and reusable mechanism for attaching structured, non-operational descriptive data to any context within a CCL contract (e.g., a proposal, another section, a role definition, a budget item). This section allows for rich metadata such as summaries, authorship, timestamps, tags, and links to external resources, aiding in indexing, human readability, provenance tracking, and integration with external systems.
 
 *   **Expected Parent `kind`(s) or Context:**
     *   `proposal`
-    *   Any other section `kind` (e.g., `role`, `budget_definition`, `permissions_policy`, even another `metadata` section for nesting)
-    *   Essentially, any context where attaching general key-value metadata is relevant.
+    *   Any other section `kind` (e.g., `role`, `budget_definition`, `permissions_policy`, even another `metadata` section for nesting or for attaching metadata to metadata).
+    *   Essentially, any host-defined context where attaching structured descriptive metadata is relevant and permitted by the host's overarching structural schema.
 
 *   **Permitted Child `section.kind`(s):**
-    *   `metadata` (0 or more - allowing for nested metadata structures if complex information needs to be organized hierarchically)
-    *   Other specific section kinds MAY be permitted by a host's schema if the `metadata` section serves as a grouping context for them, but typically `metadata` sections are leaf nodes or only contain further `metadata` children.
+    *   `metadata` (0 or more - allowing for hierarchically nested metadata structures if complex information needs tobe organized. For example, a primary `metadata` section might contain more specific `metadata` subsections for different aspects like "audit_trail_metadata" or "publication_metadata".)
+    *   Other specific section kinds MAY be permitted by a host's schema if the `metadata` section also serves as a grouping context for them, but typically, `metadata` focuses on its own `props`.
 
 *   **Schema Table for `props`:**
-    The `props` object of a `metadata` section is itself the collection of metadata. It consists of arbitrary key-value pairs.
+    The `props` object of a `metadata` section contains a set of standardized fields for common metadata, plus an optional field for custom key-value pairs.
 
-    | Category         | Constraint                                                                                                                               |
-    |------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-    | Keys             | MUST be valid UTF-8 strings. SHOULD follow a consistent naming convention (e.g., `snake_case` or `camelCase`) and avoid characters that might conflict with CEL pathing (e.g. `.`, `[`, `]`) if these properties might be referenced. Max length of 128 characters is recommended. |
-    | Values           | CAN be any valid JSON type: `string`, `number`, `boolean`, `array`, or `object` (allowing for nested structures), or `null`.                 |
-    | Required Keys    | None are mandated by the `metadata` schema itself. The contract author determines the necessary keys for their use case.                     |
-    | Host Interpretation| Generally, the host treats these properties as opaque data provided by the contract. However, specific keys MAY be recognized by host extensions or higher-level application schemas if prefixed (e.g., `app::my_data_id`). |
-    | Size/Depth Limits| Hosts MAY impose limits on the total size of the `props` object, the number of keys, or the nesting depth of objects/arrays within values to prevent abuse. |
+    | Property Key          | Type             | Required | Constraints / Description                                                                                                                                                                       |
+    |-----------------------|------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+    | `summary`             | String           | No       | A brief, human-readable summary or abstract of the context this metadata is attached to, or of the metadata itself. Max length typically 1024 characters.                                       |
+    | `description`         | String           | No       | A more detailed, human-readable description. Max length typically 4096 characters.                                                                                                              |
+    | `author_dids`         | Array of String  | No       | An array of Decentralized Identifiers (DIDs) representing the authors, contributors, or responsible parties for the associated context or this metadata record. Each string MUST be a valid DID. |
+    | `created_at_iso`      | String           | No       | The ISO 8601 timestamp (e.g., "2024-07-30T10:30:00Z") indicating when the associated context or this metadata record was created.                                                                |
+    | `updated_at_iso`      | String           | No       | The ISO 8601 timestamp (e.g., "2024-07-30T12:45:00Z") indicating when the associated context or this metadata record was last updated.                                                              |
+    | `tags`                | Array of String  | No       | An array of keyword tags for categorization, filtering, or indexing. Each tag is a string, typically short and descriptive (e.g., "governance", "milestone-3", "api-spec"). Max 64 characters per tag. |
+    | `external_references` | Array of Objects | No       | An array of objects, each providing a link to an external document, resource, or identifier. See nested schema below.                                                                           |
+    | `custom_properties`   | Object           | No       | An object containing arbitrary key-value pairs for additional, application-specific metadata not covered by the standard fields. Keys SHOULD be `snake_case` or `camelCase`. Values can be any valid JSON type. Hosts MAY impose limits on size/depth. |
+
+*   **Nested `external_references` Object Schema (each item in the array):**
+
+    | Field Key   | Type   | Required | Description                                                                                                            |
+    |-------------|--------|----------|------------------------------------------------------------------------------------------------------------------------|
+    | `label`     | String | Yes      | A human-readable label or name for the external reference (e.g., "Original Proposal Document", "IPFS Data CID"). Max 256 chars. |
+    | `url_or_cid`| String | Yes      | The URL (e.g., `https://...`, `ipfs://...`) or Content Identifier (CID) string of the external resource. MUST be a valid URL or CID. |
+    | `type`      | String | No       | An optional type descriptor for the reference (e.g., "specification", "dataset", "image", "discussion_forum"). Max 64 chars. |
 
 *   **Notes:**
-    *   The `metadata` section is designed for flexibility. Its primary role is to store descriptive or referential information that doesn't fit into strictly typed sections.
-    *   While keys are arbitrary, contracts SHOULD use clear, descriptive, and consistently cased keys.
-    *   For complex, highly structured metadata that might be queried or validated frequently, defining a custom section `kind` with a specific schema might be more appropriate than using a generic `metadata` section.
+    *   The `metadata` section is designed for flexibility. Its primary role is to store descriptive or referential information.
+    *   While many fields are optional, providing `created_at_iso`, `updated_at_iso`, and `author_dids` is highly recommended for provenance.
+    *   Hosts MAY use the `tags` and other fields for indexing or enabling advanced querying capabilities.
+    *   The `custom_properties` field allows contracts to extend metadata without requiring changes to the core ABI schema, but such custom data might not be universally understood or indexed by all host implementations.
 
 *   **Example JSON Snippet:**
 
     ```json
     {
       "kind": "metadata",
-      "title": "Additional Project Details",
+      "title": "Proposal Core Specification Metadata",
       "props": {
-        "project_code": "ICN-ALPHA-007",
-        "external_tracking_url": "https://tracker.example.com/issue/ICN-789",
-        "responsible_team": "Core Development",
-        "tags": ["governance", "milestone-2", "api-design"],
-        "review_status": {
-          "status_code": "pending_community_review",
-          "last_updated": "2024-07-15T10:00:00Z",
-          "reviewer_pool": ["role:auditor", "did:coop:membergroupX"]
-        },
-        "related_documents_cids": [
-          "bafybeiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "bafybeibbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ]
+        "summary": "Core metadata for the Q3 technical specification proposal.",
+        "description": "This metadata section captures authorship, versioning, and related documents for the main technical proposal outlining the new API features for the Interchain Name Service.",
+        "author_dids": [
+          "did:example:12345abcdef",
+          "did:example:67890uvwxyz"
+        ],
+        "created_at_iso": "2024-07-28T09:00:00Z",
+        "updated_at_iso": "2024-07-30T14:15:00Z",
+        "tags": ["api-design", "q3-roadmap", "governance-approved", "specification"],
+        "external_references": [
+          {
+            "label": "Detailed Specification Document (PDF)",
+            "url_or_cid": "ipfs://bafybeigc4fplwgwqvj7ps2g7tniycbefoezcnul3fqodfmc4i3xtqbvxqa",
+            "type": "specification"
+          },
+          {
+            "label": "Community Discussion Forum",
+            "url_or_cid": "https://forum.example.com/t/proposal-q3-tech-spec/123",
+            "type": "discussion"
+          },
+          {
+            "label": "Related Security Audit Report",
+            "url_or_cid": "https://audits.example.com/report/ICN-Q3-2024.pdf"
+          }
+        ],
+        "custom_properties": {
+          "internal_project_code": "ICN-PROJ-07B",
+          "review_cycle": 3,
+          "department_id": "tech-research"
+        }
       }
     }
     ```
@@ -1524,6 +1553,180 @@ This subsection details schemas for defining and managing financial budgets, res
 
 ---
 
-</rewritten_file>
+##### **5.3.2.2. `section.kind: terms_and_conditions`**
 
---- 
+#### **Description**
+
+Defines formal terms, conditions, and agreements relevant to the execution of a proposal, governance process, funding stream, membership application, or policy document. This section is intended to provide structured and/or referenced declarations that participants or affected parties are expected to review, understand, and — where required — explicitly or implicitly accept.
+
+Terms may include participation rules, data use agreements, legal clauses, risk disclosures, and other social or legal frameworks. This section supports both embedded content and external references (e.g., PDFs, Markdown, or notarized CIDs).
+
+#### **Expected Parent `kind`(s) or Context**
+
+* `proposal`
+* `role`
+* `membership_rules`
+* `budget_definition`
+* `metadata`
+* Hosts MAY allow broader usage in any structural context where binding or declared conditions are necessary
+
+#### **Permitted Child `section.kind`(s)**
+
+* `metadata` (0 or more) — for attribution, legal footnotes, translation metadata, or audit trail
+* `data_anchors_list` (0 or 1) — to link hashes of signed terms or off-chain content
+
+#### **Schema Table for `props`**
+
+| Property Key           | Type             | Required | Description                                                                                                                                           |
+| ---------------------- | ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`                | String           | Yes      | A concise title for the terms block. Example: `"Participation Agreement"`, `"Funding Disbursement Terms"`. Max length: 256 characters.                |
+| `summary_text`         | String           | No       | A brief, plain-language summary of the terms (especially useful if full text is external). Max 2048 characters.                                       |
+| `terms_markdown`       | String           | No       | Full human-readable terms in Markdown. Max 8192 characters. Optional if `external_references` is provided.                                            |
+| `external_references`  | Array of Objects | No       | External documents describing the full terms (see nested schema). Required if `terms_markdown` is not provided.                                       |
+| `acceptance_mechanism` | String           | No       | How agreement to the terms is interpreted. One of: `"implicit"`, `"explicit"`, or `"none"`. Default is `"implicit"`.                                  |
+| `effective_date_iso`   | String           | No       | ISO 8601 date string when the terms become active.                                                                                                    |
+| `expiration_date_iso`  | String           | No       | ISO 8601 date string when the terms expire, if applicable.                                                                                            |
+| `version`              | String           | No       | Version of these terms (e.g., `"v1.0"`, `"rev3-final"`). Max 32 characters.                                                                           |
+| `jurisdiction`         | String           | No       | Optional human-readable descriptor of the applicable legal, geographic, or cooperative context (e.g., `"ICN Global Charter"` or `"Coop X Region 3"`). |
+
+---
+
+#### **Nested `external_references` Object Schema**
+
+Each item in the `external_references` array:
+
+| Field Key    | Type   | Required | Description                                                                                 |
+| ------------ | ------ | -------- | ------------------------------------------------------------------------------------------- |
+| `label`      | String | Yes      | Display label for the document (e.g., `"Signed Agreement (PDF)"`). Max 256 characters.      |
+| `url_or_cid` | String | Yes      | Either a valid URL or CID (e.g., `https://...`, `ipfs://...`, `bafy...`).                   |
+| `language`   | String | No       | BCP 47 language tag (e.g., `"en"`, `"es-MX"`). Useful for multi-language terms.             |
+| `type`       | String | No       | Optional descriptor like `"legal"`, `"disclosure"`, `"data_agreement"` (max 64 characters). |
+
+---
+
+#### **Notes**
+
+* Either `terms_markdown` or `external_references` MUST be provided.
+* If `acceptance_mechanism` is `"explicit"`, host interfaces SHOULD prompt the actor for confirmation before executing associated actions.
+* Hosts MAY canonicalize or fingerprint externally referenced documents using `data_anchors_list` or IPFS hashes.
+* `jurisdiction`, `version`, and `effective_date_iso` are recommended for formal documents, especially for auditability or legal alignment.
+* Sections MAY be reused in templates across cooperatives or shared by CIDs for reproducible governance structures.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "terms_and_conditions",
+  "title": "Funding Disbursement Terms",
+  "props": {
+    "summary_text": "By accepting disbursement, recipients agree to use funds in accordance with the approved allocation and reporting schedule.",
+    "terms_markdown": "## Usage Terms
+
+Funds must be used for the purpose outlined in the proposal. Abuse or misreporting will result in clawbacks and reputational penalties.
+
+## Auditing
+
+All receipts must be submitted by Q3 2025 for compliance review.",
+    "acceptance_mechanism": "explicit",
+    "effective_date_iso": "2025-05-01",
+    "version": "1.0",
+    "jurisdiction": "ICN Federation General Guidelines"
+  }
+}
+```
+
+---
+
+#### 5.3.3. Role-Based Access Control (RBAC) and Governance Schemas
+// ... existing code ...
+
+---
+
+##### **5.3.2.3. `section.kind: data_anchors_list`**
+
+#### **Description**
+
+Defines a declarative list of content-addressed data anchors relevant to a proposal, agreement, or resource structure. These anchors point to structured documents, signed agreements, logs, audit outputs, or other off-chain data that may require validation, historical reference, or traceability. While not necessarily triggering `Opcode::AnchorData`, this section supports the explicit declaration of data artifacts that SHOULD be anchored, verified, or preserved by host systems.
+
+#### **Expected Parent `kind`(s) or Context**
+
+*   `proposal`
+*   `terms_and_conditions`
+*   `metadata`
+*   `budget_definition`
+*   `allocation_request`
+*   `audit_trail` (if such a kind is defined)
+*   (Any context where content-addressed artifacts require reference or endorsement)
+
+#### **Permitted Child `section.kind`(s)**
+
+*   `metadata` (0 or more) — For annotating the list as a whole (e.g., versioning, authorship, scope).
+
+#### **Schema Table for `props`**
+
+| Property Key | Type             | Required | Description                                                                                                         |
+| ------------ | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `anchors`    | Array of Objects | Yes      | A list of anchor objects. Each object describes a single data item to be referenced or preserved. See schema below. |
+
+---
+
+#### **Nested `anchors` Object Schema**
+
+Each item in the `anchors` array:
+
+| Field Key          | Type   | Required | Description                                                                                                                                |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `label`            | String | Yes      | A short, human-readable name for the anchor. Example: `"Signed Proposal PDF"` or `"Auditor Report Q1 2025"`. Max 256 characters.           |
+| `content_cid`      | String | Yes      | The CID (Content Identifier) of the data. Must be a valid CID string. Hosts SHOULD validate basic multihash format and canonical encoding. |
+| `mime_type`        | String | No       | MIME type of the content (e.g., `"application/pdf"`, `"application/json"`, `"text/markdown"`).                                             |
+| `anchored_by_role` | String | No       | DID or role name expected to have published or anchored this data. Useful for auditability and role-scoped validation.                     |
+| `description`      | String | No       | A longer description of the content. Max 2048 characters.                                                                                  |
+| `timestamp_hint`   | String | No       | ISO 8601 timestamp describing when this content was created or anchored. Distinct from on-chain timestamps. Example: `"2025-04-20T18:35Z"` |
+| `checksum_sha256`  | String | No       | Optional SHA-256 checksum of the original file or payload, hex-encoded (64 characters). May be used when CID uses a different hash algo.   |
+
+---
+
+#### **Notes**
+
+*   The `data_anchors_list` section is a declarative structure and does not automatically trigger anchoring. However, hosts MAY interpret this list as an auditable registry of content intended for anchoring or reference.
+*   `checksum_sha256` is optional but useful when interoperating with non-CID systems, or to allow redundant integrity verification even if CID is canonical.
+*   Hosts MAY validate that `content_cid` strings are valid multiformat CIDs.
+*   If `anchored_by_role` is provided, hosts MAY cross-reference the role definition to verify eligibility or responsibility for anchoring actions.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "data_anchors_list",
+  "title": "Audit Trail Data Anchors",
+  "props": {
+    "anchors": [
+      {
+        "label": "Quarterly Expense Report",
+        "content_cid": "bafybeihk4orzzk4qgh4n77obzz6cfyt4obfr6qultjbkym5p4idvewlvra",
+        "mime_type": "application/pdf",
+        "anchored_by_role": "auditor",
+        "timestamp_hint": "2025-04-05T14:00:00Z",
+        "description": "Signed PDF of Q1 2025 disbursement breakdown, verified by external audit firm."
+      },
+      {
+        "label": "Deliberation Log Archive",
+        "content_cid": "bafybeieabcd12345exampleexampleexampleexampleexampleexamplee",
+        "mime_type": "application/json",
+        "checksum_sha256": "af2c8818a0b7b7e2d16c5c64de88001abdf251733ea77101b4aecc51f91d7c31"
+      }
+    ]
+  }
+}
+```
+
+---
+
+#### 5.3.3. Role-Based Access Control (RBAC) and Governance Schemas
+// ... existing code ...
+
+</rewritten_file>
