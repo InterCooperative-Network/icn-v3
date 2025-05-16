@@ -1723,4 +1723,269 @@ Each item in the `anchors` array:
 ```
 
 ---
+
+##### **5.3.2.4. `section.kind: attachment_set`**
+
+#### **Description**
+
+Defines a structured grouping of file-like attachments associated with a proposal, metadata block, agreement, or execution context. Unlike `data_anchors_list`, which emphasizes content-addressable integrity and declarative anchoring, the `attachment_set` section is optimized for bundling *referenced files or documents*, especially those meant for human interpretation, offline storage, or formal review.
+
+Attachments may be CID-referenced, hosted via URL, or optionally inlined (if small and permitted by the host). Use cases include proposal annexes, community-provided documents, multimedia context, or packaged reporting artifacts.
+
+#### **Expected Parent `kind`(s) or Context**
+
+*   `proposal`
+*   `terms_and_conditions`
+*   `metadata`
+*   `audit_trail` (if defined)
+*   `budget_definition`
+*   `allocation_request`
+*   Hosts MAY allow this section in any context where supplementary file references are appropriate.
+
+#### **Permitted Child `section.kind`(s)**
+
+*   `metadata` (0 or more) — For annotating the attachment set (e.g., author, license, review notes)
+
+#### **Schema Table for `props`**
+
+| Property Key  | Type             | Required | Description                                                                                                      |
+| ------------- | ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `attachments` | Array of Objects | Yes      | List of attachment objects, each describing a file or document being bundled or linked. See nested schema below. |
+
+---
+
+#### **Nested `attachments` Object Schema**
+
+Each item in the `attachments` array:
+
+| Field Key               | Type    | Required | Description                                                                                                                               |
+| ----------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_name`             | String  | Yes      | The display or download name of the file. Max 256 characters. SHOULD be valid UTF-8 for internationalization.                              |
+| `content_cid`           | String  | No       | Optional CID of the content, if hosted on IPFS or another content-addressable network.                                                    |
+| `url`                   | String  | No       | Optional URL (e.g., `https://...`) if content is hosted via HTTP or another retrievable protocol.                                         |
+| `mime_type`             | String  | No       | MIME type (e.g., `"application/pdf"`, `"text/markdown"`). Strongly recommended if `content_cid` or `url` is provided.                    |
+| `size_bytes`            | Number  | No       | Size of the file in bytes (for host previews or UI validation). Must be a non-negative integer if present.                                |
+| `description`           | String  | No       | Optional human-readable context for the file. Max 2048 characters.                                                                        |
+| `language`              | String  | No       | Optional BCP 47 language tag (e.g., `"en-US"`). Useful for internationalization.                                                             |
+| `is_inline_previewable` | Boolean | No       | If `true`, hints that this file is safe for inline preview in host UIs (e.g., PDFs, Markdown, JSON). Defaults to `false`.                  |
+| `sha256_checksum`       | String  | No       | Hex-encoded SHA-256 hash for redundancy or verifying non-CID-based files. 64 lowercase hexadecimal characters.                             |
+*Constraint: At least one of `content_cid` or `url` MUST be provided for each attachment.*
+
+---
+
+#### **Notes**
+
+*   This section is intended for file bundling, not primarily for formal anchoring (use `data_anchors_list` for content integrity and formal anchoring workflows, though CIDs here also provide integrity).
+*   Hosts MAY provide download interfaces, preview widgets, or security warnings based on `mime_type`, `size_bytes`, and `is_inline_previewable`. `mime_type` is strongly recommended for proper handling.
+*   For attachments with `url`, hosts MAY cache a copy, log access timestamps, or perform security scans.
+*   `sha256_checksum` is helpful for validating `url`-based files when `content_cid` is not available or for additional verification.
+*   Avoid inlining large binary files directly in CCL; this section promotes referencing content via CID or URL.
+*   The `file_name` property SHOULD use UTF-8 encoding to support international character sets.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "attachment_set",
+  "title": "Supporting Documentation Bundle",
+  "props": {
+    "attachments": [
+      {
+        "file_name": "詳細提案書.pdf",
+        "content_cid": "bafybeibwf6p6xn7wjm3alttjapzjoirofi4duh3ftqyg2xnm5c6xsc7j4i",
+        "mime_type": "application/pdf",
+        "size_bytes": 120543,
+        "description": "Complete 28-page project proposal including diagrams (Japanese Version).",
+        "is_inline_previewable": true,
+        "language": "ja"
+      },
+      {
+        "file_name": "budget_summary.xlsx",
+        "url": "https://docs.example.com/files/budget_summary_v2.xlsx",
+        "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "size_bytes": 38564,
+        "sha256_checksum": "2e7d2c03a9507ae265ecf5b5356885a5c14fc30a0e2b25fa8f3d0c4fcbfecd9a"
+      }
+    ]
+  }
+}
+```
+
+---
+
+##### **5.3.3.1. `section.kind: role_definition_group`**
+
+#### **Description**
+
+Declares a set of roles and associated policies relevant to a proposal, policy update, or organization definition. This section acts as a container for defining one or more `role` sections, each specifying permissions, conditions, membership criteria, and associated attributes. A `role_definition_group` helps anchor and scope these roles to a particular context (e.g., "This policy creates 3 new roles...").
+
+This section is often used to:
+* Introduce new roles within a cooperative, community, or working group.
+* Amend or deprecate existing roles.
+* Propose new permission or responsibility structures.
+
+#### **Expected Parent `kind`(s) or Context**
+
+* `proposal`
+* `policy`
+* `terms_and_conditions`
+* `organization_policy`
+* `metadata`
+* Hosts MAY allow other usage if role scoping is required.
+
+#### **Permitted Child `section.kind`(s)**
+
+* `role` (1 or more) — Each describes a distinct role with attributes and permissions.
+* `metadata` (0 or more) — For annotating the group (e.g., creation date, author, source proposal)
+
+#### **Schema Table for `props`**
+
+| Property Key | Type   | Required | Description                                                                                 |
+| ------------ | ------ | -------- | ------------------------------------------------------------------------------------------- |
+| `group_title` | String | Yes      | A short, human-readable name for this set of roles. E.g., `"Core Governance Roles"`         |
+| `scope_note`  | String | No       | Optional contextual description of the scope/purpose of the role group (max 2048 chars)     |
+| `version`     | String | No       | Optional version tag (e.g., `"v1.0"`, `"revised-2025-08"`).                                 |
+
+---
+
+#### **Notes**
+
+* This section must contain at least one `role` section as a child.
+* `group_title` should be unique within its proposal context to avoid ambiguity.
+* `scope_note` provides semantic context and MAY include operational implications (e.g., "These roles apply only to Project X").
+* Hosts MAY use `version` to manage upgrades or conflicts across policy proposals that redefine overlapping roles.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "role_definition_group",
+  "title": "Governance Role Set",
+  "props": {
+    "group_title": "Governance Committee Roles",
+    "scope_note": "This role set defines the minimum roles required to implement the new participatory budgeting mechanism.",
+    "version": "v1.0"
+  },
+  "sections": [
+    {
+      "kind": "role",
+      "title": "Budget Reviewer",
+      "props": {
+        "role_id": "budget_reviewer",
+        "description": "Reviews and approves allocation requests before they are forwarded to the general assembly.",
+        "assignable": true,
+        "required_attributes": [],
+        "permitted_actions": ["review_budget", "flag_irregularities"]
+      }
+    },
+    {
+      "kind": "role",
+      "title": "Community Secretary",
+      "props": {
+        "role_id": "community_secretary",
+        "description": "Maintains official records and publishes quarterly reports.",
+        "assignable": false,
+        "required_attributes": ["trusted_writer"],
+        "permitted_actions": ["publish_minutes", "upload_records"]
+      }
+    }
+  ]
+}
+```
+
+---
+
+##### **5.3.4.3. `section.kind: audit_trail`**
+
+#### **Description**
+
+Defines a structured reference to verification, review, or accountability records associated with a proposal, funding process, execution event, or organizational decision. This section allows hosts and participants to anchor evidence of audits, inspections, evaluations, reconciliations, or formal attestations—typically as content-addressed CIDs or externally hosted documents. It is intended to enhance trust, transparency, and post-hoc verifiability in financial and governance workflows.
+
+The `audit_trail` section may be used to attach evidence of due diligence, execution receipts, third-party audits, internal reporting, or milestone fulfillment.
+
+#### **Expected Parent `kind`(s) or Context**
+
+* `proposal`
+* `budget_definition`
+* `allocation_request`
+* `disbursement`
+* `terms_and_conditions`
+* `metadata` (for standalone or referenced audit declarations)
+
+Hosts MAY also allow this in any section where verifiable audit content is required.
+
+#### **Permitted Child `section.kind`(s)**
+
+* `data_anchors_list` (0 or more) — To anchor CIDs of signed audit reports, logs, or attestations
+* `attachment_set` (0 or more) — To provide supplementary files or reports associated with the audit
+* `metadata` (0 or more) — For authoring details, signature metadata, or language-specific annotations
+
+#### **Schema Table for `props`**
+
+| Property Key            | Type             | Required | Description                                                                                                              |
+|-------------------------|------------------|----------|--------------------------------------------------------------------------------------------------------------------------|
+| `audit_type`            | String           | Yes      | A descriptor of the audit scope or intent (e.g., `"budget_reconciliation"`, `"external_review"`, `"milestone_verification"`). |
+| `performed_by`          | Array of String  | Yes      | Array of DIDs or role names responsible for the audit. SHOULD be resolvable to a `role` section or registered identity. |
+| `audit_date_iso`        | String           | Yes      | ISO 8601 date when the audit was performed or finalized.                                                                |
+| `target_context_id`     | String           | No       | Optional ID (e.g., proposal ID, disbursement ID) that this audit explicitly references or validates.                    |
+| `summary`               | String           | No       | Plain-text summary of findings, conclusions, or assertions. Max 4096 characters.                                        |
+| `rating`                | String           | No       | Optional string descriptor of result (e.g., `"pass"`, `"fail"`, `"qualified"`). Hosts MAY define enumerated values.     |
+| `confidence_level`      | Number           | No       | Optional numeric confidence score (e.g., 0–1.0 or percentage), useful in probabilistic or peer-audit settings.          |
+| `external_references`   | Array of Objects | No       | Optional links to externally stored audit reports or notarized declarations. See nested schema.                         |
+
+---
+
+#### **Nested `external_references` Object Schema**
+
+| Field Key     | Type   | Required | Description                                                                                       |
+|---------------|--------|----------|---------------------------------------------------------------------------------------------------|
+| `label`       | String | Yes      | Display label (e.g., `"Signed PDF Report"`, `"Notarized Ledger Dump"`).                           |
+| `url_or_cid`  | String | Yes      | URL or content-addressed CID referencing the audit artifact.                                      |
+| `mime_type`   | String | No       | MIME type of the referenced file (e.g., `"application/pdf"`, `"application/json"`).              |
+| `language`    | String | No       | Optional BCP 47 tag (e.g., `"en"`, `"fr-CA"`).                                                     |
+| `sha256_checksum` | String | No   | Optional hex-encoded SHA-256 checksum for integrity verification.                                 |
+
+---
+
+#### **Notes**
+
+* `performed_by` SHOULD reference existing DIDs or `role` sections when used in structured proposals.
+* `audit_type` MAY be constrained by host policies depending on regulatory, procedural, or cooperative standards.
+* When both `data_anchors_list` and `external_references` are used, hosts SHOULD treat them as complementary: CIDs for integrity, URLs for user-accessible versions.
+* `confidence_level` SHOULD be a float between `0.0` and `1.0`, or an integer `0–100`, depending on the audit methodology. Hosts MAY normalize values.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "audit_trail",
+  "title": "Post-Disbursement Verification Audit",
+  "props": {
+    "audit_type": "milestone_verification",
+    "performed_by": ["did:coop:verifier123", "federation_auditor"],
+    "audit_date_iso": "2025-07-12",
+    "target_context_id": "disb-2457f6b8",
+    "summary": "Verification confirmed that the disbursed funds were used for equipment purchases per allocation terms.",
+    "rating": "pass",
+    "confidence_level": 0.98,
+    "external_references": [
+      {
+        "label": "Signed Audit Report",
+        "url_or_cid": "bafybeig7ehdh3fxhxdlbd7slwxdsnsz24rnauijgn5bykjc4d3kwhzwwyi",
+        "mime_type": "application/pdf",
+        "language": "en",
+        "sha256_checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  }
+}
+```
+
+---
 </rewritten_file>
