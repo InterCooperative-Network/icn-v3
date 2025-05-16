@@ -2054,4 +2054,99 @@ Defines the transfer of funds, tokens, or other valuable resources to a specifie
 ```
 
 ---
+
+##### **5.3.4.5. `section.kind: cost_breakdown`**
+
+#### **Description**
+
+Defines a hierarchical breakdown of proposed, requested, or reconciled costs associated with a budget, allocation, disbursement, or audit context. Each cost item may represent a line-item category, subcomponent, or project element. Supports multiple currencies or resource types, and may be structured as a tree for detailed modeling of complex cost structures.
+
+#### **Expected Parent `kind`(s) or Context**
+
+* `budget_definition`
+* `allocation_request`
+* `disbursement`
+* `audit_trail`
+* Hosts MAY allow `cost_breakdown` wherever contextualized cost modeling or reconciliation is required.
+
+#### **Permitted Child `section.kind`(s)**
+
+* `metadata` (0 or more) — For versioning, source attribution, notes, or legal context.
+
+#### **Schema Table for `props`**
+
+| Property Key | Type             | Required | Description                                                                      |
+| ------------ | ---------------- | -------- | -------------------------------------------------------------------------------- | 
+| `items`      | Array of Objects | Yes      | Top-level cost items. Each may include nested `sub_items`. See schema below.   |
+
+--- 
+
+#### **Nested `items` / `sub_items` Object Schema**
+
+Each item in `items` or `sub_items`:
+
+| Field Key     | Type             | Required | Description                                                                                      |
+| ------------- | ---------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `category`    | String           | Yes      | A short label for the cost item. E.g., "Equipment", "Personnel", "Legal"                       |
+| `description` | String           | No       | Optional longer explanation of the cost item.                                                    |
+| `amount`      | String           | Yes      | The intended or actual cost value, formatted as a numeric string. E.g., "10000", "250.50"          |
+| `token_type`  | String           | No       | Optional resource or currency identifier (e.g., ICN-F, USD, worker_hours). Inherits from context if omitted. |
+| `sub_items`   | Array of Objects | No       | Optional nested cost items (recursive). Allows for tree structures of arbitrary depth.         |
+
+---
+
+#### **Notes**
+
+* Hosts MUST validate that `amount` is a parseable decimal string and, if `token_type` is provided, that it aligns with the currency/resource's precision.
+* If `token_type` is omitted, it SHOULD be inherited from the parent context (e.g., budget or allocation).
+* `sub_items` MAY be used recursively to define nested categories (e.g., Personnel → Engineering → Contractor X).
+* Hosts SHOULD render the tree structure visually when displaying.
+* This schema MAY be used to declare estimates (`budget_definition`), requests (`allocation_request`), actuals (`disbursement` or `audit_trail`), or any mix, depending on parent context.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "cost_breakdown",
+  "title": "Proposed Use of Funds",
+  "props": {
+    "items": [
+      {
+        "category": "Infrastructure",
+        "amount": "10000",
+        "token_type": "ICN-F",
+        "description": "Server upgrades and network hardware",
+        "sub_items": [
+          {
+            "category": "Edge Nodes",
+            "amount": "6000"
+          },
+          {
+            "category": "Backup Systems",
+            "amount": "4000"
+          }
+        ]
+      },
+      {
+        "category": "Personnel",
+        "amount": "15000",
+        "sub_items": [
+          {
+            "category": "Developer Stipends",
+            "amount": "9000"
+          },
+          {
+            "category": "Project Coordination",
+            "amount": "6000"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+---
 </rewritten_file>
