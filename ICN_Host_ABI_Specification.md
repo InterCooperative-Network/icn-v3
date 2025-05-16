@@ -1642,8 +1642,6 @@ All receipts must be submitted by Q3 2025 for compliance review.",
 #### 5.3.3. Role-Based Access Control (RBAC) and Governance Schemas
 // ... existing code ...
 
----
-
 ##### **5.3.2.3. `section.kind: data_anchors_list`**
 
 #### **Description**
@@ -1725,8 +1723,4 @@ Each item in the `anchors` array:
 ```
 
 ---
-
-#### 5.3.3. Role-Based Access Control (RBAC) and Governance Schemas
-// ... existing code ...
-
 </rewritten_file>
