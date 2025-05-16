@@ -465,17 +465,23 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         let memory = self.get_memory(&mut caller)?;
         let mut store_context = caller.as_context_mut();
         let resource_type_str = self.read_string_from_mem_ctx(&mut store_context, &memory, resource_type_ptr, resource_type_len)?;
-        let _resolved_resource_type = match resource_type_str.as_str() {
+        
+        // Use a match statement for ResourceType parsing
+        let resolved_resource_type = match resource_type_str.as_str() {
             "mana" => ResourceType::Mana,
+            // Add other resource types here if necessary
             _ => return Err(HostAbiError::InvalidParameter(format!("Unsupported resource type string: {}", resource_type_str))),
         };
-        let token = icn_economics::ScopedResourceToken {
-            resource_type: resource_type_str.clone(),
-            scope: format!("{:?}", self.scope_key()),
+
+        let token = ScopedResourceToken {
+            resource_type: resolved_resource_type.to_string(), // Use resolved_resource_type.to_string() or resource_type_str directly
+            scope: format!("{:?}", self.scope_key()), // Use Debug format for ScopeKey
             amount,
-            expires_at: None,
-            issuer: Some(self.caller_did.to_string()),
+            expires_at: None, // Assuming None is appropriate here
+            issuer: Some(self.caller_did.to_string()), // Assuming issuer is the caller DID
         };
+        
+        // Ensure ResourceRepository trait is in scope to call record_usage
         self.rt.mana_repository().record_usage(&self.caller_did, &token).await
             .map_err(|e| HostAbiError::ResourceManagementError(format!("Failed to record usage for resource '{}': {}", resource_type_str, e)))?;
         Ok(0)
