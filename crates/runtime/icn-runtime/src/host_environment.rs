@@ -4,12 +4,13 @@ use anyhow::{anyhow, Result};
 use icn_economics::ResourceType;
 use icn_identity::{Did, ScopeKey};
 use host_abi::{
-    HostAbiError, LogLevel, MeshHostAbi,
+    HostAbiError, MeshHostAbi,
 };
 use icn_types::org::{CommunityId, CooperativeId};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
+use std::marker::PhantomData;
 // use icn_actor_interfaces::actor_runtime::HostcallWasmError; // Temporarily commented out
 // use icn_actor_interfaces::Timestamp; // Temporarily commented out
 // use icn_dag_scheduler::commit::DagCommitAddress; // Temporarily commented out
@@ -19,16 +20,17 @@ use wasmtime::{Caller, Extern, Memory as WasmtimeMemory};
 
 /// Concrete implementation of the host environment for WASM execution
 #[derive(Clone)]
-pub struct ConcreteHostEnvironment {
+pub struct ConcreteHostEnvironment<T: Send + Sync + 'static> {
     pub ctx: Arc<Mutex<JobExecutionContext>>,
     pub rt: Arc<RuntimeContext>,
     pub caller_did: Did,
     pub is_governance: bool,
     pub coop_id: Option<CooperativeId>,
     pub community_id: Option<CommunityId>,
+    _phantom: PhantomData<T>,
 }
 
-impl ConcreteHostEnvironment {
+impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
     pub fn new(
         ctx: Arc<Mutex<JobExecutionContext>>,
         caller_did: Did,
@@ -41,6 +43,7 @@ impl ConcreteHostEnvironment {
             is_governance: false,
             coop_id: None,
             community_id: None,
+            _phantom: PhantomData,
         }
     }
 
@@ -56,6 +59,7 @@ impl ConcreteHostEnvironment {
             is_governance: true,
             coop_id: None,
             community_id: None,
+            _phantom: PhantomData,
         }
     }
 
@@ -126,7 +130,7 @@ impl ConcreteHostEnvironment {
     /// Helper to safely obtain the linear memory exported by the guest module.
     pub fn get_memory(
         &self,
-        caller: &mut Caller<'_, ConcreteHostEnvironment>,
+        caller: &mut Caller<'_, T>,
     ) -> Result<WasmtimeMemory, anyhow::Error> {
         match caller.get_export("memory") {
             Some(Extern::Memory(mem)) => Ok(mem),
@@ -137,7 +141,7 @@ impl ConcreteHostEnvironment {
     /// Read a UTF-8 string from guest memory at (ptr,len).
     pub fn read_string_from_mem(
         &self,
-        caller: &mut Caller<'_, ConcreteHostEnvironment>,
+        caller: &mut Caller<'_, T>,
         ptr: u32,
         len: u32,
     ) -> Result<String, anyhow::Error> {
@@ -151,7 +155,7 @@ impl ConcreteHostEnvironment {
     /// Write a UTF-8 string `s` into guest memory buffer (ptr,len).
     pub fn write_string_to_mem(
         &self,
-        caller: &mut Caller<'_, ConcreteHostEnvironment>,
+        caller: &mut Caller<'_, T>,
         s: &str,
         ptr: u32,
         len: u32,
@@ -169,7 +173,7 @@ impl ConcreteHostEnvironment {
     /// Read a raw byte slice from guest memory.
     pub fn read_bytes_from_mem(
         &self,
-        caller: &mut Caller<'_, ConcreteHostEnvironment>,
+        caller: &mut Caller<'_, T>,
         ptr: u32,
         len: u32,
     ) -> Result<Vec<u8>, anyhow::Error> {
@@ -183,7 +187,7 @@ impl ConcreteHostEnvironment {
     /// Write raw bytes to guest memory buffer (ptr,len).
     pub fn write_bytes_to_mem(
         &self,
-        caller: &mut Caller<'_, ConcreteHostEnvironment>,
+        caller: &mut Caller<'_, T>,
         bytes: &[u8],
         ptr: u32,
         len: u32,
@@ -198,495 +202,262 @@ impl ConcreteHostEnvironment {
     }
 }
 
-#[cfg(feature = "full_host_abi")]
 #[async_trait::async_trait]
-impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
-    // **I. Job & Workflow Information **
-    fn host_job_get_id(
+impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
+    async fn host_begin_section(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        job_id_buf_ptr: u32,
-        job_id_buf_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        let job_id_str = ctx.job_id.to_string();
-        self.write_string_to_mem(&mut caller, &job_id_str, job_id_buf_ptr, job_id_buf_len)
-    }
-
-    fn host_job_get_initial_input_cid(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        cid_buf_ptr: u32,
-        cid_buf_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        if let Some(cid) = &ctx.job_params.input_data_cid {
-            let cid_str = cid.to_string();
-            self.write_string_to_mem(&mut caller, &cid_str, cid_buf_ptr, cid_buf_len)
+        mut caller: wasmtime::Caller<'_, T>,
+        kind_ptr: u32,
+        kind_len: u32,
+        title_ptr: u32,
+        title_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let kind = self.read_string_from_mem(&mut caller, kind_ptr, kind_len)?;
+        let title = if title_len > 0 {
+            Some(self.read_string_from_mem(&mut caller, title_ptr, title_len)?)
         } else {
-            Ok(0) // No input CID specified
-        }
-    }
-
-    fn host_job_is_interactive(
-        &self,
-        caller: Caller<'_, ConcreteHostEnvironment>,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        Ok(if ctx.job_params.is_interactive { 1 } else { 0 })
-    }
-
-    fn host_workflow_get_current_stage_index(
-        &self,
-        caller: Caller<'_, ConcreteHostEnvironment>,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        Ok(ctx.current_stage_index as i32)
-    }
-
-    fn host_workflow_get_current_stage_id(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        stage_id_buf_ptr: u32,
-        stage_id_buf_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        if let Some(stage_index) = ctx.current_stage_index {
-            if let Some(workflow) = &ctx.job_params.workflow_type.as_workflow() {
-                if let Some(stage) = workflow.stages.get(stage_index as usize) {
-                    if let Some(id) = &stage.id {
-                        return self.write_string_to_mem(&mut caller, id, stage_id_buf_ptr, stage_id_buf_len);
-                    }
-                }
-            }
-        }
-        Ok(0) // No stage ID found or not applicable
-    }
-
-    fn host_workflow_get_current_stage_input_cid(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        input_key_ptr: u32,
-        input_key_len: u32,
-        cid_buf_ptr: u32,
-        cid_buf_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let key = self.read_string_from_mem(&mut caller, input_key_ptr, input_key_len)?;
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-
-        if let Some(cid_val) = ctx.get_current_stage_input_cid(&key) {
-            self.write_string_to_mem(&mut caller, &cid_val, cid_buf_ptr, cid_buf_len)
-        } else {
-            Ok(HostAbiError::NotSupported as i32)
-        }
-    }
-
-    // **II. Status & Progress Reporting **
-    fn host_job_report_progress(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        percentage: u8,
-        status_message_ptr: u32,
-        status_message_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let message = self.read_string_from_mem(&mut caller, status_message_ptr, status_message_len)?;
-        let host_env = caller.data();
-        let mut ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        ctx.report_progress(percentage, Some(message));
-        Ok(0)
-    }
-
-    fn host_workflow_complete_current_stage(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        output_cid_ptr: u32,
-        output_cid_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let output_cid_str = self.read_string_from_mem(&mut caller, output_cid_ptr, output_cid_len)?;
-        let host_env = caller.data();
-        let mut ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        ctx.complete_current_stage(Some(output_cid_str));
-        Ok(0)
-    }
-
-    // **III. Interactivity **
-    fn host_interactive_send_output(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        payload_ptr: u32,
-        payload_len: u32,
-        output_key_ptr: u32,
-        output_key_len: u32,
-        is_final_chunk: i32,
-    ) -> Result<i32, anyhow::Error> {
-        let payload = self.read_bytes_from_mem(&mut caller, payload_ptr, payload_len)?;
-        let output_key = self.read_string_from_mem(&mut caller, output_key_ptr, output_key_len)?;
-
-        let host_env = caller.data();
-        let mut ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-
-        ctx.last_output_key = Some(output_key);
-        Ok(0)
-    }
-
-    fn host_interactive_receive_input(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        buffer_ptr: u32,
-        buffer_len: u32,
-        timeout_ms: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let mut ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-
-        if let Some(data) = ctx.try_receive_input(Some(timeout_ms as u64)) {
-            let len_written = self.write_bytes_to_mem(&mut caller, &data, buffer_ptr, buffer_len)?;
-            return Ok(len_written);
-        }
-        Ok(0) // No data available
-    }
-
-    fn host_interactive_peek_input_len(
-        &self,
-        caller: Caller<'_, ConcreteHostEnvironment>,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        Ok(ctx.peek_input_len(None) as i32)
-    }
-
-    fn host_interactive_prompt_for_input(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        prompt_cid_ptr: u32,
-        prompt_cid_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let prompt_cid = self.read_string_from_mem(&mut caller, prompt_cid_ptr, prompt_cid_len)?;
-        let host_env = caller.data();
-        let mut ctx = host_env
-            .ctx
-            .try_lock()
-            .map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-        ctx.last_prompt_cid = Some(prompt_cid);
-        Ok(0)
-    }
-
-    // **IV. Data Handling & Storage **
-    fn host_data_read_cid(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        cid_ptr: u32,
-        cid_len: u32,
-        offset: u64,
-        buffer_ptr: u32,
-        buffer_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        Ok(HostAbiError::NotSupported as i32)
-    }
-
-    fn host_data_write_buffer(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        data_ptr: u32,
-        data_len: u32,
-        cid_buf_ptr: u32,
-        cid_buf_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let data = self.read_bytes_from_mem(&mut caller, data_ptr, data_len)?;
-        let _ = data;
-        let _ = cid_buf_ptr;
-        let _ = cid_buf_len;
-        Ok(HostAbiError::NotSupported as i32)
-    }
-
-    // **V. Logging **
-    fn host_log_message(
-        &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        level: LogLevel,
-        message_ptr: u32,
-        message_len: u32,
-    ) -> Result<i32, anyhow::Error> {
-        let msg = self.read_string_from_mem(&mut caller, message_ptr, message_len)?;
-        let job_id_str = {
-            let host_env = caller.data();
-            let ctx_guard = host_env.ctx.try_lock().map_err(|_| anyhow!(HostAbiError::UnknownError))?;
-            ctx_guard.job_id.to_string()
+            None
         };
-
-        match level {
-            LogLevel::Error => tracing::error!(job_id = %job_id_str, guest_log = %msg),
-            LogLevel::Warn => tracing::warn!(job_id = %job_id_str, guest_log = %msg),
-            LogLevel::Info => tracing::info!(job_id = %job_id_str, guest_log = %msg),
-            LogLevel::Debug => tracing::debug!(job_id = %job_id_str, guest_log = %msg),
-            LogLevel::Trace => tracing::trace!(job_id = %job_id_str, guest_log = %msg),
-            _ => tracing::debug!(job_id = %job_id_str, guest_log = %msg, "Unknown log level from guest"),
-        }
+        let mut ctx = self.ctx.lock().await;
+        ctx.begin_section(kind, title)?;
         Ok(0)
     }
 
-    // ---------------- Mana stubs ----------------
-
-    async fn host_account_get_mana(
+    async fn host_end_section(
         &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _did_ptr: u32,
-        _did_len: u32,
-    ) -> Result<i64, anyhow::Error> {
-        let host_env = caller.data();
-        let did_str = host_env.read_string_from_mem(&mut caller, _did_ptr, _did_len)?;
-        let did = Did::from_str(&did_str).map_err(|e| anyhow!(e).context(HostAbiError::InvalidDIDFormat))?;
-
-        match self.rt.mana_repository().get_mana_state(&did).await {
-            Ok(Some(mana_state)) => Ok(mana_state.current_mana as i64),
-            Ok(None) => Ok(0),
-            Err(_repo_err) => {
-                Err(anyhow!(HostAbiError::StorageError))
-            }
-        }
+        _caller: wasmtime::Caller<'_, T>,
+    ) -> Result<i32, HostAbiError> {
+        let mut ctx = self.ctx.lock().await;
+        ctx.end_section()?;
+        Ok(0)
     }
 
-    async fn host_account_spend_mana(
+    async fn host_set_property(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        did_ptr: u32,
-        did_len: u32,
-        amount: u64,
-    ) -> Result<i32, anyhow::Error> {
-        let host_env = caller.data();
-        let did_str = self.read_string_from_mem(&mut caller, did_ptr, did_len)?;
-        let did = Did::from_str(&did_str).map_err(|e| anyhow!("Invalid DID: {}", e))?;
+        mut caller: wasmtime::Caller<'_, T>,
+        key_ptr: u32,
+        key_len: u32,
+        value_json_ptr: u32,
+        value_json_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let key = self.read_string_from_mem(&mut caller, key_ptr, key_len)?;
+        let value_json = self.read_string_from_mem(&mut caller, value_json_ptr, value_json_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.set_property(key, value_json)?;
+        Ok(0)
+    }
 
-        // TODO: Determine if we use host_env.caller_did or the provided did_str for scope_key
-        // For now, assume the provided DID is the one whose mana is spent,
-        // and the scope_key (potentially derived from caller_did or org context) determines the ledger.
-        let scope = host_env.scope_key();
-        let mana_ledger = host_env.rt.mana_ledger.clone();
+    async fn host_anchor_data(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        path_ptr: u32,
+        path_len: u32,
+        data_ref_ptr: u32,
+        data_ref_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let path = self.read_string_from_mem(&mut caller, path_ptr, path_len)?;
+        let data_ref = self.read_string_from_mem(&mut caller, data_ref_ptr, data_ref_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.anchor_data(path, data_ref)?;
+        Ok(0)
+    }
 
-        match mana_ledger.spend(&did, amount, &scope).await {
-            Ok(_) => Ok(HostAbiError::Success as i32),
-            Err(ManaError::InsufficientBalance) => Ok(HostAbiError::InsufficientBalance as i32),
-            Err(e) => {
-                error!("Error spending mana for DID {}: {:?}", did_str, e);
-                Err(anyhow!("Failed to spend mana: {}", e))
-            }
-        }
+    async fn host_generic_call(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        fn_name_ptr: u32,
+        fn_name_len: u32,
+        args_payload_ptr: u32,
+        args_payload_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let fn_name = self.read_string_from_mem(&mut caller, fn_name_ptr, fn_name_len)?;
+        let args_payload = self.read_string_from_mem(&mut caller, args_payload_ptr, args_payload_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.generic_call(fn_name, args_payload)?;
+        Ok(0)
+    }
+
+    async fn host_create_proposal(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        id_ptr: u32,
+        id_len: u32,
+        title_ptr: u32,
+        title_len: u32,
+        version_ptr: u32,
+        version_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let id = self.read_string_from_mem(&mut caller, id_ptr, id_len)?;
+        let title = self.read_string_from_mem(&mut caller, title_ptr, title_len)?;
+        let version = self.read_string_from_mem(&mut caller, version_ptr, version_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.create_proposal(id, title, version)?;
+        Ok(0)
+    }
+
+    async fn host_mint_token(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        res_type_ptr: u32,
+        res_type_len: u32,
+        amount: i64,
+        recip_ptr: u32,
+        recip_len: u32,
+        data_json_ptr: u32,
+        data_json_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let res_type = self.read_string_from_mem(&mut caller, res_type_ptr, res_type_len)?;
+        let recipient = if recip_len > 0 {
+            Some(self.read_string_from_mem(&mut caller, recip_ptr, recip_len)?)
+        } else {
+            None
+        };
+        let data_json = if data_json_len > 0 {
+            Some(self.read_string_from_mem(&mut caller, data_json_ptr, data_json_len)?)
+        } else {
+            None
+        };
+        let mut ctx = self.ctx.lock().await;
+        ctx.mint_token(res_type, amount, recipient, data_json)?;
+        Ok(0)
+    }
+
+    async fn host_if_condition_eval(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        condition_str_ptr: u32,
+        condition_str_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let condition_str = self.read_string_from_mem(&mut caller, condition_str_ptr, condition_str_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.if_condition_eval(condition_str)?;
+        Ok(0) // Host evaluation controls flow, no direct bool return to WASM per spec
+    }
+
+    async fn host_else_handler(
+        &self,
+        _caller: wasmtime::Caller<'_, T>,
+    ) -> Result<i32, HostAbiError> {
+        let mut ctx = self.ctx.lock().await;
+        ctx.else_handler()?;
+        Ok(0)
+    }
+
+    async fn host_endif_handler(
+        &self,
+        _caller: wasmtime::Caller<'_, T>,
+    ) -> Result<i32, HostAbiError> {
+        let mut ctx = self.ctx.lock().await;
+        ctx.endif_handler()?;
+        Ok(0)
+    }
+
+    async fn host_log_todo(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        msg_ptr: u32,
+        msg_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let msg = self.read_string_from_mem(&mut caller, msg_ptr, msg_len)?;
+        // Assuming a logging mechanism on ConcreteHostEnvironment or globally available
+        // e.g., self.logger.log_todo(msg);
+        tracing::warn!("[TODO FROM WASM]: {}", msg); // Or self.ctx.log_todo(msg)
+        Ok(0)
+    }
+
+    async fn host_on_event(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        event_ptr: u32,
+        event_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let event_name = self.read_string_from_mem(&mut caller, event_ptr, event_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.on_event(event_name)?;
+        Ok(0)
+    }
+
+    async fn host_log_debug_deprecated(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        msg_ptr: u32,
+        msg_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let msg = self.read_string_from_mem(&mut caller, msg_ptr, msg_len)?;
+        tracing::debug!("[DEBUG_DEPRECATED FROM WASM]: {}", msg);
+        Ok(0)
+    }
+
+    async fn host_range_check(
+        &self,
+        _caller: wasmtime::Caller<'_, T>,
+        start_val: f64,
+        end_val: f64,
+    ) -> Result<i32, HostAbiError> {
+        let mut ctx = self.ctx.lock().await;
+        ctx.range_check(start_val, end_val)?;
+        Ok(0)
+    }
+
+    async fn host_use_resource(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        resource_type_ptr: u32,
+        resource_type_len: u32,
+        amount: i64,
+    ) -> Result<i32, HostAbiError> {
+        let resource_type = self.read_string_from_mem(&mut caller, resource_type_ptr, resource_type_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.use_resource(resource_type, amount)?;
+        Ok(0)
+    }
+
+    async fn host_transfer_token(
+        &self,
+        mut caller: wasmtime::Caller<'_, T>,
+        token_type_ptr: u32,
+        token_type_len: u32,
+        amount: i64,
+        sender_ptr: u32,
+        sender_len: u32,
+        recipient_ptr: u32,
+        recipient_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let token_type = self.read_string_from_mem(&mut caller, token_type_ptr, token_type_len)?;
+        let sender = if sender_len > 0 {
+            Some(self.read_string_from_mem(&mut caller, sender_ptr, sender_len)?)
+        } else {
+            None
+        };
+        let recipient = self.read_string_from_mem(&mut caller, recipient_ptr, recipient_len)?;
+        let mut ctx = self.ctx.lock().await;
+        ctx.transfer_token(token_type, amount, sender, recipient)?;
+        Ok(0)
     }
 
     async fn host_submit_mesh_job(
         &self,
-        mut caller: Caller<'_, ConcreteHostEnvironment>,
-        job_data_ptr: u32,
-        job_data_len: u32,
-    ) -> Result<u64, anyhow::Error> {
-        let job_data = self.read_bytes_from_mem(&mut caller, job_data_ptr, job_data_len)?;
-        // Using debug print for potentially large/binary data. Consider hex for better readability if needed.
-        println!(
-            "FULL ABI: host_submit_mesh_job called. Job data ({} bytes): {:?}",
-            job_data.len(),
-            job_data 
-        );
-        // TODO: Actually deserialize job_data (e.g., MeshJobParams) and submit the job to the mesh network.
-        // This would involve interacting with other parts of the runtime or a P2P layer.
-        // For now, returning a dummy job ID.
-        Ok(1) // Dummy job ID for full ABI
-    }
-}
-
-#[cfg(not(feature = "full_host_abi"))]
-#[async_trait::async_trait]
-impl MeshHostAbi<ConcreteHostEnvironment> for ConcreteHostEnvironment {
-    fn host_job_get_id(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _ptr: u32,
-        _len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_job_get_initial_input_cid(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _ptr: u32,
-        _len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_job_is_interactive(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_workflow_get_current_stage_index(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_workflow_get_current_stage_id(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _ptr: u32,
-        _len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_workflow_get_current_stage_input_cid(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _key_ptr: u32,
-        _key_len: u32,
-        _cid_ptr: u32,
-        _cid_len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_job_report_progress(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _pct: u8,
-        _msg_ptr: u32,
-        _msg_len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_workflow_complete_current_stage(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _cid_ptr: u32,
-        _cid_len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_interactive_send_output(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _payload_ptr: u32,
-        _payload_len: u32,
-        _key_ptr: u32,
-        _key_len: u32,
-        _is_final: i32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_interactive_receive_input(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _buffer_ptr: u32,
-        _buffer_len: u32,
-        _timeout_ms: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_interactive_peek_input_len(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_interactive_prompt_for_input(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _ptr: u32,
-        _len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_data_read_cid(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _cid_ptr: u32,
-        _cid_len: u32,
-        _offset: u64,
-        _buffer_ptr: u32,
-        _buffer_len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_data_write_buffer(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _data_ptr: u32,
-        _data_len: u32,
-        _cid_buf_ptr: u32,
-        _cid_buf_len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    fn host_log_message(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _level: LogLevel,
-        _ptr: u32,
-        _len: u32,
-    ) -> Result<i32, anyhow::Error> { Ok(HostAbiError::NotSupported as i32) }
-
-    async fn host_account_get_mana(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _did_ptr: u32,
-        _did_len: u32,
-    ) -> Result<i64, anyhow::Error> {
-        // For stubs, the DID argument might not be easily usable without reading memory.
-        // The current stub returns NotSupported, which is fine.
-        // If we wanted a more functional stub, we'd need a way to get a Did.
-        // However, the test shims bypass this entirely.
-        Ok(HostAbiError::NotSupported as i32 as i64)
-    }
-
-    async fn host_account_spend_mana(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        _did_ptr: u32,
-        _did_len: u32,
-        _amount: u64,
-    ) -> Result<i32, anyhow::Error> {
-        println!("STUB: host_account_spend_mana called");
-        Ok(HostAbiError::NotSupported as i32)
-    }
-
-    async fn host_submit_mesh_job(
-        &self,
-        _caller: Caller<'_, ConcreteHostEnvironment>,
-        job_data_ptr: u32,
-        job_data_len: u32,
-    ) -> Result<u64, anyhow::Error> {
-        println!(
-            "STUB ABI: host_submit_mesh_job called with job_data_ptr: {}, job_data_len: {}",
-            job_data_ptr, job_data_len
-        );
-        Ok(0) // Dummy job ID for stub ABI
+        mut caller: wasmtime::Caller<'_, T>,
+        cbor_payload_ptr: u32,
+        cbor_payload_len: u32,
+        job_id_buffer_ptr: u32,
+        job_id_buffer_len: u32,
+    ) -> Result<i32, HostAbiError> {
+        let cbor_payload = self.read_bytes_from_mem(&mut caller, cbor_payload_ptr, cbor_payload_len)?;
+        let mut ctx = self.ctx.lock().await;
+        // The context method needs to be able to write back to WASM memory for the job_id
+        // This might involve passing the memory, caller, or a specific write helper to it.
+        let job_id_len = ctx.submit_mesh_job(
+            cbor_payload, 
+            // A way to write back:
+            |job_id_str| self.write_string_to_mem(&mut caller, job_id_buffer_ptr, job_id_buffer_len, job_id_str)
+        )?;
+        Ok(job_id_len as i32)
     }
 }
 
 #[cfg(test)]
-impl ConcreteHostEnvironment {
+impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
     pub async fn test_host_account_get_mana(
         &self,
         did: &Did, // The DID whose mana is being fetched
