@@ -26,6 +26,7 @@ use serde::Serialize;
 // use wasmtime::{Caller, Linker};
 // use anyhow::Error as AnyhowError; // Seems unused by MeshHostAbi
 use async_trait::async_trait;
+use wasmtime::Caller;
 
 // Corrected import: only include types that exist in icn_types::mesh
 use icn_types::mesh::{
@@ -300,163 +301,156 @@ pub fn vec_from_abi_bytes(abi_bytes: AbiBytes) -> Result<Vec<u8>, HostAbiError> 
     unsafe { Ok(slice::from_raw_parts(abi_bytes.ptr, abi_bytes.len as usize).to_vec()) }
 }
 
-#[async_trait]
-pub trait MeshHostAbi<T = ()>: Send + Sync
-where
-    T: Send + Sync, // Ensure T is Send + Sync for ConcreteHostEnvironment<T>
-{
-    // Host Function 0: begin_section
+/// Defines the interface for host functions callable from WASM modules
+/// that implement the ICN Mesh ABI.
+///
+/// S is the StoreData type that will be used with Wasmtime.
+#[async_trait::async_trait]
+pub trait MeshHostAbi<S: Send + Sync + 'static>: Send + Sync {
+    // Section Management
     async fn host_begin_section(
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
         kind_ptr: u32,
         kind_len: u32,
         title_ptr: u32,
         title_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 1: end_section
-    async fn host_end_section(
-        &self,
-        caller: wasmtime::Caller<'_, T>,
-    ) -> Result<i32, HostAbiError>;
+    async fn host_end_section(&self, mut caller: Caller<'_, S>) -> Result<i32, HostAbiError>;
 
-    // Host Function 2: set_property
+    // Property Management (within sections)
     async fn host_set_property(
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
         key_ptr: u32,
         key_len: u32,
         value_json_ptr: u32,
         value_json_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 3: anchor_data
+    // Data Anchoring
     async fn host_anchor_data(
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
         path_ptr: u32,
         path_len: u32,
-        data_ref_ptr: u32,
+        data_ref_ptr: u32, // CID of data to anchor, as string
         data_ref_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 4: generic_call
+    // Generic Host Call (for extensibility, e.g., specific service interactions)
     async fn host_generic_call(
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
         fn_name_ptr: u32,
         fn_name_len: u32,
-        args_payload_ptr: u32,
+        args_payload_ptr: u32, // CBOR encoded arguments
         args_payload_len: u32,
-    ) -> Result<i32, HostAbiError>;
+    ) -> Result<i32, HostAbiError>; // Returns CBOR encoded result or error
 
-    // Host Function 5: create_proposal
+    // Proposal and Workflow Management (Conceptual)
     async fn host_create_proposal(
         &self,
-        caller: wasmtime::Caller<'_, T>,
-        id_ptr: u32,
+        mut caller: Caller<'_, S>,
+        id_ptr: u32, // String: DID or unique ID for the proposal context
         id_len: u32,
-        title_ptr: u32,
+        title_ptr: u32, // String
         title_len: u32,
-        version_ptr: u32,
+        version_ptr: u32, // String (e.g., "1.0", "git-sha")
         version_len: u32,
-    ) -> Result<i32, HostAbiError>;
+        // Further params might define proposal type, target coop, etc.
+    ) -> Result<i32, HostAbiError>; // Returns proposal_handle or error
 
-    // Host Function 6: mint_token
-    async fn host_mint_token(
+    // Token/Resource Management
+    async fn host_mint_token( // Or a more generic "manage_resource"
         &self,
-        caller: wasmtime::Caller<'_, T>,
-        res_type_ptr: u32,
-        res_type_len: u32,
-        amount: i64,
-        recip_ptr: u32,
-        recip_len: u32,
-        data_json_ptr: u32,
+        mut caller: Caller<'_, S>,
+        resource_type_ptr: u32, // String: e.g., "ccl_credits", "storage_gb_hours"
+        resource_type_len: u32,
+        amount: u64, // Can be positive (mint/allocate) or negative (burn/revoke) - design choice
+        recipient_did_ptr: u32, // String: DID of recipient
+        recipient_did_len: u32,
+        data_json_ptr: u32, // Optional JSON metadata for the transaction/ledger entry
         data_json_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 7: if_condition_eval
+    // Conditional Logic Support
     async fn host_if_condition_eval(
         &self,
-        caller: wasmtime::Caller<'_, T>,
-        condition_str_ptr: u32,
+        mut caller: Caller<'_, S>,
+        condition_str_ptr: u32, // String: human-readable condition or scriptlet
         condition_str_len: u32,
-    ) -> Result<i32, HostAbiError>;
+        // Potentially args_payload for the condition evaluation context
+    ) -> Result<i32, HostAbiError>; // 0 for false, 1 for true, <0 for error
 
-    // Host Function 8: else_handler
-    async fn host_else_handler(
+    async fn host_else_handler(&self, mut caller: Caller<'_, S>) -> Result<i32, HostAbiError>; // Marks an 'else' block start
+
+    async fn host_endif_handler(&self, mut caller: Caller<'_, S>) -> Result<i32, HostAbiError>; // Marks an 'endif' block end
+
+    // Logging and Diagnostics
+    async fn host_log_todo( // For "TODO: implement this logic" style messages
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
+        message_ptr: u32,
+        message_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 9: endif_handler
-    async fn host_endif_handler(
+    // Event Handling (Conceptual)
+    async fn host_on_event( // Register a handler for a specific event type
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
+        event_name_ptr: u32, // String: e.g., "proposal_approved", "job_completed"
+        event_name_len: u32,
+        // callback_idx: u32, // Index in WASM table for the callback function
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 10: log_todo
-    async fn host_log_todo(
-        &self,
-        caller: wasmtime::Caller<'_, T>,
-        msg_ptr: u32,
-        msg_len: u32,
-    ) -> Result<i32, HostAbiError>;
-
-    // Host Function 11: on_event
-    async fn host_on_event(
-        &self,
-        caller: wasmtime::Caller<'_, T>,
-        event_ptr: u32,
-        event_len: u32,
-    ) -> Result<i32, HostAbiError>;
-
-    // Host Function 12: log_debug_deprecated
+    // Deprecated log for job status, use specific event or section properties
     async fn host_log_debug_deprecated(
         &self,
-        caller: wasmtime::Caller<'_, T>,
-        msg_ptr: u32,
-        msg_len: u32,
+        mut caller: Caller<'_, S>,
+        message_ptr: u32,
+        message_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 13: range_check
-    async fn host_range_check(
-        &self,
-        caller: wasmtime::Caller<'_, T>,
-        start_val: f64,
-        end_val: f64,
-    ) -> Result<i32, HostAbiError>;
 
-    // Host Function 14: use_resource
-    async fn host_use_resource(
+    // Resource Accounting / Range Checks
+    async fn host_range_check( // Simple numeric range check
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
+        value: i64,
+        min_val: i64,
+        max_val: i64,
+    ) -> Result<i32, HostAbiError>; // 0 if in range, error code otherwise
+
+
+    async fn host_use_resource( // Explicitly request/use a named resource
+        &self,
+        mut caller: Caller<'_, S>,
         resource_type_ptr: u32,
         resource_type_len: u32,
-        amount: i64,
+        amount: u64,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 15: transfer_token
+
     async fn host_transfer_token(
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
         token_type_ptr: u32,
         token_type_len: u32,
-        amount: i64,
-        sender_ptr: u32,
-        sender_len: u32,
-        recipient_ptr: u32,
-        recipient_len: u32,
+        amount: u64,
+        sender_did_ptr: u32,
+        sender_did_len: u32,
+        recipient_did_ptr: u32,
+        recipient_did_len: u32,
     ) -> Result<i32, HostAbiError>;
 
-    // Host Function 16: host_submit_mesh_job
     async fn host_submit_mesh_job(
         &self,
-        caller: wasmtime::Caller<'_, T>,
+        mut caller: Caller<'_, S>,
         cbor_payload_ptr: u32,
         cbor_payload_len: u32,
-        job_id_buffer_ptr: u32,
-        job_id_buffer_len: u32,
-    ) -> Result<i32, HostAbiError>;
+        job_id_buffer_ptr: u32,   // Pointer to a buffer to write the job ID string
+        job_id_buffer_len: u32, // Length of the job ID buffer
+    ) -> Result<i32, HostAbiError>; // Returns length of written job ID or error
 }

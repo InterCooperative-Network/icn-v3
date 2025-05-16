@@ -7,7 +7,7 @@ use icn_identity::{KeyPair, TrustValidator, Did}; // Added Did here as it's used
 use icn_economics::{Economics, LedgerKey, mana::{ManaManager, RegenerationPolicy}, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter}; // ResourceType removed, Added RegenerationPolicy
 use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
 use icn_identity::IdentityIndex;
-use icn_types::dag_store::{SharedDagStore, DagStore};
+use icn_types::dag_store::{SharedDagStore, DagStore}; // Removed DagError, DagStoreBatch
 use icn_types::dag::DagNode; // Changed from: use icn_types::dag::{DagNode, DagNodeIdentifier};
 use icn_types::mesh::MeshJob;
 use std::collections::HashMap;
@@ -408,13 +408,26 @@ impl<L: ManaLedger + Send + Sync + Default + 'static> Default for RuntimeContext
     }
 }
 
-impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
+impl RuntimeContext<InMemoryManaLedger> {
     pub fn minimal_for_testing() -> Self {
         use icn_identity::Did;
         use std::str::FromStr;
 
+        // Dummy DagError for FallbackDagStore if real one is not more specific
+        // This is a placeholder. Ideally, icn_types::dag_store::DagError would be used and have appropriate variants.
+        #[derive(Debug)]
+        enum MinimalDagError { Other(String) }
+        impl std::fmt::Display for MinimalDagError { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{:?}", self) } }
+        impl std::error::Error for MinimalDagError {}
+
+        impl From<anyhow::Error> for MinimalDagError {
+            fn from(e: anyhow::Error) -> Self {
+                MinimalDagError::Other(e.to_string())
+            }
+        }
+
         let test_federation_did_str = "did:icn:federation:test_fixture";
-        let test_node_did_str = "did:icn:node:test_fixture";
+        // let test_node_did_str = "did:icn:node:test_fixture"; // Unused
 
         let federation_did = Did::from_str(test_federation_did_str)
             .expect("Failed to parse test_federation_did_str for RuntimeContext::minimal_for_testing. Check DID format and feature flags.");
@@ -422,55 +435,90 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
         let test_keypair = KeyPair::generate();
         let node_did = test_keypair.did.clone();
 
-        #[cfg(feature = "testing_utils")]
-        let dag_store_instance = Arc::new(mock_dag_store::InMemoryDagStore::new());
+        // Always use a shared in-memory DAG store for testing minimal_for_testing
+        let dag_store_instance = Arc::new(SharedDagStore::new());
+        let receipt_store_instance = Arc::new(SharedDagStore::new());
+
+        let mana_ledger = Arc::new(InMemoryManaLedger::new()); // L is InMemoryManaLedger for tests
+        let mana_repository = Arc::new(ManaRepositoryAdapter::new(mana_ledger.clone()));
+        
+        // ResourcePolicyEnforcer requires Box<dyn ResourceRepository>
+        // Create a new ManaRepositoryAdapter for the enforcer's Box.
+        let boxed_mana_repo_for_enforcer: Box<dyn ResourceRepository> = 
+            Box::new(ManaRepositoryAdapter::new(mana_ledger.clone()));
+        let policy_enforcer = Arc::new(ResourcePolicyEnforcer::new(boxed_mana_repo_for_enforcer));
+        
+        // RuntimeConfig is not directly part of RuntimeContext anymore based on struct definition
+        // let mut default_config = RuntimeConfig::default();
+        // default_config.node_did = node_did.to_string();
+
+        RuntimeContext {
+            federation_id: Some(federation_did.to_string()), // Changed to String
+            identity: Some(test_keypair),          // Changed from Arc<KeyPair> to KeyPair
+            executor_id: Some(node_did.to_string()), // Used executor_id instead of node_did, changed to String
+            dag_store: dag_store_instance, // Should be Arc<SharedDagStore>
+            
+            // These fields seem to align with the struct definition if L = InMemoryManaLedger
+            mana_regenerator: Some(Arc::new(ManaRegenerator::new(
+                mana_ledger, // This is Arc<InMemoryManaLedger>, should now match Arc<L> because L is InMemoryManaLedger
+                RegenerationPolicy::FixedRatePerTick(10),
+            ))),
+            trust_validator: None,
+            identity_index: None,
+            policy_enforcer, // Arc<ResourcePolicyEnforcer>
+            mana_repository, // Arc<ManaRepositoryAdapter<InMemoryManaLedger>>, matches field if L is InMemoryManaLedger
+
+            // Defaults for other fields from RuntimeContext::new() or builder
+            receipt_store: receipt_store_instance,
+            economics: Arc::new(Economics::new(ResourceAuthorizationPolicy::default())),
+            resource_ledger: Arc::new(RwLock::new(HashMap::new())),
+            pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
+            mana_manager: Arc::new(Mutex::new(ManaManager::new())),
+            interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
+            execution_status: ExecutionStatus::Running,
+            reputation_service_url: None,
+            mesh_job_service_url: None,
+            reputation_scoring_config: ReputationScoringConfig::default(),
+            mana_tick_interval: None,
+            // Removed 'config' field
+            // Removed 'node_did' (using executor_id)
+            // Removed 'mana_ledger' (not a direct field)
+        }
+    }
+}
+
+// FallbackDagStore - This is no longer used by minimal_for_testing directly, 
+// but if it were to be used, it would need to correctly implement DagStore.
+// For now, I'm commenting it out to avoid further errors with it, as minimal_for_testing
+// now directly uses SharedDagStore::new().
+/*
         #[cfg(not(feature = "testing_utils"))]
         let dag_store_instance = {
             struct FallbackDagStore;
             #[async_trait::async_trait]
             impl DagStore for FallbackDagStore {
-                async fn get(&self, _id: &str) -> anyhow::Result<Option<icn_types::dag::DagNode>> { Ok(None) }
-                async fn insert(&self, node: icn_types::dag::DagNode) -> anyhow::Result<()> { 
-                    let _cid = node.cid().map_err(|e| anyhow::anyhow!("Failed to get CID in FallbackDagStore: {}", e))?;
+                async fn get(&self, _id: &str) -> Result<Option<icn_types::dag::DagNode>, MinimalDagError> { Ok(None) } // Changed error type
+                async fn insert(&self, node: icn_types::dag::DagNode) -> Result<(), MinimalDagError> {  // Changed error type
+                    let _cid = node.cid().map_err(|e| MinimalDagError::Other(format!("Failed to get CID in FallbackDagStore: {}",e)))?;
                     Ok(())
                 }
-                async fn remove(&self, _id: &str) -> anyhow::Result<()> { Ok(()) }
-                async fn list(&self) -> anyhow::Result<Vec<icn_types::dag::DagNode>> {Ok(vec![])}
+                async fn remove(&self, _id: &str) -> Result<(), MinimalDagError> { Ok(()) } // Changed error type
+                async fn list(&self) -> Result<Vec<icn_types::dag::DagNode>, MinimalDagError> {Ok(vec![])} // Changed error type
+                
+                // Add missing begin_batch
+                async fn begin_batch(&self) -> Result<Box<dyn DagStoreBatch>, MinimalDagError> { // Changed error type
+                    // Return a dummy batch. This needs a concrete type that implements DagStoreBatch.
+                    struct DummyBatch;
+                    #[async_trait::async_trait]
+                    impl DagStoreBatch for DummyBatch {
+                        async fn insert(&mut self, _node: DagNode) -> Result<(), MinimalDagError> { Ok(()) }
+                        async fn remove(&mut self, _id: &str) -> Result<(), MinimalDagError> { Ok(()) }
+                        async fn commit(self: Box<Self>) -> Result<(), MinimalDagError> { Ok(()) }
+                        async fn discard(self: Box<Self>) -> Result<(), MinimalDagError> { Ok(()) }
+                    }
+                    Ok(Box::new(DummyBatch))
+                }
             }
             Arc::new(FallbackDagStore)
         };
-
-        let mana_ledger = Arc::new(InMemoryManaLedger::new());
-        let mana_repository = Arc::new(ManaRepositoryAdapter::new(mana_ledger.clone()));
-        let policy_enforcer = Arc::new(ResourcePolicyEnforcer::default());
-        
-        let mut default_config = RuntimeConfig::default();
-        default_config.node_did = node_did.to_string();
-
-        RuntimeContext {
-            federation_id: Some(federation_did),
-            identity: Some(Arc::new(test_keypair)),
-            node_did: Some(node_did),
-            dag_store: dag_store_instance,
-            mana_ledger: Some(mana_ledger.clone()),
-            mana_regenerator: Some(Arc::new(ManaRegenerator::new(
-                mana_ledger,
-                RegenerationPolicy::FixedRatePerTick(10),
-            ))),
-            trust_validator: None,
-            identity_index: None,
-            policy_enforcer,
-            mana_repository,
-            config: Arc::new(default_config),
-            receipt_store: Arc::new(SharedDagStore::new()),
-            pending_mesh_jobs: Arc::new(Mutex::new(VecDeque::new())),
-            mana_manager: Arc::new(Mutex::new(ManaManager::new())),
-            execution_status: ExecutionStatus::Running,
-            interactive_input_queue: Arc::new(Mutex::new(VecDeque::new())),
-            reputation_service_url: None,
-            mesh_job_service_url: None,
-            reputation_scoring_config: ReputationScoringConfig::default(),
-            mana_tick_interval: None,
-        }
-    }
-}
+*/
