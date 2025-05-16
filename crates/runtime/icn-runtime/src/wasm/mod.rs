@@ -1,4 +1,5 @@
 pub mod linker;
+pub mod linker_legacy_impl;
 
 pub use linker::{register_host_functions, StoreData};
 

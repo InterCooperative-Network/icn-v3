@@ -41,6 +41,12 @@ pub enum HostAbiError {
     ChannelClosed,
     #[error("Insufficient balance")]
     InsufficientBalance,
+    #[error("Invalid DID string: {0}")]
+    InvalidDid(String),
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
+    #[error("Resource management error: {0}")]
+    ResourceManagementError(String),
     // Consider adding other specific errors if needed, e.g.:
     // #[error("WASM guest module did not export a 'memory'")]
     // MissingMemory,

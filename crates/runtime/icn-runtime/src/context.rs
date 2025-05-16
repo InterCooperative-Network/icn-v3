@@ -4,7 +4,7 @@ use icn_identity::{KeyPair, TrustValidator, Did}; // Added Did here as it's used
 // use icn_metrics::runtime::RuntimeMetrics;
 // use icn_reputation_integration::{HttpReputationUpdater, ReputationUpdater}; // Removed as per clippy
 // use icn_mesh_protocol::MeshJobServiceConfig; // Removed as per clippy (grep showed only import line)
-use icn_economics::{Economics, LedgerKey, mana::{ManaManager, RegenerationPolicy}, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter}; // ResourceType removed, Added RegenerationPolicy
+use icn_economics::{Economics, LedgerKey, mana::{ManaManager, RegenerationPolicy}, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter, ResourceRepository}; // ResourceType removed, Added RegenerationPolicy, ResourceRepository
 use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
 use icn_identity::IdentityIndex;
 use icn_types::dag_store::{SharedDagStore, DagStore}; // Removed DagError, DagStoreBatch
@@ -444,7 +444,7 @@ impl RuntimeContext<InMemoryManaLedger> {
         
         // ResourcePolicyEnforcer requires Box<dyn ResourceRepository>
         // Create a new ManaRepositoryAdapter for the enforcer's Box.
-        let boxed_mana_repo_for_enforcer: Box<dyn ResourceRepository> = 
+        let boxed_mana_repo_for_enforcer: Box<dyn icn_economics::ResourceRepository> = // Fully qualified
             Box::new(ManaRepositoryAdapter::new(mana_ledger.clone()));
         let policy_enforcer = Arc::new(ResourcePolicyEnforcer::new(boxed_mana_repo_for_enforcer));
         

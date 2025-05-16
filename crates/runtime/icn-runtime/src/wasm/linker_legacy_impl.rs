@@ -7,9 +7,9 @@ use anyhow::Result;
 use icn_identity::ScopeKey;
 use icn_mesh_receipts::ExecutionReceipt;
 use serde_cbor;
-use wasmtime::{Caller, Linker, Memory, Trap};
+use wasmtime::{Caller, Linker, Memory, Trap, AsContextMut};
 use anyhow::anyhow;
-use host_abi::{MeshHostAbi, LogLevel as HostAbiLogLevel}; // Renamed LogLevel to avoid conflict if linker_legacy_impl has its own
+use host_abi::{MeshHostAbi, LogLevel as HostAbiLogLevel, HostAbiError}; // Renamed LogLevel to avoid conflict if linker_legacy_impl has its own
 use icn_types::mesh::MeshJobParams; // For host_submit_mesh_job potentially later
 
 /// Minimal host_anchor_receipt implementation. Reads CBOR bytes from guest
