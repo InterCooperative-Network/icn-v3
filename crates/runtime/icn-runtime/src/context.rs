@@ -1,13 +1,14 @@
 // use crate::config::RuntimeConfig; // Removed unused import
 // use icn_core_vm::{HostContext, ResourceLimits}; // Removed HostContext, ResourceLimits. If VmType is used, it's on a different line or this import is now empty.
-use icn_identity::{KeyPair, TrustValidator}; // Removed Did, KeyPair as IcnKeyPair, TrustBundle
+use icn_identity::{KeyPair, TrustValidator, Did}; // Added Did here as it's used in minimal_for_testing
 // use icn_metrics::runtime::RuntimeMetrics;
 // use icn_reputation_integration::{HttpReputationUpdater, ReputationUpdater}; // Removed as per clippy
 // use icn_mesh_protocol::MeshJobServiceConfig; // Removed as per clippy (grep showed only import line)
-use icn_economics::{Economics, LedgerKey, mana::ManaManager, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter}; // ResourceType removed
+use icn_economics::{Economics, LedgerKey, mana::{ManaManager, RegenerationPolicy}, ResourceAuthorizationPolicy, ResourcePolicyEnforcer, ManaRepositoryAdapter}; // ResourceType removed, Added RegenerationPolicy
 use icn_economics::mana::{InMemoryManaLedger, ManaLedger, ManaRegenerator};
 use icn_identity::IdentityIndex;
-use icn_types::dag_store::SharedDagStore;
+use icn_types::dag_store::{SharedDagStore, DagStore};
+use icn_types::dag::DagNode; // Changed from: use icn_types::dag::{DagNode, DagNodeIdentifier};
 use icn_types::mesh::MeshJob;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
 use crate::reputation_integration::ReputationScoringConfig;
+use crate::config::RuntimeConfig; // Added import for RuntimeConfig
 // use crate::RuntimeStorage; // Removed unused import
 use std::time::Duration;
 
@@ -427,11 +429,13 @@ impl<L: ManaLedger + Send + Sync + 'static> RuntimeContext<L> {
             struct FallbackDagStore;
             #[async_trait::async_trait]
             impl DagStore for FallbackDagStore {
-                async fn get(&self, _id: &icn_types::dag::DagNodeIdentifier) -> anyhow::Result<Option<icn_types::dag::DagNode>> { Ok(None) }
-                async fn insert(&self, _node: icn_types::dag::DagNode) -> anyhow::Result<icn_types::dag::DagNodeIdentifier> { Err(anyhow::anyhow!("FallbackDagStore insert not impl")) }
-                async fn finalize(&self, _id: &icn_types::dag::DagNodeIdentifier) -> anyhow::Result<()> { Ok(()) }
-                async fn get_batch(&self, _ids: &[icn_types::dag::DagNodeIdentifier]) -> anyhow::Result<Vec<Option<icn_types::dag::DagNode>>> { Ok(vec![])}
-                async fn has(&self, _id: &icn_types::dag::DagNodeIdentifier) -> anyhow::Result<bool> { Ok(false) }
+                async fn get(&self, _id: &str) -> anyhow::Result<Option<icn_types::dag::DagNode>> { Ok(None) }
+                async fn insert(&self, node: icn_types::dag::DagNode) -> anyhow::Result<()> { 
+                    let _cid = node.cid().map_err(|e| anyhow::anyhow!("Failed to get CID in FallbackDagStore: {}", e))?;
+                    Ok(())
+                }
+                async fn remove(&self, _id: &str) -> anyhow::Result<()> { Ok(()) }
+                async fn list(&self) -> anyhow::Result<Vec<icn_types::dag::DagNode>> {Ok(vec![])}
             }
             Arc::new(FallbackDagStore)
         };
