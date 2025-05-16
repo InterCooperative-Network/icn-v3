@@ -1988,4 +1988,70 @@ Hosts MAY also allow this in any section where verifiable audit content is requi
 ```
 
 ---
+
+##### **5.3.4.4. `section.kind: disbursement`**
+
+#### **Description**
+
+Defines the transfer of funds, tokens, or other valuable resources to a specified recipient. This section serves as a record of intent (or outcome) for the disbursement of assets allocated in a proposal, budget, or agreement. Disbursements may be approved manually, governed by policy, or executed automatically.
+
+#### **Expected Parent `kind`(s) or Context**
+
+* `allocation_request`
+* `budget_definition`
+* `audit_trail`
+* `proposal`
+* `metadata`
+* Hosts MAY allow `disbursement` in any structural context where value transfer is part of execution.
+
+#### **Permitted Child `section.kind`(s)**
+
+* `metadata` (0 or more) — For context, authorship, jurisdiction, or legal basis.
+* `audit_trail` (0 or 1) — To include or link relevant verification or review materials.
+* `data_anchors_list` (0 or 1) — To anchor receipts, signed acknowledgements, or transaction hashes.
+
+#### **Schema Table for `props`**
+
+| Property Key           | Type   | Required | Description                                                                                       |
+|------------------------|--------|----------|---------------------------------------------------------------------------------------------------|
+| `recipient`            | String | Yes      | DID or role name of the disbursement recipient. Hosts SHOULD resolve to an addressable identity. |
+| `token_type`           | String | Yes      | The token or unit of value being disbursed (e.g., `ICN-F`, `USD`, `co-op_credit`, etc.).          |
+| `amount`               | Number | Yes      | Quantity to disburse. MUST be non-negative.                                                       |
+| `disbursement_date_iso`| String | No       | ISO 8601 date when the disbursement occurred or is scheduled.                                     |
+| `execution_status`     | String | No       | Status of the disbursement. Recommended values: `"pending"`, `"completed"`, `"cancelled"`, `"failed"`. |
+| `source_allocation_id` | String | No       | Optional reference to a specific `allocation_request` or budget item ID.                          |
+| `memo`                 | String | No       | Optional human-readable description of the disbursement purpose or context. Max 2048 characters.  |
+
+---
+
+#### **Notes**
+
+* `recipient` SHOULD resolve to a known DID, group, or role; hosts MAY restrict to valid proposal participants.
+* `token_type` MAY be validated against permitted currencies or resources defined in the cooperative, community, or federation.
+* `execution_status` is advisory and MAY be updated as part of lifecycle workflows.
+* If `source_allocation_id` is provided, hosts MAY verify the ID exists and matches an approved allocation or request.
+* The `disbursement` section MAY be declared in advance of execution (e.g., as a schedule or plan) or as a historical record (e.g., as part of an `audit_trail`).
+* Unlike `allocation_request`, the `amount` in `disbursement` MUST be a resolved numeric value. Hosts MUST ensure that it is compatible with the `token_type`'s allowed divisibility or minimum unit.
+
+---
+
+#### **Example JSON Snippet**
+
+```json
+{
+  "kind": "disbursement",
+  "title": "Initial Grant Transfer",
+  "props": {
+    "recipient": "did:coop:greenvillage#treasury",
+    "token_type": "ICN-F",
+    "amount": 5000,
+    "disbursement_date_iso": "2025-08-15",
+    "execution_status": "completed",
+    "source_allocation_id": "alloc-009",
+    "memo": "Seed funding for local resilience fund, phase 1"
+  }
+}
+```
+
+---
 </rewritten_file>
