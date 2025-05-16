@@ -18,6 +18,14 @@ use std::marker::PhantomData;
 // use icn_stable_memory_wasm::StableMemoryError; // Temporarily commented out
 // use icn_types::error::DagError; // Removed unused import
 
+#[cfg(test)]
+use icn_economics::{
+    mana::{ManaError, ManaLedger}, // ManaLedger might not be used directly but good for context
+    PolicyEnforcer, // Corrected path as per linter suggestion
+    ScopedResourceToken,    // Struct for tokens
+    ResourceRepository,   // Trait for get_usage, record_usage
+};
+
 /// Concrete implementation of the host environment for WASM execution
 #[derive(Clone)]
 pub struct ConcreteHostEnvironment<T: Send + Sync + 'static> {
@@ -212,9 +220,9 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         title_ptr: u32,
         title_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let kind = self.read_string_from_mem(&mut caller, kind_ptr, kind_len)?;
+        let kind = self.read_string_from_mem(&mut caller, kind_ptr, kind_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let title = if title_len > 0 {
-            Some(self.read_string_from_mem(&mut caller, title_ptr, title_len)?)
+            Some(self.read_string_from_mem(&mut caller, title_ptr, title_len).map_err(|_| HostAbiError::DataEncodingError)?)
         } else {
             None
         };
@@ -240,8 +248,8 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         value_json_ptr: u32,
         value_json_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let key = self.read_string_from_mem(&mut caller, key_ptr, key_len)?;
-        let value_json = self.read_string_from_mem(&mut caller, value_json_ptr, value_json_len)?;
+        let key = self.read_string_from_mem(&mut caller, key_ptr, key_len).map_err(|_| HostAbiError::DataEncodingError)?;
+        let value_json = self.read_string_from_mem(&mut caller, value_json_ptr, value_json_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.set_property(key, value_json)?;
         Ok(0)
@@ -255,8 +263,8 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         data_ref_ptr: u32,
         data_ref_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let path = self.read_string_from_mem(&mut caller, path_ptr, path_len)?;
-        let data_ref = self.read_string_from_mem(&mut caller, data_ref_ptr, data_ref_len)?;
+        let path = self.read_string_from_mem(&mut caller, path_ptr, path_len).map_err(|_| HostAbiError::DataEncodingError)?;
+        let data_ref = self.read_string_from_mem(&mut caller, data_ref_ptr, data_ref_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.anchor_data(path, data_ref)?;
         Ok(0)
@@ -270,8 +278,8 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         args_payload_ptr: u32,
         args_payload_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let fn_name = self.read_string_from_mem(&mut caller, fn_name_ptr, fn_name_len)?;
-        let args_payload = self.read_string_from_mem(&mut caller, args_payload_ptr, args_payload_len)?;
+        let fn_name = self.read_string_from_mem(&mut caller, fn_name_ptr, fn_name_len).map_err(|_| HostAbiError::DataEncodingError)?;
+        let args_payload = self.read_string_from_mem(&mut caller, args_payload_ptr, args_payload_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.generic_call(fn_name, args_payload)?;
         Ok(0)
@@ -287,9 +295,9 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         version_ptr: u32,
         version_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let id = self.read_string_from_mem(&mut caller, id_ptr, id_len)?;
-        let title = self.read_string_from_mem(&mut caller, title_ptr, title_len)?;
-        let version = self.read_string_from_mem(&mut caller, version_ptr, version_len)?;
+        let id = self.read_string_from_mem(&mut caller, id_ptr, id_len).map_err(|_| HostAbiError::DataEncodingError)?;
+        let title = self.read_string_from_mem(&mut caller, title_ptr, title_len).map_err(|_| HostAbiError::DataEncodingError)?;
+        let version = self.read_string_from_mem(&mut caller, version_ptr, version_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.create_proposal(id, title, version)?;
         Ok(0)
@@ -306,14 +314,14 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         data_json_ptr: u32,
         data_json_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let res_type = self.read_string_from_mem(&mut caller, res_type_ptr, res_type_len)?;
+        let res_type = self.read_string_from_mem(&mut caller, res_type_ptr, res_type_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let recipient = if recip_len > 0 {
-            Some(self.read_string_from_mem(&mut caller, recip_ptr, recip_len)?)
+            Some(self.read_string_from_mem(&mut caller, recip_ptr, recip_len).map_err(|_| HostAbiError::DataEncodingError)?)
         } else {
             None
         };
         let data_json = if data_json_len > 0 {
-            Some(self.read_string_from_mem(&mut caller, data_json_ptr, data_json_len)?)
+            Some(self.read_string_from_mem(&mut caller, data_json_ptr, data_json_len).map_err(|_| HostAbiError::DataEncodingError)?)
         } else {
             None
         };
@@ -328,7 +336,7 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         condition_str_ptr: u32,
         condition_str_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let condition_str = self.read_string_from_mem(&mut caller, condition_str_ptr, condition_str_len)?;
+        let condition_str = self.read_string_from_mem(&mut caller, condition_str_ptr, condition_str_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.if_condition_eval(condition_str)?;
         Ok(0) // Host evaluation controls flow, no direct bool return to WASM per spec
@@ -358,10 +366,8 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         msg_ptr: u32,
         msg_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let msg = self.read_string_from_mem(&mut caller, msg_ptr, msg_len)?;
-        // Assuming a logging mechanism on ConcreteHostEnvironment or globally available
-        // e.g., self.logger.log_todo(msg);
-        tracing::warn!("[TODO FROM WASM]: {}", msg); // Or self.ctx.log_todo(msg)
+        let msg = self.read_string_from_mem(&mut caller, msg_ptr, msg_len).map_err(|_| HostAbiError::DataEncodingError)?;
+        tracing::warn!("[TODO FROM WASM]: {}", msg);
         Ok(0)
     }
 
@@ -371,7 +377,7 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         event_ptr: u32,
         event_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let event_name = self.read_string_from_mem(&mut caller, event_ptr, event_len)?;
+        let event_name = self.read_string_from_mem(&mut caller, event_ptr, event_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.on_event(event_name)?;
         Ok(0)
@@ -383,7 +389,7 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         msg_ptr: u32,
         msg_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let msg = self.read_string_from_mem(&mut caller, msg_ptr, msg_len)?;
+        let msg = self.read_string_from_mem(&mut caller, msg_ptr, msg_len).map_err(|_| HostAbiError::DataEncodingError)?;
         tracing::debug!("[DEBUG_DEPRECATED FROM WASM]: {}", msg);
         Ok(0)
     }
@@ -406,7 +412,7 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         resource_type_len: u32,
         amount: i64,
     ) -> Result<i32, HostAbiError> {
-        let resource_type = self.read_string_from_mem(&mut caller, resource_type_ptr, resource_type_len)?;
+        let resource_type = self.read_string_from_mem(&mut caller, resource_type_ptr, resource_type_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.use_resource(resource_type, amount)?;
         Ok(0)
@@ -423,13 +429,13 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         recipient_ptr: u32,
         recipient_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let token_type = self.read_string_from_mem(&mut caller, token_type_ptr, token_type_len)?;
+        let token_type = self.read_string_from_mem(&mut caller, token_type_ptr, token_type_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let sender = if sender_len > 0 {
-            Some(self.read_string_from_mem(&mut caller, sender_ptr, sender_len)?)
+            Some(self.read_string_from_mem(&mut caller, sender_ptr, sender_len).map_err(|_| HostAbiError::DataEncodingError)?)
         } else {
             None
         };
-        let recipient = self.read_string_from_mem(&mut caller, recipient_ptr, recipient_len)?;
+        let recipient = self.read_string_from_mem(&mut caller, recipient_ptr, recipient_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
         ctx.transfer_token(token_type, amount, sender, recipient)?;
         Ok(0)
@@ -443,14 +449,11 @@ impl<T: Send + Sync + 'static> MeshHostAbi<T> for ConcreteHostEnvironment<T> {
         job_id_buffer_ptr: u32,
         job_id_buffer_len: u32,
     ) -> Result<i32, HostAbiError> {
-        let cbor_payload = self.read_bytes_from_mem(&mut caller, cbor_payload_ptr, cbor_payload_len)?;
+        let cbor_payload = self.read_bytes_from_mem(&mut caller, cbor_payload_ptr, cbor_payload_len).map_err(|_| HostAbiError::DataEncodingError)?;
         let mut ctx = self.ctx.lock().await;
-        // The context method needs to be able to write back to WASM memory for the job_id
-        // This might involve passing the memory, caller, or a specific write helper to it.
         let job_id_len = ctx.submit_mesh_job(
             cbor_payload, 
-            // A way to write back:
-            |job_id_str| self.write_string_to_mem(&mut caller, job_id_buffer_ptr, job_id_buffer_len, job_id_str)
+            |job_id_str: &str| self.write_string_to_mem(&mut caller, job_id_str, job_id_buffer_ptr, job_id_buffer_len).map_err(|_| HostAbiError::MemoryAccessError)
         )?;
         Ok(job_id_len as i32)
     }
@@ -462,13 +465,12 @@ impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
         &self,
         did: &Did, // The DID whose mana is being fetched
     ) -> Result<i64, HostAbiError> {
-        // rt is Arc<RuntimeContext<InMemoryManaLedger>>
-        // The test shim ConcreteHostEnvironment uses InMemoryManaLedger
-        match self.rt.mana_repository().get_mana_state(did).await {
-            Ok(Some(state)) => Ok(state.current_mana as i64),
-            Ok(None) => Ok(0), // Or perhaps an error if DID not found / no state
-            Err(e) => {
-                eprintln!("Test shim get_mana_state error: {:?}", e);
+        let scope_key = self.scope_key(); // Assuming this exists and returns ScopeKey
+        // Use the ResourceRepository::get_usage method for mana
+        match self.rt.mana_repository().get_usage(did, "mana", &scope_key.to_string()).await {
+            Ok(mana_amount) => Ok(mana_amount as i64),
+            Err(_e) => {
+                eprintln!("Test shim get_usage for mana error: {:?}", _e);
                 Err(HostAbiError::StorageError)
             }
         }
@@ -479,48 +481,49 @@ impl<T: Send + Sync + 'static> ConcreteHostEnvironment<T> {
         did: &Did, // The DID of the account to spend from
         amount: u64,
     ) -> Result<i32, HostAbiError> {
-        // Determine scope based on the ConcreteHostEnvironment's context
-        let scope_key = self.scope_key(); // Uses self.coop_id, self.community_id, self.caller_did
-        let scope_str = match scope_key {
-            ScopeKey::Individual(id) => id, // Assumes Did::to_string() was used, includes "did:key:"
-            ScopeKey::Cooperative(id) => format!("coop:{}", id),
-            ScopeKey::Community(id) => format!("comm:{}", id),
-            ScopeKey::Federation(id) => format!("fed:{}", id),
-        };
+        let scope_key = self.scope_key();
+        let scope_str = scope_key.to_string(); // Use the ScopeKey's display/to_string impl
 
         let token = ScopedResourceToken {
             resource_type: "mana".to_string(),
-            scope: scope_str, // This scope is for policy rules (e.g. coop X can spend Y)
+            scope: scope_str,
             amount: amount,
             expires_at: None,
             issuer: None,
         };
 
-        // The 'did' parameter here is WHO is attempting the spend.
-        // The 'token.scope' is ABOUT WHAT SCOPE the policy applies to.
-        if let Err(e) = self.rt.policy_enforcer().check_authorization(did, &token).await {
-            eprintln!("Test shim policy check error: {:?}", e);
-            // TODO: Refine error mapping from policy error to HostAbiError
-            return Err(HostAbiError::ResourceLimitExceeded);
+        // Check authorization using PolicyEnforcer trait method
+        match self.rt.policy_enforcer().check_authorization(did, &token).await {
+            Ok(true) => { /* Authorized, proceed */ }
+            Ok(false) => {
+                eprintln!("Test shim policy check: Not authorized (check_authorization returned false)");
+                return Err(HostAbiError::NotPermitted);
+            }
+            Err(e) => {
+                eprintln!("Test shim policy check_authorization error: {:?}", e);
+                // Map ResourceAuthorizationError to HostAbiError
+                // This requires ResourceAuthorizationError to be convertible or matched
+                // For now, a generic error:
+                return Err(HostAbiError::NotPermitted); // Or StorageError / UnknownError
+            }
         }
 
-        match self.rt.mana_repository().spend_mana(did, amount).await {
-            Ok(_) => Ok(0),
+        // Spend mana using ResourceRepository::record_usage
+        match self.rt.mana_repository().record_usage(did, &token).await {
+            Ok(_) => Ok(0), // Success
             Err(e) => {
-                if let Some(mana_err) = e.downcast_ref::<ManaError>() {
+                // Try to downcast to anyhow, then potentially to ManaError if wrapped by ManaRepositoryAdapter
+                if let Some(mana_err) = e.downcast_ref::<icn_economics::mana::ManaError>() { // Fully qualify ManaError
                     match mana_err {
-                        ManaError::InsufficientMana { .. } => {
+                        icn_economics::mana::ManaError::InsufficientMana { .. } => {
                             return Err(HostAbiError::InsufficientBalance);
                         }
-                        _ => {
-                            eprintln!("Test shim spend_mana other ManaError: {:?}", mana_err);
-                        }
+                        // Other ManaError variants if any
                     }
                 } else {
-                    eprintln!("Test shim spend_mana unknown error: {:?}", e);
+                    eprintln!("Test shim record_usage (spend_mana) unknown error: {:?}", e);
                 }
-                // Fallback for other ManaErrors or if downcast fails
-                Err(HostAbiError::StorageError)
+                Err(HostAbiError::StorageError) // Fallback error
             }
         }
     }

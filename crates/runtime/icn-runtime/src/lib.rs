@@ -366,7 +366,7 @@ pub struct Runtime<L: ManaLedger + Send + Sync + 'static> {
     linker: Linker<wasm::StoreData>,
 
     /// Host environment
-    host_env: Option<Arc<Mutex<ConcreteHostEnvironment>>>,
+    host_env: Option<Arc<Mutex<ConcreteHostEnvironment<()>>>>,
 
     /// Optional reputation updater
     reputation_updater: Option<Arc<dyn ReputationUpdater>>,
@@ -555,7 +555,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         args: Vec<Val>,
     ) -> Result<Box<[Val]>, RuntimeError> {
         #[cfg(not(feature = "full_host_abi"))]
-        let store_creator = |engine: &Engine, host_env_arc: &Option<Arc<Mutex<ConcreteHostEnvironment>>>| -> Result<Store<wasm::StoreData>, RuntimeError> {
+        let store_creator = |engine: &Engine, host_env_arc: &Option<Arc<Mutex<ConcreteHostEnvironment<()>>>>| -> Result<Store<wasm::StoreData>, RuntimeError> {
             let mut store_data = wasm::StoreData::new();
             if let Some(env_arc) = host_env_arc {
                 let env_clone = env_arc.lock().map_err(|_| RuntimeError::ExecutionError("Host env mutex poisoned".to_string()))?;
@@ -567,7 +567,7 @@ impl<L: ManaLedger + Send + Sync + 'static> Runtime<L> {
         };
 
         #[cfg(feature = "full_host_abi")]
-        let store_creator = |engine: &Engine, host_env_arc: &Option<Arc<Mutex<ConcreteHostEnvironment>>>| -> Result<Store<wasm::StoreData>, RuntimeError> {
+        let store_creator = |engine: &Engine, host_env_arc: &Option<Arc<Mutex<ConcreteHostEnvironment<()>>>>| -> Result<Store<wasm::StoreData>, RuntimeError> {
             if let Some(env_arc) = host_env_arc {
                 let env_clone = env_arc.lock().map_err(|_| RuntimeError::ExecutionError("Host env mutex poisoned".to_string()))?;
                 // When full_host_abi is ON, wasm::StoreData is ConcreteHostEnvironment

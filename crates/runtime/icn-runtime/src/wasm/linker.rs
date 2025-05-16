@@ -21,7 +21,7 @@ use crate::host_environment::ConcreteHostEnvironment;
 #[cfg(not(feature = "full_host_abi"))]
 #[derive(Default)]
 pub struct StoreData {
-    host_env: Option<ConcreteHostEnvironment>,
+    host_env: Option<ConcreteHostEnvironment<()>>,
 }
 
 #[cfg(not(feature = "full_host_abi"))]
@@ -29,11 +29,11 @@ impl StoreData {
     pub fn new() -> Self {
         Self { host_env: None }
     }
-    pub fn set_host(&mut self, host_env: ConcreteHostEnvironment) {
+    pub fn set_host(&mut self, host_env: ConcreteHostEnvironment<()>) {
         self.host_env = Some(host_env);
     }
     #[allow(dead_code)]
-    pub fn host(&self) -> &ConcreteHostEnvironment {
+    pub fn host(&self) -> &ConcreteHostEnvironment<()> {
         self.host_env.as_ref().expect("host env not set")
     }
 }
@@ -60,7 +60,7 @@ mod legacy_linker_impl;
 pub use legacy_linker_impl::*;
 
 #[cfg(feature = "full_host_abi")]
-pub type StoreData = ConcreteHostEnvironment;
+pub type StoreData = ConcreteHostEnvironment<()>;
 
 #[cfg(feature = "full_host_abi")]
 pub use full::register_host_functions;

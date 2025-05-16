@@ -7,6 +7,7 @@ use icn_identity::Did;
 use icn_mesh_protocol::{JobInteractiveInputV1, P2PJobStatus};
 use icn_types::mesh::MeshJobParams;
 use std::collections::VecDeque;
+use host_abi::HostAbiError;
 
 // Conceptual internal representation of job permissions/capabilities.
 // This would be more complex in a real system, potentially derived from tokens or policies.
@@ -70,7 +71,6 @@ impl JobExecutionContext {
         let mut permissions = JobPermissions::default();
         if job_params.is_interactive {
             permissions.can_send_interactive_output = true;
-            // Potentially set a higher default log level for interactive debugging
             permissions.max_log_level_allowed = LogLevel::Debug;
         }
         // TODO: Derive more permissions based on job_params, originator, or capability tokens.
@@ -79,8 +79,7 @@ impl JobExecutionContext {
             job_id,
             originator_did,
             current_status: P2PJobStatus::Running {
-                // Initial status when execution context is created
-                node_id: host_node_did, // The DID of the current executor node
+                node_id: host_node_did,
                 current_stage_index: if job_params.workflow_type
                     != icn_types::mesh::WorkflowType::SingleWasmModule
                 {
@@ -96,8 +95,8 @@ impl JobExecutionContext {
                 status_message: Some("Job initializing".to_string()),
             },
             job_params,
-            current_stage_index: None, // Will be set properly by workflow logic if applicable
-            current_stage_id: None,    // Will be set properly by workflow logic if applicable
+            current_stage_index: None,
+            current_stage_id: None,
             interactive_input_queue: VecDeque::new(),
             interactive_output_sequence_num: 0,
             mana_consumed: 0,
@@ -115,5 +114,97 @@ impl JobExecutionContext {
             "Job {} status updated to: {:?}",
             self.job_id, self.current_status
         );
+    }
+
+    // --- ABI Method Stubs ---
+    pub fn begin_section(&mut self, kind: String, title: Option<String>) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] begin_section: kind={}, title={:?}", kind, title);
+        // TODO: Implement actual logic (e.g., push to a context stack)
+        Ok(())
+    }
+
+    pub fn end_section(&mut self) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] end_section");
+        // TODO: Implement actual logic (e.g., pop from context stack)
+        Ok(())
+    }
+
+    pub fn set_property(&mut self, key: String, value_json: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] set_property: key={}, value_json={}", key, value_json);
+        // TODO: Implement actual logic (e.g., set property on current context)
+        Ok(())
+    }
+
+    pub fn anchor_data(&mut self, path: String, data_ref: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] anchor_data: path={}, data_ref={}", path, data_ref);
+        // TODO: Implement actual logic (e.g., record anchor)
+        Ok(())
+    }
+
+    pub fn generic_call(&mut self, fn_name: String, args_payload: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] generic_call: fn_name={}, args_payload={}", fn_name, args_payload);
+        // TODO: Implement actual logic
+        Ok(())
+    }
+
+    pub fn create_proposal(&mut self, id: String, title: String, version: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] create_proposal: id={}, title={}, version={}", id, title, version);
+        // TODO: Implement actual logic
+        Ok(())
+    }
+
+    pub fn mint_token(&mut self, res_type: String, amount: i64, recipient: Option<String>, data_json: Option<String>) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] mint_token: res_type={}, amount={}, recipient={:?}, data_json={:?}", res_type, amount, recipient, data_json);
+        // TODO: Implement actual logic
+        Ok(())
+    }
+
+    pub fn if_condition_eval(&mut self, condition_str: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] if_condition_eval: {}", condition_str);
+        // TODO: Implement actual logic (e.g., evaluate condition, manage conditional stack)
+        Ok(())
+    }
+
+    pub fn else_handler(&mut self) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] else_handler");
+        // TODO: Implement actual logic (e.g., manage conditional stack)
+        Ok(())
+    }
+
+    pub fn endif_handler(&mut self) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] endif_handler");
+        // TODO: Implement actual logic (e.g., manage conditional stack)
+        Ok(())
+    }
+
+    pub fn on_event(&mut self, event_name: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] on_event: {}", event_name);
+        // TODO: Implement actual logic (e.g., register event handler context)
+        Ok(())
+    }
+
+    pub fn range_check(&mut self, start_val: f64, end_val: f64) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] range_check: start={}, end={}", start_val, end_val);
+        // TODO: Implement actual logic (e.g., manage range check context)
+        Ok(())
+    }
+
+    pub fn use_resource(&mut self, resource_type: String, amount: i64) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] use_resource: type={}, amount={}", resource_type, amount);
+        // TODO: Implement actual logic (e.g., record resource usage)
+        Ok(())
+    }
+
+    pub fn transfer_token(&mut self, token_type: String, amount: i64, sender: Option<String>, recipient: String) -> Result<(), HostAbiError> {
+        println!("[JEC STUB] transfer_token: type={}, amount={}, sender={:?}, recipient={}", token_type, amount, sender, recipient);
+        // TODO: Implement actual logic
+        Ok(())
+    }
+
+    pub fn submit_mesh_job(&mut self, cbor_payload: Vec<u8>, write_back_fn: impl FnOnce(&str) -> Result<i32, HostAbiError>) -> Result<i32, HostAbiError> {
+        println!("[JEC STUB] submit_mesh_job: payload_len={}", cbor_payload.len());
+        // TODO: Implement actual logic (e.g., deserialize payload, submit to mesh, get real job_id)
+        let dummy_job_id = "dummy_mesh_job_123";
+        write_back_fn(dummy_job_id)
     }
 }
