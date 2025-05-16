@@ -131,17 +131,19 @@ impl JobExecutionContext {
 
     // --- ABI Method Stubs ---
     pub fn begin_section(&mut self, kind: String, title: Option<String>) -> Result<(), HostAbiError> {
-        println!("[JEC STUB] begin_section: kind={}, title={:?}", kind, title);
-        self.section_stack.push(SectionContext {
-            kind,
-            title,
-            properties: HashMap::new(),
-        });
-        Ok(())
+        if self.section_stack.is_empty() {
+            self.section_stack.push(SectionContext {
+                kind,
+                title,
+                properties: HashMap::new(),
+            });
+            Ok(())
+        } else {
+            Err(HostAbiError::InvalidState("Cannot begin a new section while another is active (nested sections not supported).".to_string()))
+        }
     }
 
     pub fn end_section(&mut self) -> Result<(), HostAbiError> {
-        println!("[JEC STUB] end_section");
         if self.section_stack.pop().is_none() {
             eprintln!("[JEC WARN] end_section called with empty section_stack");
         }
@@ -149,14 +151,12 @@ impl JobExecutionContext {
     }
 
     pub fn set_property(&mut self, key: String, value_json: String) -> Result<(), HostAbiError> {
-        println!("[JEC STUB] set_property: key={}, value_json={}", key, value_json);
         if let Some(current_section) = self.section_stack.last_mut() {
             current_section.properties.insert(key, value_json);
+            Ok(())
         } else {
-            eprintln!("[JEC WARN] set_property called with no active section");
-            return Err(HostAbiError::InvalidState);
+            Err(HostAbiError::InvalidState("No active section to set property on.".to_string()))
         }
-        Ok(())
     }
 
     pub fn anchor_data(&mut self, path: String, data_ref: String) -> Result<(), HostAbiError> {
@@ -172,15 +172,19 @@ impl JobExecutionContext {
     }
 
     pub fn create_proposal(&mut self, id: String, title: String, version: String) -> Result<(), HostAbiError> {
-        println!("[JEC STUB] create_proposal: id={}, title={}, version={}", id, title, version);
-        // TODO: Implement actual logic
-        Ok(())
+        if self.section_stack.is_empty() {
+            Ok(())
+        } else {
+            Err(HostAbiError::InvalidState("Proposal creation requires an active section.".to_string()))
+        }
     }
 
     pub fn mint_token(&mut self, res_type: String, amount: i64, recipient: Option<String>, data_json: Option<String>) -> Result<(), HostAbiError> {
-        println!("[JEC STUB] mint_token: res_type={}, amount={}, recipient={:?}, data_json={:?}", res_type, amount, recipient, data_json);
-        // TODO: Implement actual logic
-        Ok(())
+        if self.section_stack.is_empty() {
+            Ok(())
+        } else {
+            Err(HostAbiError::InvalidState("Mint token operation is not valid in the current context.".to_string()))
+        }
     }
 
     pub fn if_condition_eval(&mut self, condition_str: String) -> Result<(), HostAbiError> {

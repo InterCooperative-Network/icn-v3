@@ -1,5 +1,5 @@
 use thiserror::Error;
-// use wasmtime::Trap; // Keep this commented if the impl From is commented
+use ::wasmtime::Trap;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HostAbiError {
@@ -56,11 +56,8 @@ pub enum HostAbiError {
     // SchemaValidationError(String),
 }
 
-// TODO: Restore once Trap resolution issue is debugged.
-/*
-impl From<HostAbiError> for ::wasmtime::Trap {
-    fn from(err: HostAbiError) -> ::wasmtime::Trap {
-        ::wasmtime::Trap::new(err.to_string())
+impl From<HostAbiError> for Trap {
+    fn from(err: HostAbiError) -> Trap {
+        Trap::new(err.to_string())
     }
-}
-*/ 
+} 

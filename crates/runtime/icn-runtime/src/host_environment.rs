@@ -1,7 +1,7 @@
 use crate::context::RuntimeContext;
 use crate::job_execution_context::JobExecutionContext;
 use anyhow::{anyhow, Result};
-use icn_economics::{ResourceType, ResourceRepository};
+use icn_economics::{ResourceType, ResourceRepository, ScopedResourceToken};
 use icn_identity::{Did, ScopeKey};
 use host_abi::{
     HostAbiError, MeshHostAbi,
@@ -23,8 +23,8 @@ use std::str::FromStr;
 use icn_economics::{
     mana::{ManaError, ManaLedger}, // ManaLedger might not be used directly but good for context
     PolicyEnforcer, // Corrected path as per linter suggestion
-    ScopedResourceToken,    // Struct for tokens
-    ResourceRepository,   // Trait for get_usage, record_usage
+    // ScopedResourceToken,    // Struct for tokens // Removed duplicate
+    // ResourceRepository,   // Trait for get_usage, record_usage // Removed duplicate
 };
 
 /// Concrete implementation of the host environment for WASM execution
@@ -124,10 +124,10 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
 
     pub fn check_resource_authorization(&self, _rt_type: ResourceType, _amt: u64) -> Result<i32, HostAbiError> {
         // TODO: Implement actual resource authorization logic
-        Err(HostAbiError::NotSupported("check_resource_authorization not implemented".to_string()))
+        Err(HostAbiError::NotSupported)
     }
     pub async fn record_resource_usage(&self, _rt_type: ResourceType, _amt: u64) -> Result<i32, HostAbiError> {
-        Err(HostAbiError::NotSupported("record_resource_usage not implemented".to_string()))
+        Err(HostAbiError::NotSupported)
     }
     pub fn is_governance_context(&self) -> i32 {
         if self.is_governance {
@@ -137,15 +137,10 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
         }
     }
     pub async fn mint_token(&self, _recipient_did_str: &str, _amount: u64) -> Result<i32, HostAbiError> {
-        Err(HostAbiError::NotSupported("ConcreteHostEnvironment::mint_token direct call not supported, use ABI".to_string()))
+        Err(HostAbiError::NotSupported)
     }
-    pub async fn transfer_token(
-        &self,
-        _sender_did_str: &str,
-        _recipient_did_str: &str,
-        _amount: u64,
-    ) -> Result<i32, HostAbiError> {
-        Err(HostAbiError::NotSupported("ConcreteHostEnvironment::transfer_token direct call not supported, use ABI".to_string()))
+    pub async fn transfer_token(&self, _sender_did_str: &str, _recipient_did_str: &str, _amount: u64) -> Result<i32, HostAbiError> {
+        Err(HostAbiError::NotSupported)
     }
 
     /// Anchor a signed execution receipt to the DAG and broadcast an announcement.
@@ -165,12 +160,12 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
 
 // --- Standalone Helper memory access functions ---
 
-/// Helper to safely obtain the linear memory exported by the guest module.
+    /// Helper to safely obtain the linear memory exported by the guest module.
 pub fn get_memory<T_param: Send + Sync + 'static>(
     caller: &mut Caller<'_, ConcreteHostEnvironment<T_param>>,
 ) -> Result<WasmtimeMemory, HostAbiError> {
-    match caller.get_export("memory") {
-        Some(Extern::Memory(mem)) => Ok(mem),
+        match caller.get_export("memory") {
+            Some(Extern::Memory(mem)) => Ok(mem),
         _ => Err(HostAbiError::MemoryAccessError("Memory export not found".to_string())),
     }
 }
@@ -179,10 +174,10 @@ pub fn get_memory<T_param: Send + Sync + 'static>(
 pub fn read_string_from_mem_ctx<T_param: Send + Sync + 'static>(
     store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
     memory: &WasmtimeMemory,
-    ptr: u32,
-    len: u32,
+        ptr: u32,
+        len: u32,
 ) -> Result<String, HostAbiError> {
-    let mut buffer = vec![0u8; len as usize];
+        let mut buffer = vec![0u8; len as usize];
     memory.read(store_ctx, ptr as usize, &mut buffer)
         .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory read failed: {}", e)))?;
     String::from_utf8(buffer)
@@ -193,41 +188,41 @@ pub fn read_string_from_mem_ctx<T_param: Send + Sync + 'static>(
 pub fn write_string_to_mem_ctx<T_param: Send + Sync + 'static>(
     store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
     memory: &WasmtimeMemory,
-    s: &str,
-    ptr: u32,
-    len: u32,
+        s: &str,
+        ptr: u32,
+        len: u32,
 ) -> Result<i32, HostAbiError> {
-    let bytes = s.as_bytes();
-    if bytes.len() > len as usize {
+        let bytes = s.as_bytes();
+        if bytes.len() > len as usize {
         return Err(HostAbiError::BufferTooSmall("String too large for buffer".to_string()));
-    }
+        }
     memory.write(store_ctx, ptr as usize, bytes)
         .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory write failed: {}", e)))?;
-    Ok(bytes.len() as i32)
-}
+        Ok(bytes.len() as i32)
+    }
 
 /// Read a raw byte slice from guest memory, using StoreContextMut and pre-fetched Memory
 pub fn read_bytes_from_mem_ctx<T_param: Send + Sync + 'static>(
     store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
     memory: &WasmtimeMemory,
-    ptr: u32,
-    len: u32,
+        ptr: u32,
+        len: u32,
 ) -> Result<Vec<u8>, HostAbiError> {
-    let mut buffer = vec![0u8; len as usize];
+        let mut buffer = vec![0u8; len as usize];
     memory.read(store_ctx, ptr as usize, &mut buffer)
         .map_err(|e| HostAbiError::MemoryAccessError(format!("Memory read failed: {}", e)))?;
-    Ok(buffer)
-}
+        Ok(buffer)
+    }
 
 /// Write raw bytes to guest memory buffer, using StoreContextMut and pre-fetched Memory
 pub fn write_bytes_to_mem_ctx<T_param: Send + Sync + 'static>(
     store_ctx: &mut StoreContextMut<'_, ConcreteHostEnvironment<T_param>>,
     memory: &WasmtimeMemory,
-    bytes: &[u8],
-    ptr: u32,
-    len: u32,
+        bytes: &[u8],
+        ptr: u32,
+        len: u32,
 ) -> Result<i32, HostAbiError> {
-    if bytes.len() > len as usize {
+        if bytes.len() > len as usize {
         return Err(HostAbiError::BufferTooSmall("Bytes too large for buffer".to_string()));
     }
     memory.write(store_ctx, ptr as usize, bytes)
@@ -361,7 +356,7 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         let recipient_did = Did::from_str(&recipient_did_str)
             .map_err(|e| HostAbiError::InvalidDid(format!("Invalid recipient DID: {}, error: {}", recipient_did_str, e)))?;
         let mut ctx = self.ctx.lock().await;
-        ctx.mint_token(resource_type_str, amount as i64, Some(recipient_did.to_string()), data_json).await?;
+        ctx.mint_token(resource_type_str, amount as i64, Some(recipient_did.to_string()), data_json)?;
         Ok(0)
     }
 
@@ -465,22 +460,29 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         let mut store_context = caller.as_context_mut();
         let resource_type_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, resource_type_ptr, resource_type_len)?;
         
-        // Use a match statement for ResourceType parsing
-        let resolved_resource_type = match resource_type_str.as_str() {
-            "mana" => ResourceType::Mana,
-            // Add other resource types here if necessary
-            _ => return Err(HostAbiError::InvalidParameter(format!("Unsupported resource type string: {}", resource_type_str))),
+        let token_resource_type_for_scoped_token = if resource_type_str == "mana" {
+            "mana".to_string()
+        } else {
+            // For other resource types, we might still need to map to the ResourceType enum
+            // or handle them differently. For now, assume if not "mana", it's an error or unsupported.
+            // This part might need to be expanded based on how other resources are managed.
+            // let resolved_resource_type = match resource_type_str.as_str() {
+            //     "cpu" => ResourceType::Cpu,
+            //     "memory" => ResourceType::Memory,
+            //     _ => return Err(HostAbiError::InvalidParameter(format!("Unsupported resource type string: {}", resource_type_str))),
+            // };
+            // resolved_resource_type.to_string() // This would require ResourceType to impl Display or similar
+            return Err(HostAbiError::InvalidParameter(format!("Unsupported resource type string for host_use_resource: {}", resource_type_str)));
         };
 
         let token = ScopedResourceToken {
-            resource_type: resolved_resource_type.to_string(), // Use resolved_resource_type.to_string() or resource_type_str directly
-            scope: format!("{:?}", self.scope_key()), // Use Debug format for ScopeKey
+            resource_type: token_resource_type_for_scoped_token, 
+            scope: format!("{:?}", self.scope_key()),
             amount,
-            expires_at: None, // Assuming None is appropriate here
-            issuer: Some(self.caller_did.to_string()), // Assuming issuer is the caller DID
+            expires_at: None,
+            issuer: Some(self.caller_did.to_string()),
         };
         
-        // Ensure ResourceRepository trait is in scope to call record_usage
         self.rt.mana_repository().record_usage(&self.caller_did, &token).await
             .map_err(|e| HostAbiError::ResourceManagementError(format!("Failed to record usage for resource '{}': {}", resource_type_str, e)))?;
         Ok(0)
@@ -502,10 +504,10 @@ impl<T_param: Send + Sync + 'static> MeshHostAbi<ConcreteHostEnvironment<T_param
         let token_type_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, token_type_ptr, token_type_len)?;
         let sender_did_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, sender_did_ptr, sender_did_len)?;
         let recipient_did_str = read_string_from_mem_ctx::<T_param>(&mut store_context, &memory, recipient_did_ptr, recipient_did_len)?;
-        let _sender_did = Did::from_str(&sender_did_str).map_err(|e| HostAbiError::InvalidDid(format!("Invalid sender DID: {}, e: {}", sender_did_str, e)))?;
-        let _recipient_did = Did::from_str(&recipient_did_str).map_err(|e| HostAbiError::InvalidDid(format!("Invalid recipient DID: {}, e: {}", recipient_did_str, e)))?;
+        let sender_did = Did::from_str(&sender_did_str).map_err(|e| HostAbiError::InvalidDid(format!("Invalid sender DID: {}, e: {}", sender_did_str, e)))?;
+        let recipient_did = Did::from_str(&recipient_did_str).map_err(|e| HostAbiError::InvalidDid(format!("Invalid recipient DID: {}, e: {}", recipient_did_str, e)))?;
         let mut ctx = self.ctx.lock().await;
-        ctx.transfer_token(token_type_str, amount as i64, Some(sender_did_str), recipient_did_str).await?;
+        ctx.transfer_token(token_type_str, amount as i64, Some(sender_did.to_string()), recipient_did.to_string())?;
         Ok(0)
     }
 
@@ -574,7 +576,7 @@ impl<T_param: Send + Sync + 'static> ConcreteHostEnvironment<T_param> {
                 // Map ResourceAuthorizationError to HostAbiError
                 // This requires ResourceAuthorizationError to be convertible or matched
                 // For now, a generic error:
-                return Err(HostAbiError::NotPermitted); // Or StorageError / UnknownError
+                return Err(HostAbiError::NotPermitted);
             }
         }
 
